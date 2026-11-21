@@ -33,6 +33,27 @@ Not every app survives being frozen. Programs with live network connections,
 audio drivers or hardware access may lose their connection or hang after
 resuming. Use the prototype to find out which of your apps tolerate it.
 
+## Testing your own apps
+
+`scripts/Test-SuspendCompat.ps1` (PowerShell 7) goes through the apps running
+in your session one at a time: suspend, wait, resume, check that the app is
+still alive and responding. An app that does not survive is closed completely
+and started again.
+
+```powershell
+./scripts/Test-SuspendCompat.ps1        # list what would be tested
+./scripts/Test-SuspendCompat.ps1 -Run   # run the test
+```
+
+Save your work first: an app that fails the test is killed and restarted.
+Apps you do not want touched go into `local/compat-exclude.txt` or the
+`-Exclude` parameter; `Get-Help ./scripts/Test-SuspendCompat.ps1 -Full` lists
+all options.
+
+Results land in `local/compat-results/`. The whole `local/` folder is ignored
+by Git, because results, exclude lists and personal profiles describe one
+particular machine.
+
 ## Build
 
 Requires Windows and a stable Rust toolchain.

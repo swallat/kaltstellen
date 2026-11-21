@@ -1,1 +1,5 @@
 /target
+
+# Machine-specific data (test results, personal profiles, exclude lists).
+# Nothing in here is ever committed.
+/local/
