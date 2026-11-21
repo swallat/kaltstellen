@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 330" width="760" height="330">
+<rect x="0" y="0" width="380" height="330" fill="#F5F8FB"/>
+<rect x="20" y="20" width="340" height="112" rx="10" fill="#FFFFFF" stroke="#D3DDE7"/>
+<text x="36" y="50" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="16" font-weight="600" fill="#10202E" text-anchor="start">Profil: Flugsimulator</text>
+<text x="36" y="72" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#4D6072" text-anchor="start">3 Apps gestartet · 5 kaltgestellt</text>
+<rect x="36" y="88" width="104" height="28" rx="6" fill="#0B69A8"/>
+<text x="88" y="107" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle">Umschalten</text>
+<text x="156" y="107" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="600" fill="#0B69A8" text-anchor="start">Alles auftauen</text>
+<circle cx="268" cy="102" r="5" fill="#A85A00"/>
+<text x="280" y="107" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="600" fill="#A85A00" text-anchor="start">aktiv</text>
+<rect x="20" y="150" width="42" height="42" rx="6" fill="#F5F8FB" stroke="#D3DDE7"/>
+<text x="41" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#4D6072" text-anchor="middle">#F5F8FB</text>
+<text x="41" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#4D6072" text-anchor="middle">Hintergrund</text>
+<rect x="69" y="150" width="42" height="42" rx="6" fill="#FFFFFF" stroke="#D3DDE7"/>
+<text x="90" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#4D6072" text-anchor="middle">#FFFFFF</text>
+<text x="90" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#4D6072" text-anchor="middle">Fläche</text>
+<rect x="118" y="150" width="42" height="42" rx="6" fill="#D3DDE7" stroke="#D3DDE7"/>
+<text x="139" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#4D6072" text-anchor="middle">#D3DDE7</text>
+<text x="139" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#4D6072" text-anchor="middle">Linie</text>
+<rect x="167" y="150" width="42" height="42" rx="6" fill="#10202E" stroke="#D3DDE7"/>
+<text x="188" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#4D6072" text-anchor="middle">#10202E</text>
+<text x="188" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#4D6072" text-anchor="middle">Text</text>
+<rect x="216" y="150" width="42" height="42" rx="6" fill="#4D6072" stroke="#D3DDE7"/>
+<text x="237" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#4D6072" text-anchor="middle">#4D6072</text>
+<text x="237" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#4D6072" text-anchor="middle">Text gedämpft</text>
+<rect x="265" y="150" width="42" height="42" rx="6" fill="#0B69A8" stroke="#D3DDE7"/>
+<text x="286" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#4D6072" text-anchor="middle">#0B69A8</text>
+<text x="286" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#4D6072" text-anchor="middle">Primär</text>
+<rect x="314" y="150" width="42" height="42" rx="6" fill="#A85A00" stroke="#D3DDE7"/>
+<text x="335" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#4D6072" text-anchor="middle">#A85A00</text>
+<text x="335" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#4D6072" text-anchor="middle">Akzent</text>
+<rect x="20" y="238" width="340" height="72" rx="8" fill="#F3F3F3" stroke="#D3DDE7"/>
+<svg x="34" y="250" width="32" height="32" viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="6" fill="#C8730A"/><path d="M12.5 9.5v13l10.5-6.5z" fill="#fff" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>
+<svg x="76" y="258" width="16" height="16" viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="6" fill="#C8730A"/><path d="M12.5 9.5v13l10.5-6.5z" fill="#fff" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>
+<text x="63" y="301" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#4D4D4D" text-anchor="middle">Profil aktiv #C8730A</text>
+<svg x="144" y="250" width="32" height="32" viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="6" fill="#2A8FD6"/><rect x="10" y="10" width="4" height="12" rx="1" fill="#fff"/><rect x="18" y="10" width="4" height="12" rx="1" fill="#fff"/></svg>
+<svg x="186" y="258" width="16" height="16" viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="6" fill="#2A8FD6"/><rect x="10" y="10" width="4" height="12" rx="1" fill="#fff"/><rect x="18" y="10" width="4" height="12" rx="1" fill="#fff"/></svg>
+<text x="173" y="301" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#4D4D4D" text-anchor="middle">eingefroren #2A8FD6</text>
+<svg x="254" y="250" width="32" height="32" viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="6" fill="#E0453F"/><rect x="14" y="8" width="4" height="10.5" rx="1.5" fill="#fff"/><circle cx="16" cy="23" r="2.4" fill="#fff"/></svg>
+<svg x="296" y="258" width="16" height="16" viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="6" fill="#E0453F"/><rect x="14" y="8" width="4" height="10.5" rx="1.5" fill="#fff"/><circle cx="16" cy="23" r="2.4" fill="#fff"/></svg>
+<text x="283" y="301" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#4D4D4D" text-anchor="middle">Fehler #E0453F</text>
+<rect x="380" y="0" width="380" height="330" fill="#0E1620"/>
+<rect x="400" y="20" width="340" height="112" rx="10" fill="#17222E" stroke="#2C3B4B"/>
+<text x="416" y="50" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="16" font-weight="600" fill="#E8F0F7" text-anchor="start">Profil: Flugsimulator</text>
+<text x="416" y="72" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#9DB0C2" text-anchor="start">3 Apps gestartet · 5 kaltgestellt</text>
+<rect x="416" y="88" width="104" height="28" rx="6" fill="#5BB8F0"/>
+<text x="468" y="107" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="600" fill="#0E1620" text-anchor="middle">Umschalten</text>
+<text x="536" y="107" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="600" fill="#5BB8F0" text-anchor="start">Alles auftauen</text>
+<circle cx="648" cy="102" r="5" fill="#F7B955"/>
+<text x="660" y="107" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="600" fill="#F7B955" text-anchor="start">aktiv</text>
+<rect x="400" y="150" width="42" height="42" rx="6" fill="#0E1620" stroke="#2C3B4B"/>
+<text x="421" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">#0E1620</text>
+<text x="421" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">Hintergrund</text>
+<rect x="449" y="150" width="42" height="42" rx="6" fill="#17222E" stroke="#2C3B4B"/>
+<text x="470" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">#17222E</text>
+<text x="470" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">Fläche</text>
+<rect x="498" y="150" width="42" height="42" rx="6" fill="#2C3B4B" stroke="#2C3B4B"/>
+<text x="519" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">#2C3B4B</text>
+<text x="519" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">Linie</text>
+<rect x="547" y="150" width="42" height="42" rx="6" fill="#E8F0F7" stroke="#2C3B4B"/>
+<text x="568" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">#E8F0F7</text>
+<text x="568" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">Text</text>
+<rect x="596" y="150" width="42" height="42" rx="6" fill="#9DB0C2" stroke="#2C3B4B"/>
+<text x="617" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">#9DB0C2</text>
+<text x="617" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">Text gedämpft</text>
+<rect x="645" y="150" width="42" height="42" rx="6" fill="#5BB8F0" stroke="#2C3B4B"/>
+<text x="666" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">#5BB8F0</text>
+<text x="666" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">Primär</text>
+<rect x="694" y="150" width="42" height="42" rx="6" fill="#F7B955" stroke="#2C3B4B"/>
+<text x="715" y="207" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">#F7B955</text>
+<text x="715" y="219" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="7.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">Akzent</text>
+<rect x="400" y="238" width="340" height="72" rx="8" fill="#1C1C1C" stroke="#2C3B4B"/>
+<svg x="414" y="250" width="32" height="32" viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="6" fill="#C8730A"/><path d="M12.5 9.5v13l10.5-6.5z" fill="#fff" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>
+<svg x="456" y="258" width="16" height="16" viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="6" fill="#C8730A"/><path d="M12.5 9.5v13l10.5-6.5z" fill="#fff" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>
+<text x="443" y="301" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">Profil aktiv #C8730A</text>
+<svg x="524" y="250" width="32" height="32" viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="6" fill="#2A8FD6"/><rect x="10" y="10" width="4" height="12" rx="1" fill="#fff"/><rect x="18" y="10" width="4" height="12" rx="1" fill="#fff"/></svg>
+<svg x="566" y="258" width="16" height="16" viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="6" fill="#2A8FD6"/><rect x="10" y="10" width="4" height="12" rx="1" fill="#fff"/><rect x="18" y="10" width="4" height="12" rx="1" fill="#fff"/></svg>
+<text x="553" y="301" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">eingefroren #2A8FD6</text>
+<svg x="634" y="250" width="32" height="32" viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="6" fill="#E0453F"/><rect x="14" y="8" width="4" height="10.5" rx="1.5" fill="#fff"/><circle cx="16" cy="23" r="2.4" fill="#fff"/></svg>
+<svg x="676" y="258" width="16" height="16" viewBox="0 0 32 32"><rect x="3" y="3" width="26" height="26" rx="6" fill="#E0453F"/><rect x="14" y="8" width="4" height="10.5" rx="1.5" fill="#fff"/><circle cx="16" cy="23" r="2.4" fill="#fff"/></svg>
+<text x="663" y="301" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="8.5" font-weight="400" fill="#9DB0C2" text-anchor="middle">Fehler #E0453F</text>
+</svg>

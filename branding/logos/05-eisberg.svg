@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="kaltstellen: Eisberg, die Spitze aktiv, der Rest auf Eis">
+  <g stroke-linejoin="round" stroke-width="1.5">
+    <!-- Spitze über Wasser: das aktive Profil -->
+    <path d="M15 3.5 22.5 12.5h-13z" fill="#2A8FD6" stroke="#2A8FD6"/>
+    <!-- unter Wasser: alles, was auf Eis liegt -->
+    <path d="M5 16.5h22l-4 8-6.5 4.5-7.5-5z" fill="#2A8FD6" stroke="#2A8FD6" opacity=".5"/>
+  </g>
+</svg>

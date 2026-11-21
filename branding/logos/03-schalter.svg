@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="kaltstellen: Schalter zwischen eingefroren und aktiv">
+  <!-- Schalterbahn -->
+  <rect x="2" y="8" width="28" height="16" rx="8" fill="#2A8FD6"/>
+  <!-- eingefrorene Seite: Pause -->
+  <rect x="7" y="12" width="2.5" height="8" rx=".8" fill="#fff"/>
+  <rect x="11.5" y="12" width="2.5" height="8" rx=".8" fill="#fff"/>
+  <!-- aktive Seite: warmer Knopf -->
+  <circle cx="22" cy="16" r="5.5" fill="#FFC56B"/>
+</svg>
