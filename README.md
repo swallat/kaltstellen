@@ -1,6 +1,20 @@
-# kaltstellen
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="branding/wortmarke/logo-wortmarke-dunkel.svg">
+    <img src="branding/wortmarke/logo-wortmarke-hell.svg" alt="kaltstellen" height="72">
+  </picture>
+</h1>
 
-*kaltstellen* (German): to put something on ice.
+<p align="center">
+  <em>kaltstellen</em> (German): to put something on ice.
+</p>
+
+<p align="center">
+  <a href="https://github.com/swallat/kaltstellen/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/swallat/kaltstellen/ci.yml?branch=main&label=CI&labelColor=12324B" alt="CI status"></a>
+  <img src="https://img.shields.io/badge/status-prototype-FF8A1F?labelColor=12324B" alt="Status: prototype">
+  <img src="https://img.shields.io/badge/platform-Windows-2A8FD6?labelColor=12324B" alt="Platform: Windows">
+  <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-2A8FD6?labelColor=12324B" alt="License: MIT or Apache-2.0"></a>
+</p>
 
 A small Windows tool that switches between app profiles to free up CPU and RAM.
 Start the flight simulator and its companion tools come up while the music
@@ -64,6 +78,19 @@ cargo build --release
 
 The binary is `target\release\kaltstellen.exe`. Freezing processes that run
 elevated or under another user requires an elevated terminal.
+
+## The tray icon (planned)
+
+The tray app does not exist yet, but its icon does. One tile, three states:
+
+| | State | Meaning |
+| :-: | --- | --- |
+| <img src="branding/tray/png/kaltstellen-neutral-32.png" width="32" height="32" alt="Blue tile with a white K"> | Neutral | No profile active, nothing on ice |
+| <img src="branding/tray/png/kaltstellen-aktiv-32.png" width="32" height="32" alt="Orange tile with a dark K"> | Profile active | Apps outside the profile are frozen or closed |
+| <img src="branding/tray/png/kaltstellen-fehler-32.png" width="32" height="32" alt="Red tile with a white exclamation mark"> | Error | Something could not be frozen, resumed or started |
+
+Logo, wordmark, colours and icons live in [branding/](branding/), together
+with the scripts that generate them. The notes there are in German.
 
 ## License
 
