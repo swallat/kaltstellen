@@ -179,7 +179,7 @@ hotkey = "Ctrl+Shift+Alt+F1"
 
 All eight points of the round 2 review were confirmed by the owner on 2026-11-21 and are marked **[decided]**. The remaining **[assumed]** items (not raised in round 2) still await confirmation.
 
-The ones with most impact among the remaining **[assumed]** items: no services/elevation in v1; `on_timeout` option and its default; no background watcher (W6); warn-list confirmation model; resume-except-still-suspended optimisation (W1); exit codes; the numeric thresholds in Q1/Q5.
+The ones with most impact among the remaining **[assumed]** items: the resume-except-still-suspended optimisation (W1), re-applying the active profile (W4), the single-instance and pipe design (L1), the config file as source of truth, and the GUI toolkit and window layout.
 
 ## 13. Known limitations and risks (r2)
 
