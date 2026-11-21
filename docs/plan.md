@@ -1,5 +1,7 @@
 # Plan
 
+> The detailed work breakdown, acceptance tests and VM test steps now live in [implementation-plan.md](implementation-plan.md); the behaviour is specified in [spec.md](spec.md). The milestones below remain the summary.
+
 Milestones are ordered so that each one is usable on its own. Requirement IDs
 refer to [requirements.md](requirements.md).
 
