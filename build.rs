@@ -15,5 +15,7 @@ fn main() {
     winresource::WindowsResource::new()
         .set_icon(ICON)
         .compile()
-        .expect("failed to embed the program icon; is the Windows SDK resource compiler installed?");
+        .expect(
+            "failed to embed the program icon; is the Windows SDK resource compiler installed?",
+        );
 }
