@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="kaltstellen, Tray-Zustand: Fehler">
+  <g fill="none" stroke-width="4.5" stroke-linecap="round">
+    <!-- Stamm und kalter Arm -->
+    <path d="M10 5v22M10 15.5 23 26" stroke="#2A8FD6"/>
+    <!-- gebrochener Arm: liest sich als schräges Ausrufezeichen -->
+    <path d="M14.6 12.8 18.8 9.4" stroke="#E0453F"/>
+  </g>
+  <circle cx="23.6" cy="5.6" r="2.7" fill="#E0453F"/>
+</svg>

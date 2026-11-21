@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="kaltstellen: K als Hebelschalter">
+  <g fill="none" stroke="#2A8FD6" stroke-width="4" stroke-linecap="round">
+    <!-- untere Schalterstellung: kaltgestellt -->
+    <path d="M10 16 21 26" opacity=".45"/>
+    <!-- Stamm und Hebel in der aktiven Stellung -->
+    <path d="M10 5v22M10 16 20 9"/>
+  </g>
+  <!-- warmer Hebelknopf -->
+  <circle cx="22.5" cy="7.5" r="5" fill="#C8730A"/>
+</svg>

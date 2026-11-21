@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="kaltstellen: Schalter als Umriss mit K und warmem Knopf">
+  <!-- Schalterbahn als Umriss -->
+  <rect x="2.5" y="7.5" width="27" height="17" rx="8.5" fill="none" stroke="#2A8FD6" stroke-width="3"/>
+  <!-- K auf der kalten Seite -->
+  <path d="M8.5 12v8M8.5 16.3 13 12M8.5 15.7 13 20" fill="none" stroke="#2A8FD6" stroke-width="2.4" stroke-linecap="round"/>
+  <!-- warmer Knopf -->
+  <circle cx="21.5" cy="16" r="5" fill="#D6770B"/>
+</svg>

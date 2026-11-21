@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="kaltstellen: Kristall-K, der warme Arm ist abgesetzt">
+  <g fill="none" stroke-linecap="round">
+    <!-- die andere Kristallhälfte, nur angedeutet -->
+    <path d="M13 16 5.5 9.5M13 16 5.5 22.5" stroke="#2A8FD6" stroke-width="2.5" opacity=".55"/>
+    <!-- Stamm und kalter Arm -->
+    <path d="M13 5v22M13 15.5 25 26" stroke="#2A8FD6" stroke-width="4"/>
+    <!-- warmer Arm, mit Lücke zum Stamm: ein eigenes, bewegliches Teil -->
+    <path d="M18 11.8 25 6" stroke="#D6770B" stroke-width="4"/>
+  </g>
+</svg>

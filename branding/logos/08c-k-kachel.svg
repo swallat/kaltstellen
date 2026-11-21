@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="kaltstellen: K mit warmem Arm auf dunkler Kachel">
+  <!-- dunkle Kachel -->
+  <rect x="2" y="2" width="28" height="28" rx="7" fill="#12324B"/>
+  <g fill="none" stroke-width="4" stroke-linecap="round">
+    <!-- warmer Arm -->
+    <path d="M11.5 16.4 21.5 8" stroke="#F08A24"/>
+    <!-- Stamm und kalter Arm -->
+    <path d="M11.5 8v16M11.5 15.6 21.5 24" stroke="#EAF4FB"/>
+  </g>
+</svg>

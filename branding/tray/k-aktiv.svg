@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="kaltstellen, Tray-Zustand: Profil aktiv">
+  <!-- Stamm und kalter Arm -->
+  <path d="M9.5 4.5v23M9.5 15.5 23.5 27" fill="none" stroke="#2A8FD6" stroke-width="5" stroke-linecap="round"/>
+  <!-- warmer Arm ist umgelegt und trägt einen Knopf -->
+  <path d="M16.5 11 21 7.5" fill="none" stroke="#CF7208" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="24" cy="6.5" r="5.5" fill="#CF7208"/>
+</svg>

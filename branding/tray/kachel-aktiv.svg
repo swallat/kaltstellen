@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="kaltstellen, Tray-Zustand: Profil aktiv">
+  <rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#FF8A1F"/>
+  <!-- Arm mit Lücke: umgelegt -->
+  <path d="M11.5 8v16M11.5 15.6 21.5 24M17.3 11.5 21.5 8" fill="none" stroke="#0E1620" stroke-width="4" stroke-linecap="round"/>
+</svg>

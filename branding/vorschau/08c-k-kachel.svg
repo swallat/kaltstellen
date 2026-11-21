@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" width="720" height="220">
+<rect x="0" y="0" width="360" height="220" fill="#F5F8FB"/>
+<svg x="28" y="30" width="128" height="128" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="7" fill="#12324B"/>
+  <g fill="none" stroke-width="4" stroke-linecap="round">
+    
+    <path d="M11.5 16.4 21.5 8" stroke="#F08A24"/>
+    
+    <path d="M11.5 8v16M11.5 15.6 21.5 24" stroke="#EAF4FB"/>
+  </g></svg>
+<text x="92" y="188" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#4D6072" text-anchor="middle">128 px</text>
+<rect x="196" y="62" width="136" height="64" rx="8" fill="#F3F3F3" stroke="#4D6072" stroke-opacity=".25"/>
+<svg x="220" y="78" width="32" height="32" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="7" fill="#12324B"/>
+  <g fill="none" stroke-width="4" stroke-linecap="round">
+    
+    <path d="M11.5 16.4 21.5 8" stroke="#F08A24"/>
+    
+    <path d="M11.5 8v16M11.5 15.6 21.5 24" stroke="#EAF4FB"/>
+  </g></svg>
+<svg x="284" y="86" width="16" height="16" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="7" fill="#12324B"/>
+  <g fill="none" stroke-width="4" stroke-linecap="round">
+    
+    <path d="M11.5 16.4 21.5 8" stroke="#F08A24"/>
+    
+    <path d="M11.5 8v16M11.5 15.6 21.5 24" stroke="#EAF4FB"/>
+  </g></svg>
+<text x="236" y="146" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#4D6072" text-anchor="middle">32 px</text>
+<text x="292" y="146" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#4D6072" text-anchor="middle">16 px</text>
+<text x="264" y="188" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="600" fill="#4D6072" text-anchor="middle">Hell</text>
+<rect x="360" y="0" width="360" height="220" fill="#0E1620"/>
+<svg x="388" y="30" width="128" height="128" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="7" fill="#12324B"/>
+  <g fill="none" stroke-width="4" stroke-linecap="round">
+    
+    <path d="M11.5 16.4 21.5 8" stroke="#F08A24"/>
+    
+    <path d="M11.5 8v16M11.5 15.6 21.5 24" stroke="#EAF4FB"/>
+  </g></svg>
+<text x="452" y="188" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#9DB0C2" text-anchor="middle">128 px</text>
+<rect x="556" y="62" width="136" height="64" rx="8" fill="#1C1C1C" stroke="#9DB0C2" stroke-opacity=".25"/>
+<svg x="580" y="78" width="32" height="32" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="7" fill="#12324B"/>
+  <g fill="none" stroke-width="4" stroke-linecap="round">
+    
+    <path d="M11.5 16.4 21.5 8" stroke="#F08A24"/>
+    
+    <path d="M11.5 8v16M11.5 15.6 21.5 24" stroke="#EAF4FB"/>
+  </g></svg>
+<svg x="644" y="86" width="16" height="16" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="7" fill="#12324B"/>
+  <g fill="none" stroke-width="4" stroke-linecap="round">
+    
+    <path d="M11.5 16.4 21.5 8" stroke="#F08A24"/>
+    
+    <path d="M11.5 8v16M11.5 15.6 21.5 24" stroke="#EAF4FB"/>
+  </g></svg>
+<text x="596" y="146" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#9DB0C2" text-anchor="middle">32 px</text>
+<text x="652" y="146" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#9DB0C2" text-anchor="middle">16 px</text>
+<text x="624" y="188" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="600" fill="#9DB0C2" text-anchor="middle">Dunkel</text>
+</svg>

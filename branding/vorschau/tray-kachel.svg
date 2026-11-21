@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 120" width="720" height="120">
+<rect x="0" y="0" width="360" height="120" fill="#F3F3F3"/>
+<svg x="22" y="30" width="32" height="32" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#2A8FD6"/>
+  <path d="M11.5 8v16M11.5 16.4 21.5 8M11.5 15.6 21.5 24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/></svg>
+<svg x="64" y="34" width="24" height="24" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#2A8FD6"/>
+  <path d="M11.5 8v16M11.5 16.4 21.5 8M11.5 15.6 21.5 24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/></svg>
+<svg x="98" y="38" width="16" height="16" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#2A8FD6"/>
+  <path d="M11.5 8v16M11.5 16.4 21.5 8M11.5 15.6 21.5 24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/></svg>
+<text x="68" y="96" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#4D4D4D" text-anchor="middle">neutral</text>
+<svg x="136" y="30" width="32" height="32" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#FF8A1F"/>
+  
+  <path d="M11.5 8v16M11.5 15.6 21.5 24M17.3 11.5 21.5 8" fill="none" stroke="#0E1620" stroke-width="4" stroke-linecap="round"/></svg>
+<svg x="178" y="34" width="24" height="24" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#FF8A1F"/>
+  
+  <path d="M11.5 8v16M11.5 15.6 21.5 24M17.3 11.5 21.5 8" fill="none" stroke="#0E1620" stroke-width="4" stroke-linecap="round"/></svg>
+<svg x="212" y="38" width="16" height="16" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#FF8A1F"/>
+  
+  <path d="M11.5 8v16M11.5 15.6 21.5 24M17.3 11.5 21.5 8" fill="none" stroke="#0E1620" stroke-width="4" stroke-linecap="round"/></svg>
+<text x="182" y="96" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#4D4D4D" text-anchor="middle">Profil aktiv</text>
+<svg x="250" y="30" width="32" height="32" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#C81E4A"/>
+  
+  <path d="M16 8v9.5" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="16" cy="23.5" r="2.7" fill="#fff"/></svg>
+<svg x="292" y="34" width="24" height="24" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#C81E4A"/>
+  
+  <path d="M16 8v9.5" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="16" cy="23.5" r="2.7" fill="#fff"/></svg>
+<svg x="326" y="38" width="16" height="16" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#C81E4A"/>
+  
+  <path d="M16 8v9.5" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="16" cy="23.5" r="2.7" fill="#fff"/></svg>
+<text x="296" y="96" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#4D4D4D" text-anchor="middle">Fehler</text>
+<rect x="360" y="0" width="360" height="120" fill="#1C1C1C"/>
+<svg x="382" y="30" width="32" height="32" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#2A8FD6"/>
+  <path d="M11.5 8v16M11.5 16.4 21.5 8M11.5 15.6 21.5 24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/></svg>
+<svg x="424" y="34" width="24" height="24" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#2A8FD6"/>
+  <path d="M11.5 8v16M11.5 16.4 21.5 8M11.5 15.6 21.5 24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/></svg>
+<svg x="458" y="38" width="16" height="16" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#2A8FD6"/>
+  <path d="M11.5 8v16M11.5 16.4 21.5 8M11.5 15.6 21.5 24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/></svg>
+<text x="428" y="96" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#B8B8B8" text-anchor="middle">neutral</text>
+<svg x="496" y="30" width="32" height="32" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#FF8A1F"/>
+  
+  <path d="M11.5 8v16M11.5 15.6 21.5 24M17.3 11.5 21.5 8" fill="none" stroke="#0E1620" stroke-width="4" stroke-linecap="round"/></svg>
+<svg x="538" y="34" width="24" height="24" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#FF8A1F"/>
+  
+  <path d="M11.5 8v16M11.5 15.6 21.5 24M17.3 11.5 21.5 8" fill="none" stroke="#0E1620" stroke-width="4" stroke-linecap="round"/></svg>
+<svg x="572" y="38" width="16" height="16" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#FF8A1F"/>
+  
+  <path d="M11.5 8v16M11.5 15.6 21.5 24M17.3 11.5 21.5 8" fill="none" stroke="#0E1620" stroke-width="4" stroke-linecap="round"/></svg>
+<text x="542" y="96" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#B8B8B8" text-anchor="middle">Profil aktiv</text>
+<svg x="610" y="30" width="32" height="32" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#C81E4A"/>
+  
+  <path d="M16 8v9.5" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="16" cy="23.5" r="2.7" fill="#fff"/></svg>
+<svg x="652" y="34" width="24" height="24" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#C81E4A"/>
+  
+  <path d="M16 8v9.5" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="16" cy="23.5" r="2.7" fill="#fff"/></svg>
+<svg x="686" y="38" width="16" height="16" viewBox="0 0 32 32"><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#C81E4A"/>
+  
+  <path d="M16 8v9.5" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="16" cy="23.5" r="2.7" fill="#fff"/></svg>
+<text x="656" y="96" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#B8B8B8" text-anchor="middle">Fehler</text>
+</svg>
