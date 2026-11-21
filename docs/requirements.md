@@ -23,7 +23,9 @@ belong to it and puts the others on ice, so they stop costing CPU and RAM.
 
 - **P1** A profile has a name and a list of app entries.
 - **P2** Each app entry names an action for when the profile becomes active:
-  `start`, `stop`, `suspend`, or `ignore`.
+  `start`, `stop`, `suspend`, or `ignore`. To put an app on ice, `suspend` is
+  the default; `stop` is the exception for apps that do not tolerate being
+  frozen (see [Findings](#findings)).
 - **P3** Profiles live in one human-readable config file that can be edited by
   hand and kept in version control.
 - **P4** Exactly one profile is active at a time. A neutral profile restores
@@ -70,12 +72,41 @@ belong to it and puts the others on ice, so they stop costing CPU and RAM.
   elevated processes) say so instead of failing silently.
 - **Q4** All `unsafe` Win32 code is confined to one module.
 
+## Findings
+
+### Short suspend test (prototype, `scripts/Test-SuspendCompat.ps1`)
+
+One run on a single Windows 11 desktop with about 100 everyday apps running
+(browsers, chat and music clients, launchers, cloud sync, vendor tray tools).
+Each app was suspended with a memory trim for 15 seconds and then resumed.
+
+- All but two apps were still alive and responsive afterwards; none had to be
+  restarted. The two exceptions were never frozen: one ran elevated and could
+  not be opened, one was already unresponsive before the test.
+- While frozen, the apps' combined working set dropped from roughly 21 GB to
+  almost nothing. Shortly after resuming it was back at only about 2 GB,
+  because pages return on demand. The 21 GB overstate the gain somewhat:
+  shared memory counts once per process.
+
+What this does not show:
+
+- The test only checks that processes are alive and their windows respond. It
+  does not check that network connections, cloud sync, audio or licence checks
+  still work.
+- 15 seconds is short. Real use freezes apps for hours, which can outlast
+  connection and session timeouts.
+
+Consequences: `suspend` is the default action (P2), and the trim is worth
+doing by default (A3). A per-app fallback to `stop` stays necessary, and S3
+matters more than expected, since most apps will be frozen rather than closed.
+
 ## Open questions
 
 1. Which apps belong to which profile? A concrete list for "flight sim" and
    "music" decides how much of A2, A4 and A5 is needed first.
-2. Which of those apps tolerate being suspended? To be tested with the
-   prototype; everything else has to be stopped and restarted.
+2. Which apps misbehave after a long freeze (10 minutes and more), even though
+   they survive a short one? To be tested with the apps that actually go into
+   profiles, followed by a manual check that they still work.
 3. Are services part of the first version, or only user processes?
 4. How should elevation work: start the whole tray app elevated, or a small
    elevated helper only for the operations that need it?
