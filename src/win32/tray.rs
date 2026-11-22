@@ -13,6 +13,11 @@ use log::warn;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::SetProcessShutdownParameters;
+use windows::Win32::UI::HiDpi::{
+    AreDpiAwarenessContextsEqual, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    DPI_AWARENESS_PER_MONITOR_AWARE, DPI_AWARENESS_SYSTEM_AWARE, DPI_AWARENESS_UNAWARE,
+    GetAwarenessFromDpiAwarenessContext, GetThreadDpiAwarenessContext,
+};
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
     NIN_SELECT, NINF_KEY, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
@@ -100,6 +105,26 @@ thread_local! {
     static WINDOW: RefCell<Option<Window>> = const { RefCell::new(None) };
     static HANDLER: RefCell<Option<Box<dyn Handler>>> = RefCell::new(None);
     static QUITTING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The DPI awareness of this thread, from the manifest: `per-monitor v2`
+/// when the manifest took effect.
+pub fn dpi_awareness() -> &'static str {
+    // SAFETY: plain queries of the calling thread's context.
+    unsafe {
+        let context = GetThreadDpiAwarenessContext();
+        if AreDpiAwarenessContextsEqual(context, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+            .as_bool()
+        {
+            return "per-monitor v2";
+        }
+        match GetAwarenessFromDpiAwarenessContext(context) {
+            DPI_AWARENESS_UNAWARE => "unaware",
+            DPI_AWARENESS_SYSTEM_AWARE => "system",
+            DPI_AWARENESS_PER_MONITOR_AWARE => "per-monitor",
+            _ => "unknown",
+        }
+    }
 }
 
 /// Changes the icon and tooltip. Window thread only.

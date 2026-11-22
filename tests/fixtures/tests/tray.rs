@@ -18,7 +18,9 @@ use std::time::Duration;
 use common::*;
 use kaltstellen::autostart::{self, RUN_KEY, VALUE};
 use kaltstellen::state::Store;
-use kaltstellen::tray::model::{ID_AUTOSTART, ID_LAST, ID_NEUTRAL, ID_PROFILE_BASE, ID_QUIT};
+use kaltstellen::tray::model::{
+    ID_ACKNOWLEDGE, ID_AUTOSTART, ID_LAST, ID_NEUTRAL, ID_PROFILE_BASE, ID_QUIT,
+};
 use kaltstellen::win32::registry;
 use kaltstellen::win32::tray::CLASS;
 use std::os::windows::process::CommandExt;
@@ -711,4 +713,26 @@ fn autostart_from_the_command_line_and_the_menu_uses_the_injected_key() {
         real_before,
         "real Run key untouched"
     );
+}
+
+#[test]
+fn w2_error_state_can_be_acknowledged_without_a_switch() {
+    let mut t = Tray::new();
+    let missing = t.dir.path().join("ks-ack-missing.exe");
+    t.config(&format!(
+        "[[profile]]\nname = \"broken\"\n\n  [[profile.app]]\n  exe = \"ks-ack-missing.exe\"\n  path = '{}'\n  action = \"start\"\n",
+        missing.display()
+    ));
+    t.start(1);
+    t.click(ID_PROFILE_BASE);
+    t.wait_log("tray: icon error", 1);
+    t.click(ID_ACKNOWLEDGE);
+    t.wait_log("tray: error state acknowledged", 1);
+    t.wait_log("tray: icon active", 1);
+    assert_eq!(
+        t.store().peek().unwrap().active_profile,
+        "broken",
+        "no switch"
+    );
+    assert_eq!(t.quit(), Some(0));
 }

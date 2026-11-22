@@ -123,7 +123,11 @@ pub fn main() -> u8 {
     } else {
         eprintln!("kaltstellen tray is running; use Quit in its menu to end it");
     }
-    info!("tray: started (pid {})", std::process::id());
+    info!(
+        "tray: started (pid {}), DPI awareness {}",
+        std::process::id(),
+        window::dpi_awareness()
+    );
 
     let store = Store::new(&data);
     let config_file = paths::config_file();
@@ -423,6 +427,9 @@ impl App {
             self.status.switching = Some(next.leads_to().to_owned());
             self.running = std::mem::take(&mut self.waiting);
         }
+        // Items that depend on the result (acknowledge, offer) get their IDs.
+        // Profile IDs stay stable: they follow the order in the file.
+        self.menu = Menu::build(&self.profile_names(), &self.status);
     }
 
     /// A request from the command line.
@@ -515,6 +522,11 @@ impl window::Handler for App {
                 self.submit(Job::switch(&target), None);
             }
             Some(MenuCommand::ToggleAutostart) => self.toggle_autostart(),
+            Some(MenuCommand::Acknowledge) => {
+                info!("tray: error state acknowledged");
+                self.status.acknowledge();
+                self.redraw();
+            }
             Some(MenuCommand::Quit) => self.quit(),
             None => info!("tray: command {id} has no meaning; ignored"),
         }

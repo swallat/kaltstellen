@@ -2,6 +2,7 @@
 //! into the Windows executable.
 
 const ICON: &str = "branding/app/kaltstellen.ico";
+const MANIFEST: &str = "kaltstellen.manifest";
 
 /// Tray icons with their resource IDs; `src/win32/tray.rs` loads them by
 /// these numbers.
@@ -14,6 +15,7 @@ const TRAY_ICONS: [(&str, &str); 3] = [
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={ICON}");
+    println!("cargo:rerun-if-changed={MANIFEST}");
     for (path, _) in TRAY_ICONS {
         println!("cargo:rerun-if-changed={path}");
     }
@@ -27,6 +29,8 @@ fn main() {
     let mut res = winresource::WindowsResource::new();
     // The application icon first, with the lowest ID, so Explorer shows it.
     res.set_icon(ICON);
+    // Per-monitor DPI awareness v2 and common controls v6.
+    res.set_manifest_file(MANIFEST);
     for (path, id) in TRAY_ICONS {
         res.set_icon_with_id(path, id);
     }

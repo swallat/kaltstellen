@@ -110,6 +110,10 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
   - Only `HKEY_CURRENT_USER` is written; no elevation. `KALTSTELLEN_RUN_KEY` replaces the key path below `HKEY_CURRENT_USER`; the tests use it with a key of their own and delete that key afterwards.
   - Errors are `KS601`, exit code 1.
 
+- **L9 Acknowledging errors, DPI** **[assumed]** (M2 leftovers):
+  - The menu shows `Clear error state` while the last switch reported errors. It clears those errors without a switch; the icon then shows the active profile again. An invalid configuration file or a missing pipe keeps the error state, because the cause is still there; they clear when it is gone.
+  - The executable embeds a manifest (`kaltstellen.manifest`): per-monitor DPI awareness v2, common controls version 6 for the main window, `asInvoker`. The console subcommands print exactly the same output with the same exit codes as without it (compared for `--help`, `status`, `check-config`, `list`, `switch`, `autostart`). The tray logs its DPI awareness at start.
+
 ## 5. Configuration (TOML)
 
 Location `%APPDATA%\kaltstellen\config.toml`. The repository ships only `config.example.toml` with generic names.

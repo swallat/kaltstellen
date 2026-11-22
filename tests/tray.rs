@@ -68,6 +68,9 @@ fn l1_tray_runs_once_and_ends_on_close() {
         "the tray never finished its start-up recovery"
     );
 
+    // The manifest took effect (per-monitor DPI awareness v2).
+    assert!(log_has(dir.path(), "DPI awareness per-monitor v2"));
+
     let second = tray(dir.path()).output().unwrap();
     assert_eq!(second.status.code(), Some(0));
     let message = String::from_utf8_lossy(&second.stderr);

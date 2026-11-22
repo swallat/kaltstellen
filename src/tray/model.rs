@@ -185,6 +185,12 @@ impl Status {
         self.switch_errors = errors;
     }
 
+    /// The user has seen the errors of the last switch. Errors that still
+    /// hold (invalid configuration, no pipe) stay until their cause is gone.
+    pub fn acknowledge(&mut self) {
+        self.switch_errors.clear();
+    }
+
     pub fn tooltip(&self) -> String {
         let mut tip = format!("kaltstellen: {}", self.active);
         if let Some(target) = &self.switching {
@@ -244,6 +250,8 @@ fn truncate(text: &str, max_units: usize) -> String {
 pub enum Command {
     Switch(String),
     ToggleAutostart,
+    /// Clears the error state of the last switch without a new switch.
+    Acknowledge,
     Quit,
 }
 
@@ -266,6 +274,8 @@ pub const ID_QUIT: u16 = 2;
 pub const ID_LAST: u16 = 3;
 /// Switches start at sign-in on or off.
 pub const ID_AUTOSTART: u16 = 4;
+/// Clears the error state (spec section 8, "when acknowledged").
+pub const ID_ACKNOWLEDGE: u16 = 5;
 /// Profile `n` of the configuration has ID `ID_PROFILE_BASE + n`.
 pub const ID_PROFILE_BASE: u16 = 100;
 
@@ -330,6 +340,14 @@ impl Menu {
         menu.items.push(Item::Separator);
         if let Some(line) = status.status_line() {
             menu.disabled(escape(&line));
+            if !status.switch_errors.is_empty() {
+                menu.entry(
+                    ID_ACKNOWLEDGE,
+                    "&Clear error state".to_owned(),
+                    false,
+                    Command::Acknowledge,
+                );
+            }
             menu.items.push(Item::Separator);
         }
         if let Some(on) = status.autostart {
@@ -551,6 +569,22 @@ mod tests {
     }
 
     #[test]
+    fn errors_of_the_last_switch_can_be_acknowledged() {
+        let mut status = Status::default();
+        status.finished("focus".into(), vec!["KS105 boom".into()]);
+        let menu = Menu::build(&[], &status);
+        assert_eq!(menu.command(ID_ACKNOWLEDGE), Some(&Command::Acknowledge));
+        status.acknowledge();
+        assert_eq!(status.icon(), Icon::Active);
+        assert_eq!(Menu::build(&[], &status).command(ID_ACKNOWLEDGE), None);
+        // A broken configuration is not acknowledged away.
+        status.config_error = Some("KS202".into());
+        status.acknowledge();
+        assert_eq!(status.icon(), Icon::Error);
+        assert_eq!(Menu::build(&[], &status).command(ID_ACKNOWLEDGE), None);
+    }
+
+    #[test]
     fn start_at_sign_in_is_a_checked_item_when_known() {
         let on = Status {
             autostart: Some(true),
@@ -601,6 +635,7 @@ mod tests {
                 "&Neutral",
                 "-",
                 "Last switch: KS110 [start] tool.exe: missing (disabled)",
+                "&Clear error state",
                 "-",
                 "Open kaltstellen… (disabled)",
                 "&Quit"
