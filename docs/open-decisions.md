@@ -47,3 +47,9 @@ owner says so.
    `kaltstellen status` takes no snapshot, only `status --unassigned` does;
    the tray takes one after every applied profile and shows
    `Unassigned programs (N)`, which opens the main window.
+
+## M4 (design notes only, nothing implemented)
+
+10. **Elevated helper for services**: see [design-elevated-helper.md](design-elevated-helper.md) (service with trigger start, pipe with identity checks, admin-only allow list) and its open questions.
+11. **Automatic triggers**: see [design-automatic-triggers.md](design-automatic-triggers.md); recommendation: no general automation, at most trigger programs per profile, opt-in, manual beats automatic.
+
