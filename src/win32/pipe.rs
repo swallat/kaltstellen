@@ -353,7 +353,22 @@ mod tests {
         let sid = current_user_sid().unwrap();
         assert!(sid.starts_with("S-1-5-"), "{sid}");
         // Exactly one entry, for this user, and inheritance blocked.
-        assert_eq!(dacl(&client).unwrap(), format!("D:P(A;;FA;;;{sid})"));
+        let dacl = dacl(&client).unwrap();
+        let trustee = dacl
+            .strip_prefix("D:P(A;;FA;;;")
+            .and_then(|rest| rest.strip_suffix(')'))
+            .unwrap_or_else(|| panic!("unexpected DACL {dacl}"));
+        // SDDL abbreviates the built-in accounts (CI runs as the local
+        // administrator): RID 500 is written `LA`, RID 501 `LG`.
+        let alias = match sid.rsplit('-').next() {
+            Some("500") => Some("LA"),
+            Some("501") => Some("LG"),
+            _ => None,
+        };
+        assert!(
+            trustee == sid || Some(trustee) == alias,
+            "DACL {dacl} does not name only {sid}"
+        );
         client.write_all(b"ping\n").unwrap();
         let mut answer = String::new();
         BufReader::new(&client).read_line(&mut answer).unwrap();
