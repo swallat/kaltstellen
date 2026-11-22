@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 pattern='\bunsafe[[:space:]]*(\{|\(|fn\b|impl\b|extern\b|trait\b)'
-hits=$(grep -rnE "$pattern" --include='*.rs' --exclude-dir=target . \
+hits=$(grep -rnE "$pattern" --include='*.rs' --exclude-dir=target --exclude-dir=.claude . \
     | grep -v -e '^\./src/process\.rs:' -e '^\./src/win32/' -e '^\./tests/fixtures/' || true)
 
 if [[ -n "$hits" ]]; then

@@ -138,3 +138,12 @@ name. Purpose: find out which real apps tolerate being frozen.
   the menu). The non-goal "no network access" is reworded (open decision
   12). Still open: a real release (`docs/release-requirements.md`),
   signing, the manual checks in `docs/manual-checks.md`.
+- Main window on WebView2 (2026-11-23, owner decision; branch `gui-webview`):
+  the native window is replaced by a WebView2 page (`ui/`, embedded; host in
+  `src/win32/webview.rs`, bridge in `src/gui/bridge.rs`, documented in
+  `docs/gui-bridge.md`). Document editing and validation stay in Rust.
+  Tests drive the real page through its bridge (`--drive`) and capture it
+  (`--screenshot`); screenshots of all views in light and dark were reviewed.
+  Indicative: page ready after about 0.54 s, about 74 to 78 MB private
+  working set for the window and its WebView2 processes, executable 2.97 MB
+  (was 2.54 MB), tray idle unchanged at about 1.6 MB.

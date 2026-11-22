@@ -267,6 +267,85 @@ impl Document {
         })
     }
 
+    /// Sets or removes the hotkey of a profile (C5, C7 checked by the
+    /// configuration rules).
+    pub fn set_hotkey(&mut self, profile: &str, hotkey: Option<&str>) -> Result<(), Error> {
+        self.edit(|doc| {
+            let table = profile_mut(doc, profile)?;
+            match hotkey.map(str::trim).filter(|h| !h.is_empty()) {
+                Some(hotkey) => {
+                    table.insert("hotkey", value(hotkey));
+                }
+                None => {
+                    table.remove("hotkey");
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Replaces the options of an entry with `edit` (M3, C6). Keys not
+    /// touched by the edit keep their comments; options the action does not
+    /// take are removed. `trim` is written only when it differs from
+    /// `settings.trim`, `on_timeout` only when it is `keep`.
+    pub fn update_entry(
+        &mut self,
+        profile: &str,
+        index: usize,
+        edit: &EntryEdit,
+    ) -> Result<(), Error> {
+        let default_trim = self.config.settings.trim;
+        self.edit(|doc| {
+            let table = profile_mut(doc, profile)?;
+            let entry = apps_mut(table)
+                .get_mut(index)
+                .ok_or_else(|| format!("profile \"{profile}\" has no entry {}", index + 1))?;
+            entry.insert("exe", value(edit.exe.trim()));
+            set_or_remove(entry, "path", edit.path.as_deref());
+            entry.insert("action", value(action_name(edit.action)));
+            for key in ACTION_OPTIONS {
+                entry.remove(key);
+            }
+            let launch = match edit.action {
+                Action::Start => true,
+                Action::Stop => edit.restart_on_neutral,
+                _ => false,
+            };
+            if launch {
+                if !edit.args.is_empty() {
+                    let mut args = toml_edit::Array::new();
+                    for arg in &edit.args {
+                        args.push(arg.as_str());
+                    }
+                    entry.insert("args", value(args));
+                }
+                set_or_remove(entry, "cwd", edit.cwd.as_deref());
+            }
+            match edit.action {
+                Action::Stop => {
+                    if edit.on_timeout == config::OnTimeout::Keep {
+                        entry.insert("on_timeout", value("keep"));
+                    }
+                    if edit.restart_on_neutral {
+                        entry.insert("restart_on_neutral", value(true));
+                    }
+                }
+                Action::Suspend => {
+                    if let Some(trim) = edit.trim
+                        && trim != default_trim
+                    {
+                        entry.insert("trim", value(trim));
+                    }
+                }
+                Action::Start | Action::Ignore => {}
+            }
+            if edit.confirmed && matches!(edit.action, Action::Stop | Action::Suspend) {
+                entry.insert("confirmed", value(true));
+            }
+            Ok(())
+        })
+    }
+
     /// Writes the document: validated again, atomically (temporary file,
     /// then rename), and only if the file on disk is still what was read.
     pub fn save(&mut self) -> Result<(), Error> {
@@ -291,6 +370,43 @@ impl Document {
             .map_err(|e| error(format!("{}: {e}", self.path.display())))?;
         self.on_disk = Some(text);
         Ok(())
+    }
+}
+
+/// All options of one entry as the main window edits them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntryEdit {
+    pub exe: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    pub action: Action,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default = "kill")]
+    pub on_timeout: config::OnTimeout,
+    #[serde(default)]
+    pub restart_on_neutral: bool,
+    #[serde(default)]
+    pub trim: Option<bool>,
+    #[serde(default)]
+    pub confirmed: bool,
+}
+
+fn kill() -> config::OnTimeout {
+    config::OnTimeout::Kill
+}
+
+fn set_or_remove(table: &mut Table, key: &str, text: Option<&str>) {
+    match text.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(text) => {
+            table.insert(key, value(text));
+        }
+        None => {
+            table.remove(key);
+        }
     }
 }
 
@@ -462,6 +578,106 @@ hotkey = "Ctrl+Shift+Alt+F1"
             .unwrap();
         assert!(d.config().profiles[0].apps[1].confirmed);
         assert!(d.text().contains("confirmed = true"));
+    }
+
+    fn edit(action: Action) -> EntryEdit {
+        EntryEdit {
+            exe: "chat.exe".into(),
+            path: None,
+            action,
+            args: Vec::new(),
+            cwd: None,
+            on_timeout: config::OnTimeout::Kill,
+            restart_on_neutral: false,
+            trim: None,
+            confirmed: false,
+        }
+    }
+
+    #[test]
+    fn m3_update_entry_writes_the_options_of_the_action_only() {
+        let mut d = doc();
+        let stop = EntryEdit {
+            on_timeout: config::OnTimeout::Keep,
+            restart_on_neutral: true,
+            args: vec!["--min".into(), "a b".into()],
+            cwd: Some("C:\\chat".into()),
+            trim: Some(true),
+            ..edit(Action::Stop)
+        };
+        d.update_entry("focus", 0, &stop).unwrap();
+        let app = &d.config().profiles[0].apps[0];
+        assert_eq!(
+            app.action,
+            config::AppAction::Stop {
+                on_timeout: config::OnTimeout::Keep,
+                restart_on_neutral: true,
+                args: vec!["--min".into(), "a b".into()],
+                cwd: Some(PathBuf::from("C:\\chat")),
+            }
+        );
+        assert!(!d.text().contains("trim"), "trim is not a stop option");
+        assert!(
+            d.text().contains("# browser is heavy"),
+            "comment above stays"
+        );
+        // Without restart, args and cwd go (C6).
+        d.update_entry(
+            "focus",
+            0,
+            &EntryEdit {
+                restart_on_neutral: false,
+                ..stop.clone()
+            },
+        )
+        .unwrap();
+        assert!(!d.text().contains("--min"));
+        // Suspend: trim only when it differs from settings.trim (true here).
+        d.update_entry(
+            "focus",
+            0,
+            &EntryEdit {
+                trim: Some(true),
+                ..edit(Action::Suspend)
+            },
+        )
+        .unwrap();
+        assert!(!d.text().contains("trim"));
+        d.update_entry(
+            "focus",
+            0,
+            &EntryEdit {
+                trim: Some(false),
+                ..edit(Action::Suspend)
+            },
+        )
+        .unwrap();
+        assert!(d.text().contains("trim = false"));
+        // Start without path is refused, nothing changes.
+        let before = d.text();
+        assert!(d.update_entry("focus", 0, &edit(Action::Start)).is_err());
+        assert_eq!(d.text(), before);
+    }
+
+    #[test]
+    fn c5_c7_hotkeys_are_validated() {
+        let mut d = doc();
+        d.add_profile("music").unwrap();
+        assert!(
+            d.set_hotkey("music", Some("Ctrl+Shift+Alt+F1")).is_err(),
+            "C5 duplicate"
+        );
+        assert!(
+            d.set_hotkey("music", Some("Ctrl+Nope")).is_err(),
+            "C7 syntax"
+        );
+        d.set_hotkey("music", Some("Ctrl+Shift+Alt+F2")).unwrap();
+        assert_eq!(
+            d.config().profiles[1].hotkey.unwrap().to_string(),
+            "Ctrl+Shift+Alt+F2"
+        );
+        d.set_hotkey("music", None).unwrap();
+        assert_eq!(d.config().profiles[1].hotkey, None);
     }
 
     #[test]

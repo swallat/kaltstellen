@@ -175,3 +175,14 @@ pub fn window_fixture(exe: &str, args: &[&str]) -> Option<Fixture> {
         None
     }
 }
+
+/// Removes a test folder, waiting while WebView2 processes that used it
+/// shut down (they hold files for a few seconds after their host ended).
+pub fn remove_dir_retry(dir: &Path) {
+    for _ in 0..100 {
+        if !dir.exists() || fs::remove_dir_all(dir).is_ok() {
+            return;
+        }
+        sleep(Duration::from_millis(200));
+    }
+}

@@ -1,37 +1,83 @@
-//! The main window (`kaltstellen gui`, WP10; spec section 8). A process of
-//! its own, started from the tray, ended when closed, so Q1 holds for the
-//! tray whatever the window costs. It edits the configuration file through
-//! [`document::Document`] and applies profiles by running
-//! `kaltstellen switch`, which goes through the tray's pipe when a tray runs.
+//! The main window (`kaltstellen gui`, WP10; spec section 8 and M6): a
+//! WebView2 page embedded in the executable, in a process of its own,
+//! started from the tray and ended when closed, so Q1 holds for the tray.
+//! The page is a view; [`bridge::Bridge`] validates every intent and edits
+//! the configuration file through [`document::Document`]. Profiles are
+//! applied by running `kaltstellen switch`, which goes through the tray's
+//! pipe when a tray runs.
 
+pub mod assets;
+pub mod bridge;
 pub mod document;
 pub mod model;
-pub mod unassigned;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
 use log::{info, warn};
+use serde_json::Value;
 
-use crate::config::{Action, NEUTRAL};
+use crate::config::{Config, NEUTRAL};
+use crate::error::Code;
 use crate::exit;
 use crate::paths;
 use crate::process::Snapshot;
 use crate::state::Store;
-use crate::win32::gui::{self as window, Event, Form, Ui};
-use crate::win32::{console, instance::Instance};
+use crate::unassigned::Unassigned;
+use crate::win32::webview::{self, Answer, Options, Page, Theme, Waker};
+use crate::win32::{console, dialog, instance::Instance};
+use bridge::{Bridge, Host};
 use document::Document;
-use model::{AddCheck, Candidate, ids};
+use model::Candidate;
+
+pub use webview::Theme as GuiTheme;
 
 /// Keeps a started `kaltstellen switch` from opening a console window.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// How long `--screenshot` and `--drive` may take.
+const REVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+/// Client size at 96 DPI.
+const SIZE: (i32, i32) = (1040, 760);
+
+/// Hidden options for review and tests.
+#[derive(Debug, Clone, Default)]
+pub struct Args {
+    /// Capture the page as PNG into this file and exit.
+    pub screenshot: Option<PathBuf>,
+    /// Open a view before the capture: `entry`, `add`, `confirm`, `new`.
+    pub view: Option<String>,
+    pub theme: Option<Theme>,
+    /// Run these bridge requests (JSON array) through the page, then exit.
+    pub drive: Option<PathBuf>,
+    /// Where `--drive` writes the replies (JSON).
+    pub drive_out: Option<PathBuf>,
+}
+
+/// Text for a missing WebView2 runtime (spec M6).
+pub fn runtime_missing_message(config: Option<&Path>) -> String {
+    format!(
+        "error: {}: the Microsoft Edge WebView2 Runtime is not installed, and the kaltstellen \
+         window needs it. It is part of Windows 11; on other systems install the Evergreen \
+         runtime from Microsoft. Without it, edit the configuration file {} and use \
+         `kaltstellen check-config`, `kaltstellen switch` and the tray menu.",
+        Code::WebViewMissing,
+        config.map_or_else(|| "config.toml".to_owned(), |p| p.display().to_string())
+    )
+}
 
 /// `kaltstellen gui`. Returns the exit code.
-pub fn main() -> u8 {
-    let Some(file) = paths::config_file() else {
-        eprintln!("error: no configuration directory (APPDATA unset)");
+pub fn main(args: Args) -> u8 {
+    let started = std::time::Instant::now();
+    let file = paths::config_file();
+    if webview::runtime_version().is_none() {
+        eprintln!("{}", runtime_missing_message(file.as_deref()));
+        warn!("gui: WebView2 runtime missing");
+        return exit::ERRORS;
+    }
+    let (Some(file), Some(data)) = (file, paths::data_dir()) else {
+        eprintln!("error: no configuration or data directory (APPDATA, LOCALAPPDATA unset)");
         return exit::ERRORS;
     };
     let mutex = crate::tray::Endpoints::current()
@@ -55,36 +101,70 @@ pub fn main() -> u8 {
             for line in &lines {
                 eprintln!("{line}");
             }
-            warn!("gui: configuration invalid; not opened");
             return exit::CONFIG_INVALID;
         }
     };
+    let drive = match &args.drive {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(text) if serde_json::from_str::<Vec<Value>>(&text).is_ok() => Some(text),
+            _ => {
+                eprintln!("error: --drive needs a file with a JSON array of requests");
+                return exit::ERRORS;
+            }
+        },
+        None => None,
+    };
     console::detach_if_own();
     info!("gui: started (pid {})", std::process::id());
-    let result = window::run("kaltstellen", model::SIZE, model::controls(), |ui| {
+    let review = args.screenshot.is_some() || drive.is_some();
+    let mut query = Vec::new();
+    if let Some(view) = &args.view {
+        query.push(format!(
+            "view={}",
+            view.chars()
+                .filter(char::is_ascii_alphanumeric)
+                .collect::<String>()
+        ));
+    }
+    let options = Options {
+        title: "kaltstellen".to_owned(),
+        size: SIZE,
+        // Under the data directory, never next to the executable.
+        user_data: data.join("webview2"),
+        dev_tools: cfg!(debug_assertions) && !review,
+        theme: args.theme,
+        query: query.join("&"),
+        no_activate: review,
+    };
+    let result = webview::run(options, assets::get, |waker| {
         let (results, inbox) = channel();
-        let mut app = Main {
-            document,
-            selected: None,
-            candidates: Vec::new(),
-            results,
-            inbox,
-            pending_delete: None,
-            busy: false,
-            unassigned: Vec::new(),
-        };
-        if !app.document.config().profiles.is_empty() {
-            app.selected = Some(0);
+        if review {
+            // A capture or a test run must end even if the page hangs.
+            let watchdog = results.clone();
+            let waker = waker.clone();
+            thread::spawn(move || {
+                thread::sleep(REVIEW_TIMEOUT);
+                let _ = watchdog.send(Applied {
+                    target: String::new(),
+                    code: exit::ERRORS,
+                    stderr: String::new(),
+                });
+                waker.wake();
+            });
         }
-        ui.set_choices(ids::ACTION, &model::ACTION_NAMES, None);
-        app.show_profiles(ui);
-        app.refresh_running(ui);
-        app.refresh_unassigned(ui);
-        ui.set_text(
-            ids::STATUS,
-            &format!("Editing {}", app.document.path().display()),
-        );
-        Box::new(app)
+        let host = RealHost {
+            data: data.clone(),
+            waker: waker.clone(),
+            results,
+        };
+        Box::new(GuiPage {
+            bridge: Bridge::new(document, host),
+            inbox,
+            screenshot: args.screenshot.clone(),
+            drive,
+            drive_out: args.drive_out.clone(),
+            started,
+        })
     });
     match result {
         Ok(()) => {
@@ -106,169 +186,71 @@ struct Applied {
     stderr: String,
 }
 
-struct Main {
-    document: Document,
-    selected: Option<usize>,
-    candidates: Vec<Candidate>,
+struct RealHost {
+    data: PathBuf,
+    waker: Waker,
     results: Sender<Applied>,
-    inbox: Receiver<Applied>,
-    /// M1: a profile to delete once the switch to `neutral` is done.
-    pending_delete: Option<String>,
-    busy: bool,
-    unassigned: Vec<unassigned::Unassigned>,
 }
 
-fn active_profile() -> String {
-    paths::data_dir()
-        .and_then(|dir| Store::new(dir).peek())
-        .map_or_else(|| NEUTRAL.to_owned(), |s| s.active_profile)
-}
-
-impl Main {
-    fn profile_name(&self) -> Option<String> {
-        let profiles = &self.document.config().profiles;
-        self.selected
-            .and_then(|n| profiles.get(n))
-            .map(|p| p.name.clone())
+impl Host for RealHost {
+    fn active_profile(&self) -> String {
+        Store::new(&self.data)
+            .peek()
+            .map_or_else(|| NEUTRAL.to_owned(), |s| s.active_profile)
     }
 
-    fn show_profiles(&mut self, ui: &Ui) {
-        let active = active_profile();
-        let profiles = &self.document.config().profiles;
-        if self.selected.is_some_and(|n| n >= profiles.len()) {
-            self.selected = profiles.len().checked_sub(1);
-        }
-        let names: Vec<String> = profiles
-            .iter()
-            .map(|p| {
-                if p.name.eq_ignore_ascii_case(&active) {
-                    format!("{} (active)", p.name)
-                } else {
-                    p.name.clone()
-                }
-            })
-            .collect();
-        ui.set_list(ids::PROFILES, &names, self.selected);
-        self.show_entries(ui);
+    fn running(&self) -> Vec<Candidate> {
+        Snapshot::take()
+            .map(|s| model::candidates(s.processes(), s.own_session().unwrap_or(0)))
+            .unwrap_or_default()
     }
 
-    fn show_entries(&self, ui: &Ui) {
-        let rows = self
-            .selected
-            .and_then(|n| self.document.config().profiles.get(n))
-            .map(model::rows)
-            .unwrap_or_default();
-        ui.set_rows(ids::ENTRIES, &rows);
-        if let Some(name) = self.profile_name() {
-            ui.set_text(ids::NAME, &name);
+    fn unassigned(&self, config: &Config, profile: &str) -> Vec<Unassigned> {
+        crate::unassigned::refresh(&self.data, config, profile)
+    }
+
+    fn dismiss(&self, profile: &str, exe: &str) -> Result<(), String> {
+        crate::unassigned::dismiss(&self.data, profile, exe).map_err(|e| e.to_string())
+    }
+
+    fn autostart(&self) -> Option<bool> {
+        let exe = std::env::current_exe().ok()?;
+        crate::autostart::state(&crate::autostart::Location::current(), &exe)
+            .ok()
+            .map(|s| s == crate::autostart::State::On)
+    }
+
+    fn set_autostart(&self, on: bool) -> Result<(), String> {
+        let at = crate::autostart::Location::current();
+        if on {
+            std::env::current_exe()
+                .map_err(|e| e.to_string())
+                .and_then(|exe| crate::autostart::enable(&at, &exe).map_err(|e| e.to_string()))
+        } else {
+            crate::autostart::disable(&at)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
         }
     }
 
-    fn refresh_running(&mut self, ui: &Ui) {
-        match Snapshot::take() {
-            Ok(snapshot) => {
-                let session = snapshot.own_session().unwrap_or(0);
-                self.candidates = model::candidates(snapshot.processes(), session);
-                let rows: Vec<Vec<String>> = self.candidates.iter().map(Candidate::row).collect();
-                ui.set_rows(ids::RUNNING, &rows);
-            }
-            Err(err) => ui.set_text(ids::STATUS, &err.to_string()),
-        }
+    fn pick_executable(&self) -> Option<PathBuf> {
+        dialog::pick_executable(self.waker.window())
     }
 
-    fn refresh_unassigned(&mut self, ui: &Ui) {
-        self.unassigned = match self.profile_name() {
-            Some(profile) => unassigned::current(self.document.config(), &profile),
-            None => Vec::new(),
-        };
-        let rows: Vec<Vec<String>> = self
-            .unassigned
-            .iter()
-            .map(unassigned::Unassigned::row)
-            .collect();
-        ui.set_rows(ids::UNASSIGNED, &rows);
-    }
-
-    /// Saves after an edit and reports the outcome in the status line.
-    fn saved(&mut self, ui: &Ui, what: &str, result: crate::error::Result<()>) {
-        let result = result.and_then(|()| self.document.save());
-        match result {
-            Ok(()) => {
-                info!("gui: {what}");
-                ui.set_text(ids::STATUS, &format!("{what}; saved."));
-            }
-            Err(err) => {
-                warn!("gui: {err}");
-                if err.reason.contains("changed by another program") {
-                    // The file on disk wins: re-read it, the edit is lost.
-                    if let Ok(fresh) = Document::open(self.document.path()) {
-                        self.document = fresh;
-                    }
-                    ui.set_text(
-                        ids::STATUS,
-                        &format!("{err}. Reloaded; please repeat the change."),
-                    );
-                } else {
-                    ui.set_text(ids::STATUS, &err.to_string());
-                }
-            }
-        }
-        self.show_profiles(ui);
-        self.refresh_unassigned(ui);
-    }
-
-    /// Adds `exe` to the selected profile after the checks of M4.
-    fn add(&mut self, ui: &Ui, exe: &str, path: Option<PathBuf>) {
-        let Some(profile) = self.profile_name() else {
-            ui.set_text(ids::STATUS, "Choose a profile first.");
-            return;
-        };
-        let confirmed = match model::check_add(exe) {
-            AddCheck::Refused(reason) => {
-                ui.set_text(ids::STATUS, &reason);
-                return;
-            }
-            AddCheck::Confirm(question) => {
-                if !ui.ask("kaltstellen", &question) {
-                    ui.set_text(ids::STATUS, &format!("{exe} not added."));
-                    return;
-                }
-                true
-            }
-            AddCheck::Allowed => false,
-        };
-        let action = ui.choice(ids::ACTION).map(|n| model::ACTIONS[n]);
-        let result = self
-            .document
-            .add_entry(&profile, exe, path.as_deref(), action, confirmed);
-        self.saved(ui, &format!("{exe} added to \"{profile}\""), result);
-    }
-
-    /// Runs `kaltstellen switch TARGET` without a console window.
-    fn apply(&mut self, ui: &Ui, target: &str) {
-        if self.busy {
-            ui.set_text(ids::STATUS, "A switch is still running.");
-            return;
-        }
-        let exe = match std::env::current_exe() {
-            Ok(exe) => exe,
-            Err(err) => {
-                ui.set_text(ids::STATUS, &format!("Cannot apply: {err}"));
-                return;
-            }
-        };
-        self.busy = true;
-        ui.set_text(ids::STATUS, &format!("Applying \"{target}\"…"));
+    fn apply(&self, profile: &str) {
+        let exe = std::env::current_exe();
         let results = self.results.clone();
-        let waker = ui.waker();
-        let target = target.to_owned();
+        let waker = self.waker.clone();
+        let target = profile.to_owned();
         thread::spawn(move || {
             use std::os::windows::process::CommandExt;
-            let output = Command::new(exe)
-                .args(["switch", &target])
-                .stdin(Stdio::null())
-                .creation_flags(CREATE_NO_WINDOW)
-                .output();
+            let output = exe.and_then(|exe| {
+                Command::new(exe)
+                    .args(["switch", &target])
+                    .stdin(Stdio::null())
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output()
+            });
             let (code, stderr) = match output {
                 Ok(o) => (
                     o.status.code().unwrap_or(1) as u8,
@@ -284,172 +266,108 @@ impl Main {
             waker.wake();
         });
     }
+}
 
-    fn applied(&mut self, ui: &Ui, applied: Applied) {
-        self.busy = false;
-        let line = model::applied(&applied.target, applied.code, &applied.stderr);
-        info!("gui: {line}");
-        ui.set_text(ids::STATUS, &line);
-        if let Some(name) = self.pending_delete.take() {
-            if applied.target == NEUTRAL && applied.code <= exit::ERRORS {
-                let result = self.document.delete_profile(&name);
-                self.saved(ui, &format!("Profile \"{name}\" deleted"), result);
-            } else {
-                ui.set_text(
-                    ids::STATUS,
-                    &format!("{line} Profile \"{name}\" not deleted."),
-                );
-            }
+struct GuiPage {
+    bridge: Bridge<RealHost>,
+    inbox: Receiver<Applied>,
+    screenshot: Option<PathBuf>,
+    drive: Option<String>,
+    drive_out: Option<PathBuf>,
+    started: std::time::Instant,
+}
+
+impl GuiPage {
+    fn finish(&self) -> Answer {
+        match &self.screenshot {
+            Some(path) => Answer::CaptureAndClose(path.clone()),
+            None => Answer::Close,
         }
-        self.show_profiles(ui);
-        self.refresh_unassigned(ui);
     }
 }
 
-impl Form for Main {
-    fn event(&mut self, ui: &Ui, event: Event) {
-        let name = ui.text(ids::NAME).trim().to_owned();
-        let profile = self.profile_name();
-        let entry = ui.row_selection(ids::ENTRIES);
-        match event {
-            Event::Selected(ids::PROFILES) => {
-                self.selected = ui.list_selection(ids::PROFILES);
-                self.show_entries(ui);
-                self.refresh_unassigned(ui);
-            }
-            Event::Clicked(ids::NEW) => {
-                let result = self.document.add_profile(&name);
-                if result.is_ok() {
-                    self.selected = Some(self.document.config().profiles.len() - 1);
-                }
-                self.saved(ui, &format!("Profile \"{name}\" created"), result);
-            }
-            Event::Clicked(ids::COPY) => {
-                let Some(from) = profile else { return };
-                let to = if name.is_empty() || name.eq_ignore_ascii_case(&from) {
-                    format!("{from} copy")
-                } else {
-                    name
-                };
-                let result = self.document.copy_profile(&from, &to);
-                if result.is_ok() {
-                    self.selected = Some(self.document.config().profiles.len() - 1);
-                }
-                self.saved(
-                    ui,
-                    &format!("Profile \"{from}\" copied to \"{to}\""),
-                    result,
+impl Page for GuiPage {
+    fn message(&mut self, json: &str) -> Answer {
+        // Two notices of the page itself; everything else is a request.
+        let notice = serde_json::from_str::<Value>(json)
+            .ok()
+            .filter(|v| {
+                v.get("v").and_then(Value::as_u64) == Some(bridge::VERSION) && v.get("id").is_none()
+            })
+            .and_then(|v| Some((v.get("type")?.as_str()?.to_owned(), v)));
+        match notice {
+            Some((kind, _)) if kind == "ready" => {
+                info!(
+                    "gui: page ready after {} ms",
+                    self.started.elapsed().as_millis()
                 );
-            }
-            Event::Clicked(ids::RENAME) => {
-                let Some(from) = profile else { return };
-                let result = self.document.rename_profile(&from, &name);
-                self.saved(
-                    ui,
-                    &format!("Profile \"{from}\" renamed to \"{name}\""),
-                    result,
-                );
-            }
-            Event::Clicked(ids::DELETE) => {
-                let Some(name) = profile else { return };
-                if !ui.ask("kaltstellen", &format!("Delete the profile \"{name}\"?")) {
-                    return;
+                if let Some(steps) = &self.drive {
+                    // Only the JSON array read at start goes into the script.
+                    return Answer::Script(format!("globalThis.kaltstellenDrive({steps})"));
                 }
-                if active_profile().eq_ignore_ascii_case(&name) {
-                    // M1: deleting the active profile first switches to neutral.
-                    self.pending_delete = Some(name);
-                    self.apply(ui, NEUTRAL);
-                } else {
-                    let result = self.document.delete_profile(&name);
-                    self.saved(ui, &format!("Profile \"{name}\" deleted"), result);
+                if self.screenshot.is_some() {
+                    return self.finish();
                 }
+                Answer::Nothing
             }
-            Event::Clicked(ids::APPLY) => {
-                if let Some(name) = profile {
-                    self.apply(ui, &name);
-                }
-            }
-            Event::Clicked(ids::SET_ACTION) => {
-                let (Some(profile), Some(entry), Some(choice)) =
-                    (profile, entry, ui.choice(ids::ACTION))
-                else {
-                    ui.set_text(ids::STATUS, "Choose an entry and an action first.");
-                    return;
-                };
-                let action = model::ACTIONS[choice];
-                let exe = self.document.config().profiles[self.selected.unwrap_or(0)].apps[entry]
-                    .exe
-                    .clone();
-                let touches = matches!(action, Action::Stop | Action::Suspend);
-                let mut result = self.document.set_action(&profile, entry, action);
-                if result.is_ok()
-                    && touches
-                    && let AddCheck::Confirm(question) = model::check_add(&exe)
-                    && ui.ask("kaltstellen", &question)
-                {
-                    result = self.document.confirm(&profile, entry);
-                }
-                self.saved(
-                    ui,
-                    &format!("{exe}: action {}", model::ACTION_NAMES[choice]),
-                    result,
-                );
-            }
-            Event::Clicked(ids::REMOVE) => {
-                let (Some(profile), Some(entry)) = (profile, entry) else {
-                    return;
-                };
-                let result = self.document.remove_entry(&profile, entry);
-                self.saved(ui, "Entry removed", result);
-            }
-            Event::Clicked(ids::ADD_FILE) => {
-                if let Some(path) = ui.pick_executable()
-                    && let Some(exe) = path.file_name().map(|n| n.to_string_lossy().into_owned())
-                {
-                    self.add(ui, &exe, Some(path));
-                }
-            }
-            Event::Clicked(ids::ADD_RUNNING) => {
-                if let Some(candidate) = ui
-                    .row_selection(ids::RUNNING)
-                    .and_then(|n| self.candidates.get(n))
-                    .cloned()
-                {
-                    self.add(ui, &candidate.exe, None);
-                }
-            }
-            Event::Clicked(ids::REFRESH) => {
-                self.refresh_running(ui);
-                self.refresh_unassigned(ui);
-            }
-            Event::Clicked(ids::ADD_UNASSIGNED) => {
-                if let Some(item) = ui
-                    .row_selection(ids::UNASSIGNED)
-                    .and_then(|n| self.unassigned.get(n))
-                    .cloned()
-                {
-                    self.add(ui, &item.exe, None);
-                }
-            }
-            Event::Clicked(ids::DISMISS) => {
-                if let Some(item) = ui
-                    .row_selection(ids::UNASSIGNED)
-                    .and_then(|n| self.unassigned.get(n))
-                    .cloned()
-                {
-                    if let Some(profile) = self.profile_name() {
-                        unassigned::dismiss(&profile, &item);
+            Some((kind, value)) if kind == "drive_done" && self.drive.is_some() => {
+                if let Some(out) = &self.drive_out {
+                    let results = value.get("results").cloned().unwrap_or(Value::Null);
+                    if let Err(err) = std::fs::write(out, results.to_string()) {
+                        warn!("gui: {}: {err}", out.display());
                     }
-                    self.refresh_unassigned(ui);
                 }
+                self.finish()
             }
-            Event::Woken => {
-                while let Ok(applied) = self.inbox.try_recv() {
-                    self.applied(ui, applied);
-                }
+            Some((kind, value)) if kind == "log" => {
+                let message = value.get("message").and_then(Value::as_str).unwrap_or("");
+                warn!(
+                    "gui: page: {}",
+                    message.chars().take(2000).collect::<String>()
+                );
+                Answer::Nothing
             }
-            Event::Closing => ui.close(),
-            _ => {}
+            Some(_) => Answer::Nothing,
+            None => Answer::Reply(self.bridge.handle(json)),
         }
+    }
+
+    fn wake(&mut self) -> Vec<Answer> {
+        let mut answers = Vec::new();
+        while let Ok(applied) = self.inbox.try_recv() {
+            if applied.target.is_empty() {
+                // The review watchdog: the page never got ready.
+                warn!("gui: the page did not finish in time; closing");
+                answers.push(Answer::Close);
+                continue;
+            }
+            info!(
+                "gui: switch to \"{}\" ended with {}",
+                applied.target, applied.code
+            );
+            answers.push(Answer::Reply(self.bridge.applied(
+                &applied.target,
+                applied.code,
+                &applied.stderr,
+            )));
+        }
+        answers
+    }
+
+    fn closing(&mut self) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_missing_runtime_message_points_to_the_alternatives() {
+        let text = runtime_missing_message(Some(Path::new("C:\\cfg\\config.toml")));
+        assert!(text.contains("KS702"));
+        assert!(text.contains("C:\\cfg\\config.toml"));
+        assert!(text.contains("kaltstellen switch"));
     }
 }

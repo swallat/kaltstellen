@@ -77,7 +77,23 @@ enum Command {
     /// Run the notification-area icon with the profile menu
     Tray,
     /// Open the main window: profiles, programs and their actions
-    Gui,
+    Gui {
+        /// Capture the window as PNG into this file and exit (review)
+        #[arg(long, hide = true)]
+        screenshot: Option<PathBuf>,
+        /// View to open before the capture: entry, add, confirm, new
+        #[arg(long, hide = true)]
+        view: Option<String>,
+        /// Colour scheme for the capture: light or dark
+        #[arg(long, hide = true)]
+        theme: Option<String>,
+        /// Run the bridge requests in this JSON file through the page (tests)
+        #[arg(long, hide = true)]
+        drive: Option<PathBuf>,
+        /// Where --drive writes the replies
+        #[arg(long, hide = true)]
+        drive_out: Option<PathBuf>,
+    },
     /// Start the tray at sign-in: show, or switch on or off
     Autostart {
         #[arg(value_enum)]
@@ -129,7 +145,23 @@ pub fn main() -> ExitCode {
         }
         Command::Recover { no_wait } => recover(!no_wait),
         Command::Tray => crate::tray::main(),
-        Command::Gui => crate::gui::main(),
+        Command::Gui {
+            screenshot,
+            view,
+            theme,
+            drive,
+            drive_out,
+        } => crate::gui::main(crate::gui::Args {
+            screenshot,
+            view,
+            theme: match theme.as_deref() {
+                Some("dark") => Some(crate::gui::GuiTheme::Dark),
+                Some("light") => Some(crate::gui::GuiTheme::Light),
+                _ => None,
+            },
+            drive,
+            drive_out,
+        }),
         Command::Autostart { switch } => autostart(switch),
         Command::Update {
             check,
@@ -719,7 +751,7 @@ fn run(command: Command) -> Result<bool> {
         | Command::Status { .. }
         | Command::Recover { .. }
         | Command::Tray
-        | Command::Gui
+        | Command::Gui { .. }
         | Command::Autostart { .. }
         | Command::Update { .. } => unreachable!("handled in main"),
     }
