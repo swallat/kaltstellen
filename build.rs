@@ -14,6 +14,9 @@ const TRAY_ICONS: [(&str, &str); 3] = [
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    // UP1: the release workflow sets it; without it the build is a
+    // development build that does not update itself.
+    println!("cargo:rerun-if-env-changed=KALTSTELLEN_RELEASE");
     println!("cargo:rerun-if-changed={ICON}");
     println!("cargo:rerun-if-changed={MANIFEST}");
     for (path, _) in TRAY_ICONS {

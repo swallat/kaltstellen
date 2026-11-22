@@ -3,8 +3,9 @@
 //!
 //! Module layout (implementation plan WP1):
 //! - [`process`]: safe wrapper around the Win32 process APIs.
-//! - [`win32`]: safe wrappers around the Win32 user-interface APIs of the
-//!   tray (window, notification icon, menu, mutex, console).
+//! - [`win32`]: safe wrappers around the Win32 APIs of the tray (window,
+//!   notification icon, menu, mutex, console), the main window and the
+//!   updater (WinHTTP, SHA-256).
 //! - [`process`] and [`win32`] are the only modules allowed to contain
 //!   `unsafe` (spec Q4).
 //! - [`config`]: TOML configuration and its validation (C1 to C7).
@@ -13,6 +14,7 @@
 //! - [`cli`]: command-line interface (U2, E2).
 //! - [`tray`]: tray app logic (U1, L1, L2, W3): queue, menu model, worker.
 //! - [`hotkey`]: hotkey syntax (C7).
+//! - [`update`]: updates from GitHub Releases (UP1).
 //! - [`error`], [`logging`], [`paths`]: shared infrastructure.
 
 // Q4: the compiler rejects `unsafe` everywhere except in `process` and
@@ -37,5 +39,6 @@ pub mod settings;
 pub mod state;
 pub mod tray;
 pub mod unassigned;
+pub mod update;
 #[allow(unsafe_code)]
 pub mod win32;

@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use windows::Win32::System::Console::{
     CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
-    FreeConsole, GetConsoleProcessList, SetConsoleCtrlHandler,
+    FreeConsole, GetConsoleProcessList, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
+    STD_OUTPUT_HANDLE, SetConsoleCtrlHandler,
 };
 use windows::core::BOOL;
 
@@ -34,6 +35,31 @@ pub fn detach_if_own() -> bool {
     // SAFETY: plain call without arguments. Rust's standard streams treat
     // the now invalid handles as closed and drop further output.
     unsafe { FreeConsole() }.is_ok()
+}
+
+/// UP1: stops this process's standard handles from being inherited by
+/// processes it starts later. Windows hands every inheritable handle to a
+/// child, also when the child's own stdio is null; a long-running child (the
+/// new tray started by `update`) would then hold the caller's output pipe
+/// open, and whoever reads it (`kaltstellen update | more`, a test) would
+/// wait until that tray ends.
+pub fn keep_std_handles_private() {
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: plain queries and flag changes on this process's own
+        // handles; an invalid or absent handle makes the call fail.
+        unsafe {
+            if let Ok(handle) = GetStdHandle(which)
+                && !handle.is_invalid()
+                && !handle.0.is_null()
+            {
+                let _ = windows::Win32::Foundation::SetHandleInformation(
+                    handle,
+                    windows::Win32::Foundation::HANDLE_FLAG_INHERIT.0,
+                    windows::Win32::Foundation::HANDLE_FLAGS(0),
+                );
+            }
+        }
+    }
 }
 
 /// How long the handler of a closing console holds the process open while

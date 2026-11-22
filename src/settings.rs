@@ -1,7 +1,7 @@
 //! `settings.json` in the configuration directory (S5): what the tray keeps
-//! between sessions apart from the configuration itself. Today only the
-//! profile that was active when the last session ended, which the tray
-//! offers after sign-in without applying it.
+//! between sessions apart from the configuration itself: the profile that
+//! was active when the last session ended, which the tray offers after
+//! sign-in without applying it, and the update mode (UP1).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,6 +15,9 @@ pub struct Settings {
     /// Active profile when the last session ended (sign-out, shutdown).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_profile: Option<String>,
+    /// UP1: `on` or `off`; absent means the default (`on`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<String>,
 }
 
 fn file(dir: &Path) -> PathBuf {
@@ -50,6 +53,14 @@ pub fn save(dir: &Path, settings: &Settings) -> Result<()> {
         .map_err(|e| io_error(&file, e))
 }
 
+/// Reads, changes and writes the settings, keeping what `change` does not
+/// touch. A file that cannot be read is replaced (it was reported).
+pub fn edit(dir: &Path, change: impl FnOnce(&mut Settings)) -> Result<()> {
+    let (mut settings, _) = load(dir);
+    change(&mut settings);
+    save(dir, &settings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,6 +71,7 @@ mod tests {
         assert_eq!(load(dir.path()), (Settings::default(), None));
         let settings = Settings {
             last_profile: Some("focus".into()),
+            update: None,
         };
         save(&dir.path().join("nested"), &settings).unwrap();
         assert_eq!(load(&dir.path().join("nested")), (settings, None));
@@ -67,5 +79,16 @@ mod tests {
         let (settings, problem) = load(dir.path());
         assert_eq!(settings, Settings::default());
         assert_eq!(problem.unwrap().code, Code::SettingsIo);
+    }
+
+    #[test]
+    fn up1_edit_keeps_the_other_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        edit(dir.path(), |s| s.last_profile = Some("play".into())).unwrap();
+        edit(dir.path(), |s| s.update = Some("off".into())).unwrap();
+        edit(dir.path(), |s| s.last_profile = None).unwrap();
+        let (settings, _) = load(dir.path());
+        assert_eq!(settings.update.as_deref(), Some("off"));
+        assert_eq!(settings.last_profile, None);
     }
 }

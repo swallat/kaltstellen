@@ -18,6 +18,7 @@ use crate::protection::{self, Protection};
 use crate::state::{Lock, State, Store};
 use crate::tray::protocol::{self, Body, Finished};
 use crate::tray::{Endpoints, client};
+use crate::update;
 use crate::win32::console::Interrupts;
 
 /// Put background apps on ice: suspend, resume and trim Windows processes.
@@ -82,6 +83,24 @@ enum Command {
         #[arg(value_enum)]
         switch: Option<OnOff>,
     },
+    /// Install the newest release from GitHub, or only check for it
+    Update {
+        /// Only check and report, do not install
+        #[arg(long, conflicts_with = "force")]
+        check: bool,
+        /// Install the newest release even if it is not newer
+        #[arg(long)]
+        force: bool,
+        /// The tray's daily check: on or off
+        #[arg(long, value_enum, conflicts_with_all = ["check", "force"])]
+        auto: Option<OnOff>,
+        /// With --check: print nothing (the tray's daily check)
+        #[arg(long, hide = true, requires = "check")]
+        quiet: bool,
+        /// Started from the tray menu: wait for Enter after a failure
+        #[arg(long, hide = true)]
+        from_tray: bool,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -112,6 +131,23 @@ pub fn main() -> ExitCode {
         Command::Tray => crate::tray::main(),
         Command::Gui => crate::gui::main(),
         Command::Autostart { switch } => autostart(switch),
+        Command::Update {
+            check,
+            force,
+            auto,
+            quiet,
+            from_tray,
+        } => {
+            let code = match (auto, check) {
+                (Some(mode), _) => update_mode(mode),
+                (None, true) => update_check(quiet),
+                (None, false) => update_install(force),
+            };
+            if from_tray {
+                finish_console(code);
+            }
+            code
+        }
         command => match run(command) {
             Ok(true) => 0,
             Ok(false) => exit::ERRORS,
@@ -366,6 +402,148 @@ fn autostart(switch: Option<OnOff>) -> u8 {
     exit::OK
 }
 
+/// `update --auto on|off` (UP1).
+fn update_mode(mode: OnOff) -> u8 {
+    let mode = match mode {
+        OnOff::On => update::Mode::On,
+        OnOff::Off => update::Mode::Off,
+    };
+    let Some(dir) = paths::config_dir() else {
+        eprintln!("error: no configuration directory (APPDATA unset)");
+        return exit::ERRORS;
+    };
+    if let Err(err) = crate::settings::edit(&dir, |s| s.update = Some(mode.name().to_owned())) {
+        eprintln!("error: {err}");
+        return exit::ERRORS;
+    }
+    info!("update: daily check {}", mode.name());
+    println!("daily update check: {}", mode.name());
+    if update::current_mode(Some(&dir)).1 {
+        println!("note: {} is set and takes precedence", update::MODE_ENV);
+    }
+    exit::OK
+}
+
+/// `update --check [--quiet]` (UP1): checks now, also in mode `off`.
+fn update_check(quiet: bool) -> u8 {
+    let source = update::Source::current();
+    let release = match update::check(&update::WinHttp, &source, paths::data_dir().as_deref()) {
+        Ok(release) => release,
+        Err(err) => {
+            warn!("update: {err}");
+            if !quiet {
+                eprintln!("error: {err}");
+            }
+            return exit::ERRORS;
+        }
+    };
+    info!("update: newest release {}", release.version);
+    if quiet {
+        return exit::OK;
+    }
+    if update::version::newer(update::CURRENT, &release.version) {
+        println!(
+            "version {} is available (installed: {}): {}",
+            release.version,
+            update::CURRENT,
+            release.page
+        );
+        let blocked = update::may_install(update::RELEASE_BUILD, &source)
+            .map_err(|e| e.reason)
+            .and_then(|()| {
+                let exe = update::running_exe().map_err(|e| e.reason)?;
+                update::placement(&exe, &update::program_files())
+            });
+        match blocked {
+            Ok(()) => println!("install it with: kaltstellen update"),
+            Err(how) => println!("this copy cannot update itself: {how}"),
+        }
+    } else {
+        println!("kaltstellen {} is the newest version", update::CURRENT);
+    }
+    exit::OK
+}
+
+/// `update [--force]` (UP1): installs the newest release.
+fn update_install(force: bool) -> u8 {
+    let source = update::Source::current();
+    let refused = |err: Error| {
+        warn!("update: {err}");
+        eprintln!("error: {err}");
+        exit::ERRORS
+    };
+    if let Err(err) = update::may_install(update::RELEASE_BUILD, &source) {
+        return refused(err);
+    }
+    let exe = match update::running_exe() {
+        Ok(exe) => exe,
+        Err(err) => return refused(err),
+    };
+    if let Err(how) = update::placement(&exe, &update::program_files()) {
+        return refused(Error::new(
+            Code::UpdateNotHere,
+            format!("this copy cannot update itself: {how}"),
+        ));
+    }
+    let release = match update::check(&update::WinHttp, &source, paths::data_dir().as_deref()) {
+        Ok(release) => release,
+        Err(err) => return refused(err),
+    };
+    if !force && !update::version::newer(update::CURRENT, &release.version) {
+        println!("kaltstellen {} is the newest version", update::CURRENT);
+        return exit::OK;
+    }
+    let mut session = match update::session::System::current() {
+        Ok(session) => session,
+        Err(err) => return refused(err),
+    };
+    info!(
+        "update: installing {} over {} ({})",
+        release.version,
+        update::CURRENT,
+        exe.display()
+    );
+    let result = update::install::install(
+        &update::WinHttp,
+        &release,
+        std::env::consts::ARCH,
+        &exe,
+        &mut session,
+        &mut |line| {
+            info!("update: {line}");
+            println!("{line}");
+        },
+    );
+    match result {
+        Ok(done) => {
+            info!("update: installed {}", done.version);
+            println!("updated to version {}", done.version);
+            if done.tray_restarted {
+                println!(
+                    "the tray runs the new version; its menu offers the profile that was active"
+                );
+            }
+            if let Some(profile) = done.recovered_profile {
+                println!(
+                    "profile \"{profile}\" was switched off for the update; apply it again with: kaltstellen switch {profile}"
+                );
+            }
+            exit::OK
+        }
+        Err(err) => refused(err),
+    }
+}
+
+/// The console the tray opened for an update: keep a failure readable.
+fn finish_console(code: u8) {
+    if code == exit::OK {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    } else {
+        println!("press Enter to close this window");
+        let _ = std::io::stdin().read_line(&mut String::new());
+    }
+}
+
 fn status() -> u8 {
     if let Some(code) = through_tray(protocol::Command::Status) {
         return code;
@@ -542,7 +720,8 @@ fn run(command: Command) -> Result<bool> {
         | Command::Recover { .. }
         | Command::Tray
         | Command::Gui
-        | Command::Autostart { .. } => unreachable!("handled in main"),
+        | Command::Autostart { .. }
+        | Command::Update { .. } => unreachable!("handled in main"),
     }
 }
 

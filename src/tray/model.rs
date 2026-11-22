@@ -144,6 +144,21 @@ pub struct Status {
     pub hotkeys_unavailable: Vec<String>,
     /// N1: unassigned programs of the active profile at the last snapshot.
     pub unassigned: usize,
+    /// UP1: the daily update check is on.
+    pub update_daily: bool,
+    /// UP1: `KALTSTELLEN_UPDATE` decides; the menu cannot change it.
+    pub update_locked: bool,
+    /// UP1: a newer version found by the last check.
+    pub update: Option<UpdateOffer>,
+}
+
+/// UP1: a newer version the menu offers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateOffer {
+    pub version: String,
+    /// Why this copy cannot install it (package manager, folder,
+    /// development build); `None` if it can.
+    pub blocked: Option<String>,
 }
 
 impl Default for Status {
@@ -158,6 +173,9 @@ impl Default for Status {
             autostart: None,
             hotkeys_unavailable: Vec::new(),
             unassigned: 0,
+            update_daily: false,
+            update_locked: false,
+            update: None,
         }
     }
 }
@@ -260,6 +278,10 @@ pub enum Command {
     Acknowledge,
     /// Starts the main window (`kaltstellen gui`).
     OpenWindow,
+    /// UP1: switches the daily update check on or off.
+    ToggleUpdateCheck,
+    /// UP1: opens a console running `kaltstellen update`.
+    InstallUpdate,
     Quit,
 }
 
@@ -287,6 +309,10 @@ pub const ID_ACKNOWLEDGE: u16 = 5;
 pub const ID_OPEN: u16 = 6;
 /// `Unassigned programs (N)`: opens the main window.
 pub const ID_UNASSIGNED: u16 = 7;
+/// UP1: `Check for updates daily`.
+pub const ID_UPDATE_DAILY: u16 = 8;
+/// UP1: `Install update <version>…`.
+pub const ID_UPDATE_INSTALL: u16 = 9;
 /// Profile `n` of the configuration has ID `ID_PROFILE_BASE + n`.
 pub const ID_PROFILE_BASE: u16 = 100;
 
@@ -378,6 +404,40 @@ impl Menu {
                 "&Start at sign-in".to_owned(),
                 on,
                 Command::ToggleAutostart,
+            );
+        }
+        match &status.update {
+            Some(UpdateOffer {
+                version,
+                blocked: None,
+            }) => menu.entry(
+                ID_UPDATE_INSTALL,
+                format!("Install &update {}…", escape(version)),
+                false,
+                Command::InstallUpdate,
+            ),
+            Some(UpdateOffer {
+                version,
+                blocked: Some(how),
+            }) => menu.disabled(truncate(
+                &format!("Update {} available: {}", escape(version), escape(how)),
+                100,
+            )),
+            None => {}
+        }
+        if status.update_locked {
+            menu.items.push(Item::Entry {
+                id: 0,
+                label: "Check for updates daily (set by KALTSTELLEN_UPDATE)".to_owned(),
+                checked: status.update_daily,
+                enabled: false,
+            });
+        } else {
+            menu.entry(
+                ID_UPDATE_DAILY,
+                "Check for updates &daily".to_owned(),
+                status.update_daily,
+                Command::ToggleUpdateCheck,
             );
         }
         menu.entry(
@@ -579,6 +639,7 @@ mod tests {
                 "R&&D",
                 "&Neutral",
                 "-",
+                "Check for updates &daily",
                 "&Open kaltstellen…",
                 "&Quit"
             ]
@@ -593,6 +654,54 @@ mod tests {
         );
         assert_eq!(menu.command(ID_QUIT), Some(&Command::Quit));
         assert_eq!(menu.command(0), None);
+    }
+
+    #[test]
+    fn up1_menu_offers_an_update_and_the_daily_check() {
+        let mut status = Status {
+            update_daily: true,
+            update: Some(UpdateOffer {
+                version: "1.2.0".into(),
+                blocked: None,
+            }),
+            ..Status::default()
+        };
+        let menu = Menu::build(&[], &status);
+        let tail = &labels(&menu)[2..];
+        assert_eq!(
+            tail,
+            [
+                "Install &update 1.2.0…",
+                "[x] Check for updates &daily",
+                "&Open kaltstellen…",
+                "&Quit"
+            ]
+        );
+        assert_eq!(
+            menu.command(ID_UPDATE_INSTALL),
+            Some(&Command::InstallUpdate)
+        );
+        assert_eq!(
+            menu.command(ID_UPDATE_DAILY),
+            Some(&Command::ToggleUpdateCheck)
+        );
+        // Not installable here: a disabled line that says how instead.
+        status.update = Some(UpdateOffer {
+            version: "1.2.0".into(),
+            blocked: Some("installed by scoop: scoop update kaltstellen".into()),
+        });
+        status.update_daily = false;
+        status.update_locked = true;
+        let menu = Menu::build(&[], &status);
+        assert_eq!(
+            &labels(&menu)[2..4],
+            [
+                "Update 1.2.0 available: installed by scoop: scoop update kaltstellen (disabled)",
+                "Check for updates daily (set by KALTSTELLEN_UPDATE) (disabled)"
+            ]
+        );
+        assert_eq!(menu.command(ID_UPDATE_INSTALL), None);
+        assert_eq!(menu.command(ID_UPDATE_DAILY), None);
     }
 
     #[test]
@@ -678,6 +787,7 @@ mod tests {
                 "Last switch: KS110 [start] tool.exe: missing (disabled)",
                 "&Clear error state",
                 "-",
+                "Check for updates &daily",
                 "&Open kaltstellen…",
                 "&Quit"
             ]

@@ -94,6 +94,26 @@ pub enum Code {
     /// The main window could not be set up.
     GuiWindow = 701,
 
+    // 8xx: updates (UP1)
+    /// The update check failed (network, HTTP status).
+    UpdateCheck = 801,
+    /// The release cannot be used: metadata, no file for this system, no
+    /// checksum.
+    UpdateRelease = 802,
+    /// The downloaded file does not match its published SHA-256.
+    UpdateChecksum = 803,
+    /// This copy cannot update itself (package manager, folder, development
+    /// build).
+    UpdateNotHere = 804,
+    /// Replacing the executable failed; the old one is back.
+    UpdateReplace = 805,
+    /// The new version did not start; the old one is back.
+    UpdateStart = 806,
+    /// `update.json` could not be read or written.
+    UpdateRecord = 807,
+    /// The tray could not be stopped for the update.
+    UpdateTray = 808,
+
     // 9xx: internal
     /// Logging could not be set up.
     LogSetup = 901,
@@ -135,6 +155,14 @@ impl Code {
         Code::TrayProtocol,
         Code::AutostartIo,
         Code::GuiWindow,
+        Code::UpdateCheck,
+        Code::UpdateRelease,
+        Code::UpdateChecksum,
+        Code::UpdateNotHere,
+        Code::UpdateReplace,
+        Code::UpdateStart,
+        Code::UpdateRecord,
+        Code::UpdateTray,
         Code::LogSetup,
     ];
 

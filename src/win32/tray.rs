@@ -27,13 +27,14 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, GetMessageW, GetSystemMetrics, HICON, IDI_APPLICATION, IMAGE_ICON,
+    DispatchMessageW, GetMessageW, GetSystemMetrics, HICON, IDI_APPLICATION, IMAGE_ICON, KillTimer,
     LR_DEFAULTCOLOR, LoadIconW, LoadImageW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
     PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SM_CXSMICON,
-    SM_CYSMICON, SM_MENUDROPALIGNMENT, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
-    TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
-    WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_ENDSESSION, WM_HOTKEY, WM_NULL,
-    WM_POWERBROADCAST, WM_QUERYENDSESSION, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+    SM_CYSMICON, SM_MENUDROPALIGNMENT, SetForegroundWindow, SetTimer, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage,
+    WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_ENDSESSION,
+    WM_HOTKEY, WM_NULL, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
 use windows::core::PCWSTR;
 
@@ -49,6 +50,8 @@ const WM_TRAY: u32 = WM_APP + 1;
 /// Posted by [`Waker::wake`] from other threads.
 const WM_WAKE: u32 = WM_APP + 2;
 const ICON_ID: u32 = 1;
+/// The one timer of the tray window (UP1: the next update check).
+const TIMER_ID: usize = 1;
 const SHUTDOWN_LEVEL: u32 = 0x3FF;
 /// `szTip` has 128 units; the last one stays NUL.
 const TIP_UNITS: usize = 127;
@@ -83,6 +86,8 @@ pub trait Handler {
     fn power(&mut self, event: u32);
     /// `WM_HOTKEY` with the ID given to [`register_hotkey`].
     fn hotkey(&mut self, id: i32);
+    /// The timer set with [`set_timer`] is due (it fires once).
+    fn timer(&mut self);
 }
 
 /// Registers a global hotkey on the tray window. Window thread only. The
@@ -103,6 +108,23 @@ pub fn unregister_hotkey(id: i32) {
     if let Some(hwnd) = hwnd {
         // SAFETY: the window belongs to this thread.
         let _ = unsafe { UnregisterHotKey(Some(hwnd), id) };
+    }
+}
+
+/// Sets the one-shot timer of the tray window: [`Handler::timer`] runs once
+/// after `delay` (at most about 24 days; longer delays are cut). Replaces a
+/// timer that is still pending. No polling: Windows posts one `WM_TIMER`.
+pub fn set_timer(delay: std::time::Duration) {
+    let hwnd = WINDOW.with_borrow(|w| w.as_ref().map(|w| w.hwnd));
+    if let Some(hwnd) = hwnd {
+        let ms = u32::try_from(delay.as_millis())
+            .unwrap_or(u32::MAX)
+            .clamp(10, 0x7FFF_FFFF);
+        // SAFETY: the window belongs to this thread; no callback, so the
+        // timer arrives as WM_TIMER in this window's queue.
+        if unsafe { SetTimer(Some(hwnd), TIMER_ID, ms, None) } == 0 {
+            warn!("cannot set the tray timer");
+        }
     }
 }
 
@@ -435,6 +457,13 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         WM_POWERBROADCAST => {
             with_handler(|h| h.power(wparam.0 as u32));
             LRESULT(1)
+        }
+        WM_TIMER if wparam.0 == TIMER_ID => {
+            // One-shot: the handler sets the next one.
+            // SAFETY: the window belongs to this thread.
+            let _ = unsafe { KillTimer(Some(hwnd), TIMER_ID) };
+            with_handler(|h| h.timer());
+            LRESULT(0)
         }
         WM_CLOSE => {
             if !QUITTING.get() {

@@ -50,6 +50,9 @@ pub enum Command {
     },
     /// `kaltstellen status`.
     Status,
+    /// UP1: quit as from the menu (L2: everything suspended is resumed);
+    /// the reply `done` comes when that finished, then the tray ends.
+    Quit,
 }
 
 impl Command {
@@ -57,7 +60,7 @@ impl Command {
     pub fn waits(&self) -> bool {
         match self {
             Command::Switch { wait, .. } | Command::Recover { wait } => *wait,
-            Command::Status => true,
+            Command::Status | Command::Quit => true,
         }
     }
 }
@@ -252,6 +255,10 @@ mod tests {
         assert_eq!(
             line,
             "{\"version\":1,\"command\":\"switch\",\"profile\":\"focus\",\"force\":true,\"wait\":false}\n"
+        );
+        assert_eq!(
+            encode(&request(Command::Quit)),
+            "{\"version\":1,\"command\":\"quit\"}\n"
         );
         assert_eq!(
             encode(&request(Command::Status)),

@@ -12,6 +12,7 @@ pub mod model;
 pub mod protocol;
 pub mod server;
 pub mod source;
+pub mod update;
 pub mod worker;
 
 use std::cell::Cell;
@@ -28,7 +29,7 @@ use crate::config::{self, NEUTRAL};
 use crate::error::{Code, Error};
 use crate::exit;
 use crate::paths;
-use crate::settings::{self, Settings};
+use crate::settings;
 use crate::state::Store;
 use crate::win32::{console, instance::Instance, pipe, tray as window};
 use model::{Command as MenuCommand, Decision, Icon, Menu, Status};
@@ -229,8 +230,11 @@ pub fn main() -> u8 {
             waiting: Vec::new(),
             menu: Menu::default(),
             hotkeys: hotkeys::Registrar::default(),
+            updates: update::Updates::new(waker.clone()),
         };
         app.refresh_autostart();
+        app.refresh_update();
+        app.schedule_update();
         app.sync_hotkeys();
         app.menu = Menu::build(&names, &app.status);
         Box::new(app)
@@ -281,6 +285,8 @@ struct App {
     /// Where `settings.json` lives.
     config_dir: Option<PathBuf>,
     hotkeys: hotkeys::Registrar,
+    /// UP1: the daily check and its child process.
+    updates: update::Updates,
 }
 
 /// How long `WM_QUERYENDSESSION` waits for everything to be resumed. Windows
@@ -384,15 +390,52 @@ impl App {
         }
     }
 
+    /// UP1: mode and the last known version for the menu.
+    fn refresh_update(&mut self) {
+        let (daily, locked, offer) = update::menu_state(self.config_dir.as_deref());
+        self.status.update_daily = daily;
+        self.status.update_locked = locked;
+        self.status.update = offer;
+    }
+
+    /// UP1: sets the timer for the next automatic check, if there is one.
+    fn schedule_update(&mut self) {
+        if let Some(delay) = self.updates.next_delay(self.config_dir.as_deref()) {
+            info!("tray: next update check in {} s", delay.as_secs());
+            window::set_timer(delay);
+        }
+    }
+
+    fn toggle_update_check(&mut self) {
+        let on = !self.status.update_daily;
+        let Some(dir) = &self.config_dir else {
+            return;
+        };
+        let mode = if on {
+            crate::update::Mode::On
+        } else {
+            crate::update::Mode::Off
+        };
+        if let Err(err) = settings::edit(dir, |s| s.update = Some(mode.name().to_owned())) {
+            warn!("tray: {err}");
+            return;
+        }
+        info!("tray: daily update check {}", mode.name());
+        self.refresh_update();
+        if on {
+            // Switched on: look now, the timer follows the result.
+            self.updates.start_check();
+        }
+    }
+
     /// Writes the offered last profile to `settings.json` (S5).
     fn save_offer(&self) {
         let Some(dir) = &self.config_dir else {
             return;
         };
-        let saved = Settings {
-            last_profile: self.status.offer.clone(),
-        };
-        if let Err(err) = settings::save(dir, &saved) {
+        // Only the offer: the update mode (UP1) in the same file stays.
+        let offer = self.status.offer.clone();
+        if let Err(err) = settings::edit(dir, |s| s.last_profile = offer) {
             warn!("tray: {err}");
         }
     }
@@ -500,6 +543,24 @@ impl App {
     /// A request from the command line.
     fn incoming(&mut self, incoming: Incoming) {
         let Incoming { command, reply } = incoming;
+        if command == Command::Quit {
+            // UP1: the updater quits the tray like the menu does (L2) and
+            // gets the result once everything is resumed.
+            info!("tray: command line asks to quit");
+            if !self.controller.is_quitting() {
+                self.quit();
+            }
+            let waiter = Waiter {
+                reply,
+                notes: Vec::new(),
+            };
+            if self.controller.running() == Some(&Job::Quit) {
+                self.running.push(waiter);
+            } else {
+                self.waiting.push(waiter);
+            }
+            return;
+        }
         let respond = |body| {
             let _ = reply.send(body);
         };
@@ -550,7 +611,7 @@ impl App {
                 (Job::Switch { target, force }, notes)
             }
             Command::Recover { .. } => (Job::Recover, Vec::new()),
-            Command::Status => unreachable!("answered above"),
+            Command::Status | Command::Quit => unreachable!("answered above"),
         };
         info!("tray: command line asks for {job}");
         self.submit(job, Some(Waiter { reply, notes }));
@@ -572,6 +633,7 @@ impl window::Handler for App {
             self.status.active = state.active_profile;
         }
         self.refresh_autostart();
+        self.refresh_update();
         self.sync_hotkeys();
         self.redraw();
         self.menu = Menu::build(&names, &self.status);
@@ -589,6 +651,8 @@ impl window::Handler for App {
             }
             Some(MenuCommand::ToggleAutostart) => self.toggle_autostart(),
             Some(MenuCommand::OpenWindow) => open_window(),
+            Some(MenuCommand::ToggleUpdateCheck) => self.toggle_update_check(),
+            Some(MenuCommand::InstallUpdate) => update::open_install(),
             Some(MenuCommand::Acknowledge) => {
                 info!("tray: error state acknowledged");
                 self.status.acknowledge();
@@ -610,7 +674,21 @@ impl window::Handler for App {
         while let Ok(incoming) = self.incoming.try_recv() {
             self.incoming(incoming);
         }
+        if self.updates.check_ended() {
+            self.refresh_update();
+            update::log_result(self.status.update.as_ref());
+            self.schedule_update();
+        }
         self.redraw();
+    }
+
+    fn timer(&mut self) {
+        match self.updates.next_delay(self.config_dir.as_deref()) {
+            Some(delay) if delay.is_zero() => self.updates.start_check(),
+            // update.json changed meanwhile (a check from the command line).
+            Some(delay) => window::set_timer(delay),
+            None => {}
+        }
     }
 
     fn close(&mut self) {

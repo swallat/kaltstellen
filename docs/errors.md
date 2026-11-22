@@ -40,4 +40,12 @@ when they apply. Codes are never renumbered or reused. The source of truth is
 | `KS505` | Malformed pipe message, or another protocol version (exit code 5). |
 | `KS601` | The Run key for start at sign-in could not be read or written. |
 | `KS701` | The main window could not be set up. |
+| `KS801` | The update check failed: no connection, an HTTP error or a timeout (UP1). |
+| `KS802` | The release cannot be used: unreadable metadata, no executable for this system, or no SHA-256 for it in `checksums.txt`. Nothing was changed. |
+| `KS803` | The downloaded executable does not match its SHA-256 in `checksums.txt`. Nothing was changed. |
+| `KS804` | This copy cannot update itself: installed by a package manager (scoop, winget, Chocolatey), below Program Files, in a folder that is not writable, or a development build. The message says how to update instead. |
+| `KS805` | Renaming the executable failed; the old one has been put back. |
+| `KS806` | The new version did not start (`--version` or the new tray failed); the old one has been put back and, if a tray ran, started again. |
+| `KS807` | `update.json` (data directory) could not be read or written. |
+| `KS808` | The tray could not be stopped for the update (it does not know the `quit` request, is quitting already, or did not end within 30 s). Nothing was changed. |
 | `KS901` | Logging could not be set up. |

@@ -28,10 +28,12 @@ Every request has `version` (currently `1`) and `command`.
 | `switch` | `profile` (string), `force` (bool, default `false`), `wait` (bool, default `true`) | `kaltstellen switch PROFILE [--force] [--no-wait]` |
 | `recover` | `wait` (bool, default `true`) | `kaltstellen recover [--no-wait]` |
 | `status` | none | `kaltstellen status` |
+| `quit` | none | Used by `kaltstellen update` (spec UP1): Quit as from the menu (L2, everything suspended is resumed); the final reply `done` comes when that finished, then the tray ends. Added within version 1; a tray that does not know it answers `rejected` with `KS505`. The tray may end before the reply reaches the client, so the client also accepts a closed connection followed by the tray's mutex disappearing. |
 
 ```json
 {"version":1,"command":"switch","profile":"focus","force":true,"wait":false}
 {"version":1,"command":"status"}
+{"version":1,"command":"quit"}
 ```
 
 `force` belongs to the request: it confirms warn-list programs (P6) for this
