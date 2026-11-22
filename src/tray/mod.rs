@@ -234,6 +234,8 @@ pub fn main() -> u8 {
             updates: update::Updates::new(waker.clone()),
             waker: waker.clone(),
             autostart_answer: None,
+            update_started: None,
+            update_waiting: None,
         };
         app.refresh_autostart();
         app.ask_autostart_once();
@@ -293,6 +295,10 @@ struct App {
     updates: update::Updates,
     /// Wakes this window thread from other threads.
     waker: window::Waker,
+    /// UP1: the version whose automatic install was started, and the one
+    /// already reported as waiting (each is logged once).
+    update_started: Option<String>,
+    update_waiting: Option<String>,
     /// L8: the answer to the start-at-sign-in question, while it is open.
     autostart_answer: Option<Receiver<bool>>,
 }
@@ -511,8 +517,8 @@ impl App {
 
     /// UP1: mode and the last known version for the menu.
     fn refresh_update(&mut self) {
-        let (daily, locked, offer) = update::menu_state(self.config_dir.as_deref());
-        self.status.update_daily = daily;
+        let (mode, locked, offer) = update::menu_state(self.config_dir.as_deref());
+        self.status.update_mode = mode;
         self.status.update_locked = locked;
         self.status.update = offer;
     }
@@ -525,25 +531,55 @@ impl App {
         }
     }
 
-    fn toggle_update_check(&mut self) {
-        let on = !self.status.update_daily;
+    /// UP1: sets the update mode from the menu.
+    fn set_update_mode(&mut self, mode: crate::update::Mode) {
         let Some(dir) = &self.config_dir else {
             return;
-        };
-        let mode = if on {
-            crate::update::Mode::On
-        } else {
-            crate::update::Mode::Off
         };
         if let Err(err) = settings::edit(dir, |s| s.update = Some(mode.name().to_owned())) {
             warn!("tray: {err}");
             return;
         }
-        info!("tray: daily update check {}", mode.name());
+        info!("tray: update mode {}", mode.name());
         self.refresh_update();
-        if on {
-            // Switched on: look now, the timer follows the result.
+        if mode.checks() {
+            // Look now; the timer follows the result.
             self.updates.start_check();
+        }
+    }
+
+    /// UP1: installs a found update by itself in mode `auto`, but only
+    /// while `neutral` is active and no switch runs or waits, so nothing is
+    /// thawed or disturbed. Otherwise it waits: it is tried again when the
+    /// tray returns to `neutral` and after every later check.
+    fn maybe_install_update(&mut self) {
+        let Some(offer) = self.status.update.clone() else {
+            return;
+        };
+        let idle = self.controller.running().is_none()
+            && self.controller.pending().is_none()
+            && !self.controller.is_quitting();
+        let now = crate::update::may_install_now(
+            self.status.update_mode,
+            offer.blocked.is_none(),
+            self.status.is_neutral(),
+            idle,
+        );
+        if now {
+            if self.update_started.as_deref() != Some(offer.version.as_str()) {
+                info!("tray: installing update {} automatically", offer.version);
+                self.update_started = Some(offer.version.clone());
+                update::install_unattended();
+            }
+        } else if self.status.update_mode == crate::update::Mode::Auto
+            && offer.blocked.is_none()
+            && self.update_waiting.as_deref() != Some(offer.version.as_str())
+        {
+            info!(
+                "tray: update {} waits until neutral is active and no switch runs",
+                offer.version
+            );
+            self.update_waiting = Some(offer.version.clone());
         }
     }
 
@@ -673,6 +709,10 @@ impl App {
             self.running = std::mem::take(&mut self.waiting);
         }
         self.sync_hotkeys();
+        if self.status.is_neutral() {
+            // UP1: an update that waited for neutral may go now.
+            self.maybe_install_update();
+        }
         // Items that depend on the result (acknowledge, offer) get their IDs.
         // Profile IDs stay stable: they follow the order in the file.
         self.menu = Menu::build(&self.profile_names(), &self.status);
@@ -800,7 +840,7 @@ impl window::Handler for App {
             }
             Some(MenuCommand::ToggleAutostart) => self.toggle_autostart(),
             Some(MenuCommand::OpenWindow) => open_window(),
-            Some(MenuCommand::ToggleUpdateCheck) => self.toggle_update_check(),
+            Some(MenuCommand::UpdateMode(mode)) => self.set_update_mode(mode),
             Some(MenuCommand::InstallUpdate) => update::open_install(),
             Some(MenuCommand::Quit) => self.quit(),
             None => info!("tray: command {id} has no meaning; ignored"),
@@ -822,6 +862,7 @@ impl window::Handler for App {
         if self.updates.check_ended() {
             self.refresh_update();
             update::log_result(self.status.update.as_ref());
+            self.maybe_install_update();
             self.schedule_update();
         }
         self.redraw();

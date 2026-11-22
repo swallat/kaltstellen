@@ -192,8 +192,8 @@ pub struct Status {
     pub hotkeys_unavailable: Vec<String>,
     /// N1: unassigned programs of the active profile at the last snapshot.
     pub unassigned: usize,
-    /// UP1: the daily update check is on.
-    pub update_daily: bool,
+    /// UP1: the update mode.
+    pub update_mode: crate::update::Mode,
     /// UP1: `KALTSTELLEN_UPDATE` decides; the menu cannot change it.
     pub update_locked: bool,
     /// UP1: a newer version found by the last check.
@@ -290,7 +290,7 @@ impl Default for Status {
             autostart: None,
             hotkeys_unavailable: Vec::new(),
             unassigned: 0,
-            update_daily: false,
+            update_mode: crate::update::Mode::Auto,
             update_locked: false,
             update: None,
         }
@@ -404,7 +404,8 @@ pub enum Command {
     /// Starts the main window (`kaltstellen gui`).
     OpenWindow,
     /// UP1: switches the daily update check on or off.
-    ToggleUpdateCheck,
+    /// UP1: sets the update mode.
+    UpdateMode(crate::update::Mode),
     /// UP1: opens a console running `kaltstellen update`.
     InstallUpdate,
     Quit,
@@ -432,8 +433,12 @@ pub const ID_AUTOSTART: u16 = 4;
 pub const ID_OPEN: u16 = 6;
 /// `Unassigned programs (N)`: opens the main window.
 pub const ID_UNASSIGNED: u16 = 7;
-/// UP1: `Check for updates daily`.
-pub const ID_UPDATE_DAILY: u16 = 8;
+/// UP1: install updates automatically.
+pub const ID_UPDATE_AUTO: u16 = 8;
+/// UP1: check and report only.
+pub const ID_UPDATE_MANUAL: u16 = 10;
+/// UP1: no checks.
+pub const ID_UPDATE_OFF: u16 = 11;
 /// UP1: `Install update <version>…`.
 pub const ID_UPDATE_INSTALL: u16 = 9;
 /// Profile `n` of the configuration has ID `ID_PROFILE_BASE + n`.
@@ -540,20 +545,30 @@ impl Menu {
             )),
             None => {}
         }
-        if status.update_locked {
-            menu.items.push(Item::Entry {
-                id: 0,
-                label: "Check for updates daily (set by KALTSTELLEN_UPDATE)".to_owned(),
-                checked: status.update_daily,
-                enabled: false,
-            });
-        } else {
-            menu.entry(
-                ID_UPDATE_DAILY,
-                "Check for updates &daily".to_owned(),
-                status.update_daily,
-                Command::ToggleUpdateCheck,
-            );
+        for (id, mode, label) in [
+            (
+                ID_UPDATE_AUTO,
+                crate::update::Mode::Auto,
+                "Updates: install &automatically",
+            ),
+            (
+                ID_UPDATE_MANUAL,
+                crate::update::Mode::Manual,
+                "Updates: check and as&k",
+            ),
+            (ID_UPDATE_OFF, crate::update::Mode::Off, "Updates: o&ff"),
+        ] {
+            let checked = status.update_mode == mode;
+            if status.update_locked {
+                menu.items.push(Item::Entry {
+                    id: 0,
+                    label: format!("{label} (set by KALTSTELLEN_UPDATE)"),
+                    checked,
+                    enabled: false,
+                });
+            } else {
+                menu.entry(id, label.to_owned(), checked, Command::UpdateMode(mode));
+            }
         }
         menu.entry(
             ID_OPEN,
@@ -755,7 +770,9 @@ mod tests {
                 "R&&D",
                 "&Neutral",
                 "-",
-                "Check for updates &daily",
+                "[x] Updates: install &automatically",
+                "Updates: check and as&k",
+                "Updates: o&ff",
                 "&Open kaltstellen…",
                 "&Quit"
             ]
@@ -773,9 +790,9 @@ mod tests {
     }
 
     #[test]
-    fn up1_menu_offers_an_update_and_the_daily_check() {
+    fn up1_menu_offers_an_update_and_the_three_modes() {
         let mut status = Status {
-            update_daily: true,
+            update_mode: crate::update::Mode::Manual,
             update: Some(UpdateOffer {
                 version: "1.2.0".into(),
                 blocked: None,
@@ -788,7 +805,9 @@ mod tests {
             tail,
             [
                 "Install &update 1.2.0…",
-                "[x] Check for updates &daily",
+                "Updates: install &automatically",
+                "[x] Updates: check and as&k",
+                "Updates: o&ff",
                 "&Open kaltstellen…",
                 "&Quit"
             ]
@@ -798,26 +817,33 @@ mod tests {
             Some(&Command::InstallUpdate)
         );
         assert_eq!(
-            menu.command(ID_UPDATE_DAILY),
-            Some(&Command::ToggleUpdateCheck)
+            menu.command(ID_UPDATE_AUTO),
+            Some(&Command::UpdateMode(crate::update::Mode::Auto))
         );
-        // Not installable here: a disabled line that says how instead.
+        assert_eq!(
+            menu.command(ID_UPDATE_OFF),
+            Some(&Command::UpdateMode(crate::update::Mode::Off))
+        );
+        // Not installable here: a disabled line that says how instead; the
+        // environment fixes the mode.
         status.update = Some(UpdateOffer {
             version: "1.2.0".into(),
             blocked: Some("installed by scoop: scoop update kaltstellen".into()),
         });
-        status.update_daily = false;
+        status.update_mode = crate::update::Mode::Off;
         status.update_locked = true;
         let menu = Menu::build(&[], &status);
         assert_eq!(
-            &labels(&menu)[2..4],
+            &labels(&menu)[2..6],
             [
                 "Update 1.2.0 available: installed by scoop: scoop update kaltstellen (disabled)",
-                "Check for updates daily (set by KALTSTELLEN_UPDATE) (disabled)"
+                "Updates: install &automatically (set by KALTSTELLEN_UPDATE) (disabled)",
+                "Updates: check and as&k (set by KALTSTELLEN_UPDATE) (disabled)",
+                "[x] Updates: o&ff (set by KALTSTELLEN_UPDATE) (disabled)"
             ]
         );
         assert_eq!(menu.command(ID_UPDATE_INSTALL), None);
-        assert_eq!(menu.command(ID_UPDATE_DAILY), None);
+        assert_eq!(menu.command(ID_UPDATE_AUTO), None);
     }
 
     #[test]
@@ -933,7 +959,9 @@ mod tests {
                 "-",
                 "Last switch: KS110 [start] tool.exe: missing (disabled)",
                 "-",
-                "Check for updates &daily",
+                "[x] Updates: install &automatically",
+                "Updates: check and as&k",
+                "Updates: o&ff",
                 "&Open kaltstellen…",
                 "&Quit"
             ]

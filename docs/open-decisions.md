@@ -41,6 +41,10 @@ reasoning is. Implementation choices made without the owner are marked
    is not held up; `KALTSTELLEN_AUTOSTART_PROMPT` (`yes`, `no`, `skip`) for
    tests and managed installations.
 
+10. **UP1 automatic install timing** `[assumed]`: retried when a switch ends
+    with `neutral` active and after every later check; logged once per
+    version while it waits; a saved `on` (earlier name) reads as `auto`.
+
 ## Decided by the owner on 2026-11-23
 
 - **L5 pipe**: as built, including no fallback when a running tray does not

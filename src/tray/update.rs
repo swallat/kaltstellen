@@ -43,7 +43,7 @@ impl Updates {
     /// running now.
     pub fn next_delay(&self, config_dir: Option<&Path>) -> Option<Duration> {
         let (mode, _) = update::current_mode(config_dir);
-        if self.ended.is_some() || mode == Mode::Off || !automatic(&Source::current()) {
+        if self.ended.is_some() || !mode.checks() || !automatic(&Source::current()) {
             return None;
         }
         let last = paths::data_dir().and_then(|dir| record::load(&dir).0.last_check);
@@ -102,9 +102,9 @@ fn automatic(source: &Source) -> bool {
     update::RELEASE_BUILD || source.named
 }
 
-/// For the menu: daily check on, set by the environment, and the newer
+/// For the menu: the mode, whether the environment sets it, and the newer
 /// version from `update.json` with the reason it cannot be installed here.
-pub fn menu_state(config_dir: Option<&Path>) -> (bool, bool, Option<UpdateOffer>) {
+pub fn menu_state(config_dir: Option<&Path>) -> (Mode, bool, Option<UpdateOffer>) {
     let (mode, locked) = update::current_mode(config_dir);
     let offer = paths::data_dir().and_then(|dir| {
         let (rec, problem) = record::load(&dir);
@@ -121,7 +121,7 @@ pub fn menu_state(config_dir: Option<&Path>) -> (bool, bool, Option<UpdateOffer>
             .err();
         Some(UpdateOffer { version, blocked })
     });
-    (mode == Mode::On, locked, offer)
+    (mode, locked, offer)
 }
 
 /// Logs what the last check found.
@@ -134,6 +134,25 @@ pub fn log_result(offer: Option<&UpdateOffer>) {
             "tray: update check: {} is the newest version",
             update::CURRENT
         ),
+    }
+}
+
+/// UP1 automatic install: `kaltstellen update` without a console window;
+/// its steps go to the log. That process quits this tray and starts the new
+/// one.
+pub fn install_unattended() {
+    let started = std::env::current_exe().and_then(|exe| {
+        Command::new(exe)
+            .arg("update")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+    });
+    match started {
+        Ok(child) => info!("tray: automatic update started (pid {})", child.id()),
+        Err(err) => warn!("tray: cannot start the update: {err}"),
     }
 }
 

@@ -17,7 +17,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use common::*;
-use kaltstellen::tray::model::ID_UPDATE_DAILY;
+use kaltstellen::tray::model::{ID_UPDATE_AUTO, ID_UPDATE_MANUAL};
 use kaltstellen::win32::hash;
 use kaltstellen::win32::registry;
 use kaltstellen::win32::tray::CLASS;
@@ -330,13 +330,16 @@ fn up1_check_reports_a_newer_release_and_records_it() {
 fn up1_mode_is_saved_and_nothing_to_do_without_a_newer_release() {
     let version = built_version();
     let s = Setup::new(github(&version, b"x", b"x"));
-    let (code, out, _) = s.run(&["update", "--auto", "off"], &[]);
+    let (code, out, _) = s.run(&["update", "--mode", "off"], &[]);
     assert_eq!(code, 0);
-    assert_eq!(out.trim(), "daily update check: off");
+    assert_eq!(out.trim(), "update mode: off");
     let settings = fs::read_to_string(s.config_dir().join("settings.json")).unwrap();
     assert!(settings.contains("\"update\": \"off\""), "{settings}");
+    // The earlier form still works: on means auto.
+    let (code, out, _) = s.run(&["update", "--auto", "on"], &[]);
+    assert_eq!((code, out.trim()), (0, "update mode: auto"));
     let (code, out, _) = s.run(
-        &["update", "--auto", "on"],
+        &["update", "--mode", "manual"],
         &[("KALTSTELLEN_UPDATE", "off")],
     );
     assert_eq!(code, 0);
@@ -441,7 +444,7 @@ fn up1_wrong_checksum_or_broken_file_changes_nothing() {
 }
 
 #[test]
-fn up1_tray_checks_when_the_daily_check_is_switched_on() {
+fn up1_tray_checks_when_checking_is_switched_on() {
     let mut s = Setup::new(github("9.9.9", b"x", b"x"));
     fs::write(
         s.config_dir().join("settings.json"),
@@ -461,7 +464,7 @@ fn up1_tray_checks_when_the_daily_check_is_switched_on() {
         PostMessageW(
             Some(hwnd),
             WM_COMMAND,
-            WPARAM(usize::from(ID_UPDATE_DAILY)),
+            WPARAM(usize::from(ID_UPDATE_MANUAL)),
             LPARAM(0),
         )
     }
@@ -469,7 +472,52 @@ fn up1_tray_checks_when_the_daily_check_is_switched_on() {
     s.wait_log("tray: update 9.9.9 available", 1);
     s.wait_log("tray: next update check in", 1);
     let settings = fs::read_to_string(s.config_dir().join("settings.json")).unwrap();
-    assert!(settings.contains("\"update\": \"on\""), "{settings}");
+    assert!(settings.contains("\"update\": \"manual\""), "{settings}");
+    assert!(
+        !s.log().contains("automatically"),
+        "manual never installs by itself"
+    );
     let record = fs::read_to_string(s.data().join("update.json")).unwrap();
     assert!(record.contains("9.9.9"));
+}
+
+/// Posts a menu command to the tray of `pid`.
+fn click(pid: u32, id: u16) {
+    let hwnd = tray_window(pid).expect("tray window");
+    // SAFETY: posting to a window of another process.
+    unsafe { PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(usize::from(id)), LPARAM(0)) }.unwrap();
+}
+
+#[test]
+fn up1_automatic_install_waits_for_neutral_and_an_idle_tray() {
+    // A newer release whose file is this build: it downloads and verifies,
+    // then fails its version check (it is not 9.9.9) and changes nothing.
+    let served = fs::read(kaltstellen_exe()).unwrap();
+    let mut s = Setup::new(github("9.9.9", &served, &served));
+    let (_program, beat) = s.program();
+    s.start_tray();
+    let (code, _, err) = s.run(&["switch", "play"], &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(frozen(&beat));
+    // Mode auto (the default) from the menu checks at once.
+    let pid = s.tray.as_ref().unwrap().id();
+    click(pid, ID_UPDATE_AUTO);
+    s.wait_log("tray: update 9.9.9 available", 1);
+    s.wait_log("tray: update 9.9.9 waits until neutral is active", 1);
+    assert!(
+        !s.log().contains("installing update 9.9.9"),
+        "never while a profile is active"
+    );
+    assert!(frozen(&beat), "nothing was thawed");
+    // Back to neutral: now it installs by itself.
+    let (code, _, _) = s.run(&["switch", "neutral"], &[]);
+    assert_eq!(code, 0);
+    s.wait_log("tray: installing update 9.9.9 automatically", 1);
+    s.wait_log("tray: automatic update started", 1);
+    // The staged file did not report 9.9.9: rolled back before the tray was
+    // touched (KS806), the executable is unchanged and the tray still runs.
+    s.wait_log("KS806", 1);
+    assert_eq!(fs::read(&s.exe).unwrap(), s.original);
+    assert!(s.tray.as_mut().unwrap().try_wait().unwrap().is_none());
+    assert!(beating(&beat));
 }

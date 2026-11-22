@@ -142,19 +142,27 @@ pub fn check(fetch: &dyn Fetch, source: &Source, data_dir: Option<&Path>) -> Res
     result
 }
 
-/// UP1 modes.
+/// UP1 modes (owner, 2026-11-23).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Check once a day and report; never install by itself.
-    On,
+    /// Check once a day and install by itself, but only while `neutral` is
+    /// active and no switch runs or waits (the default).
+    Auto,
+    /// Check once a day and report; install on request.
+    Manual,
     /// Never connect by itself.
     Off,
 }
 
 impl Mode {
+    pub const ALL: [Mode; 3] = [Mode::Auto, Mode::Manual, Mode::Off];
+
+    /// `auto`, `manual`, `off`; `on` (the earlier name for checking
+    /// daily) means `auto` now.
     pub fn parse(text: &str) -> Option<Mode> {
         match text.trim().to_ascii_lowercase().as_str() {
-            "on" | "1" | "true" => Some(Mode::On),
+            "auto" | "on" | "1" | "true" => Some(Mode::Auto),
+            "manual" => Some(Mode::Manual),
             "off" | "0" | "false" => Some(Mode::Off),
             _ => None,
         }
@@ -162,19 +170,32 @@ impl Mode {
 
     pub fn name(self) -> &'static str {
         match self {
-            Mode::On => "on",
+            Mode::Auto => "auto",
+            Mode::Manual => "manual",
             Mode::Off => "off",
         }
+    }
+
+    /// Whether the tray checks by itself.
+    pub fn checks(self) -> bool {
+        self != Mode::Off
     }
 }
 
 /// The mode in effect and whether the environment variable set it. The
-/// variable wins over the saved value; the default is [`Mode::On`].
+/// variable wins over the saved value; the default is [`Mode::Auto`].
 pub fn resolve_mode(env: Option<&str>, saved: Option<&str>) -> (Mode, bool) {
     if let Some(mode) = env.and_then(Mode::parse) {
         return (mode, true);
     }
-    (saved.and_then(Mode::parse).unwrap_or(Mode::On), false)
+    (saved.and_then(Mode::parse).unwrap_or(Mode::Auto), false)
+}
+
+/// UP1: whether the tray may install by itself now: mode `auto`, the
+/// update can be installed here, `neutral` is active, and no switch runs or
+/// waits. Otherwise it waits for the next chance.
+pub fn may_install_now(mode: Mode, installable: bool, neutral: bool, idle: bool) -> bool {
+    mode == Mode::Auto && installable && neutral && idle
 }
 
 /// [`resolve_mode`] for this process.
@@ -415,14 +436,38 @@ mod tests {
     }
 
     #[test]
-    fn up1_mode_environment_wins_default_on() {
-        assert_eq!(resolve_mode(None, None), (Mode::On, false));
+    fn up1_mode_environment_wins_default_auto() {
+        assert_eq!(resolve_mode(None, None), (Mode::Auto, false));
         assert_eq!(resolve_mode(None, Some("off")), (Mode::Off, false));
+        assert_eq!(resolve_mode(None, Some("manual")), (Mode::Manual, false));
         assert_eq!(resolve_mode(Some("OFF"), Some("on")), (Mode::Off, true));
-        assert_eq!(resolve_mode(Some("1"), Some("off")), (Mode::On, true));
+        assert_eq!(resolve_mode(Some("1"), Some("off")), (Mode::Auto, true));
+        assert_eq!(resolve_mode(Some("Manual"), None), (Mode::Manual, true));
+        for mode in Mode::ALL {
+            assert_eq!(Mode::parse(mode.name()), Some(mode));
+        }
+    }
+
+    #[test]
+    fn up1_automatic_install_only_while_neutral_and_idle() {
+        assert!(may_install_now(Mode::Auto, true, true, true));
+        assert!(
+            !may_install_now(Mode::Auto, true, false, true),
+            "a profile is active"
+        );
+        assert!(
+            !may_install_now(Mode::Auto, true, true, false),
+            "a switch runs or waits"
+        );
+        assert!(
+            !may_install_now(Mode::Auto, false, true, true),
+            "cannot install here"
+        );
+        assert!(!may_install_now(Mode::Manual, true, true, true));
+        assert!(!may_install_now(Mode::Off, true, true, true));
         // Junk in the variable is ignored, junk in the file means default.
         assert_eq!(resolve_mode(Some("maybe"), Some("off")), (Mode::Off, false));
-        assert_eq!(resolve_mode(None, Some("maybe")), (Mode::On, false));
+        assert_eq!(resolve_mode(None, Some("maybe")), (Mode::Auto, false));
     }
 
     #[test]

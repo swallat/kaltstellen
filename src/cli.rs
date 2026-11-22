@@ -107,8 +107,12 @@ enum Command {
         /// Install the newest release even if it is not newer
         #[arg(long)]
         force: bool,
-        /// The tray's daily check: on or off
-        #[arg(long, value_enum, conflicts_with_all = ["check", "force"])]
+        /// Update mode: auto (install by itself while neutral), manual
+        /// (check daily, install on request) or off (never check)
+        #[arg(long, value_enum, conflicts_with_all = ["check", "force", "auto"])]
+        mode: Option<UpdateModeArg>,
+        /// Earlier form of --mode: on means auto, off means off
+        #[arg(long, hide = true, value_enum, conflicts_with_all = ["check", "force"])]
         auto: Option<OnOff>,
         /// With --check: print nothing (the tray's daily check)
         #[arg(long, hide = true, requires = "check")]
@@ -117,6 +121,13 @@ enum Command {
         #[arg(long, hide = true)]
         from_tray: bool,
     },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum UpdateModeArg {
+    Auto,
+    Manual,
+    Off,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -166,11 +177,22 @@ pub fn main() -> ExitCode {
         Command::Update {
             check,
             force,
+            mode,
             auto,
             quiet,
             from_tray,
         } => {
-            let code = match (auto, check) {
+            let mode = mode
+                .map(|m| match m {
+                    UpdateModeArg::Auto => update::Mode::Auto,
+                    UpdateModeArg::Manual => update::Mode::Manual,
+                    UpdateModeArg::Off => update::Mode::Off,
+                })
+                .or(auto.map(|a| match a {
+                    OnOff::On => update::Mode::Auto,
+                    OnOff::Off => update::Mode::Off,
+                }));
+            let code = match (mode, check) {
                 (Some(mode), _) => update_mode(mode),
                 (None, true) => update_check(quiet),
                 (None, false) => update_install(force),
@@ -435,11 +457,7 @@ fn autostart(switch: Option<OnOff>) -> u8 {
 }
 
 /// `update --auto on|off` (UP1).
-fn update_mode(mode: OnOff) -> u8 {
-    let mode = match mode {
-        OnOff::On => update::Mode::On,
-        OnOff::Off => update::Mode::Off,
-    };
+fn update_mode(mode: update::Mode) -> u8 {
     let Some(dir) = paths::config_dir() else {
         eprintln!("error: no configuration directory (APPDATA unset)");
         return exit::ERRORS;
@@ -448,8 +466,8 @@ fn update_mode(mode: OnOff) -> u8 {
         eprintln!("error: {err}");
         return exit::ERRORS;
     }
-    info!("update: daily check {}", mode.name());
-    println!("daily update check: {}", mode.name());
+    info!("update: mode {}", mode.name());
+    println!("update mode: {}", mode.name());
     if update::current_mode(Some(&dir)).1 {
         println!("note: {} is set and takes precedence", update::MODE_ENV);
     }
