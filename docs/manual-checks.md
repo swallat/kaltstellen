@@ -122,10 +122,17 @@ path. Until the first release exists, steps 1 to 3 work with a copy:
 copy `target\release\kaltstellen.exe` to a folder of its own and run it
 from there with the test variables above.
 
-1. Tray menu: `Check for updates daily` is shown and checked by default;
-   clicking it toggles the check mark and `settings.json` gets
-   `"update": "off"` or `"on"`. With `KALTSTELLEN_UPDATE=off` set, the line
-   reads `(set by KALTSTELLEN_UPDATE)` and is disabled.
+1. Tray menu: `Updates: install automatically` is checked by default;
+   choosing `check and ask` or `off` moves the check mark and
+   `settings.json` gets `"update": "manual"` or `"off"`. With
+   `KALTSTELLEN_UPDATE=off` set, the three lines read
+   `(set by KALTSTELLEN_UPDATE)` and are disabled.
+1a. Automatic install (after the first real release, with an older release
+   in a normal folder): apply a profile and wait for the daily check (or
+   choose `install automatically` again to check now): nothing is
+   installed while the profile is active. Switch to `Neutral`: the update
+   installs without a window, the tray icon disappears briefly and comes
+   back with the new version.
 2. With an `update.json` in the test data folder that names a higher
    version (`{ "latest": "9.9.9" }`), the menu shows a disabled line
    `Update 9.9.9 available: …` for a development build or a copy below

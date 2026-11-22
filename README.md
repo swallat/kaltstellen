@@ -160,15 +160,19 @@ executable stays next to the new one as `kaltstellen.old.exe` until the next
 update, so you can go back by renaming it.
 
 The tray looks for a new version once a day (first five minutes after it
-starts) and shows `Install update <version>…` in its menu when there is one.
-It never installs by itself. This check is the only network access
-kaltstellen makes: one HTTPS request to the GitHub API, nothing about you or
-your configuration is sent. Turn it off with any of:
+starts). By default it installs a newer version by itself, but only while
+`neutral` is active and no switch is running or waiting, so nothing you
+froze is thawed; otherwise it waits for the next time you are back on
+`neutral`. This check is the only network access kaltstellen makes: one
+HTTPS request to the GitHub API, nothing about you or your configuration is
+sent. Choose the mode with any of:
 
-- the tray menu item `Check for updates daily`,
-- `kaltstellen update --auto off`,
-- the environment variable `KALTSTELLEN_UPDATE=off`, which wins over the
-  other two.
+- the tray menu items `Updates: install automatically`, `check and ask`
+  (shows `Install update <version>…` and installs only on click) or `off`,
+- the main window,
+- `kaltstellen update --mode auto|manual|off`,
+- the environment variable `KALTSTELLEN_UPDATE=auto|manual|off`, which wins
+  over the others.
 
 With the check off, nothing connects unless you run `kaltstellen update`.
 A copy installed by scoop, winget or Chocolatey, or placed below Program
