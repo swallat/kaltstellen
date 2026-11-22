@@ -81,6 +81,10 @@ pub enum Code {
     /// A pipe message was malformed or of another protocol version.
     TrayProtocol = 505,
 
+    // 6xx: system integration
+    /// The Run key for start at sign-in could not be read or written.
+    AutostartIo = 601,
+
     // 9xx: internal
     /// Logging could not be set up.
     LogSetup = 901,
@@ -118,6 +122,7 @@ impl Code {
         Code::TrayWindow,
         Code::TrayPipe,
         Code::TrayProtocol,
+        Code::AutostartIo,
         Code::LogSetup,
     ];
 

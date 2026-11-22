@@ -16,8 +16,10 @@ use std::process::{Child, Command, Output, Stdio};
 use std::time::Duration;
 
 use common::*;
+use kaltstellen::autostart::{self, RUN_KEY, VALUE};
 use kaltstellen::state::Store;
-use kaltstellen::tray::model::{ID_LAST, ID_NEUTRAL, ID_PROFILE_BASE, ID_QUIT};
+use kaltstellen::tray::model::{ID_AUTOSTART, ID_LAST, ID_NEUTRAL, ID_PROFILE_BASE, ID_QUIT};
+use kaltstellen::win32::registry;
 use kaltstellen::win32::tray::CLASS;
 use std::os::windows::process::CommandExt;
 
@@ -90,6 +92,22 @@ impl Tray {
         fs::write(self.dir.path().join("config").join("config.toml"), text).unwrap();
     }
 
+    /// Root of this test's registry key; removed when the test ends.
+    fn registry_root(&self) -> String {
+        let name = self
+            .dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        format!("Software\\kaltstellen-test-{name}")
+    }
+
+    fn run_key(&self) -> String {
+        format!("{}\\Run", self.registry_root())
+    }
+
     fn data(&self) -> PathBuf {
         self.dir.path().join("data")
     }
@@ -131,6 +149,7 @@ impl Tray {
             .arg("tray")
             .env("KALTSTELLEN_CONFIG_DIR", self.dir.path().join("config"))
             .env("KALTSTELLEN_DATA_DIR", self.data())
+            .env("KALTSTELLEN_RUN_KEY", self.run_key())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -144,6 +163,7 @@ impl Tray {
             .args(args)
             .env("KALTSTELLEN_CONFIG_DIR", self.dir.path().join("config"))
             .env("KALTSTELLEN_DATA_DIR", self.data())
+            .env("KALTSTELLEN_RUN_KEY", self.run_key())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -223,6 +243,7 @@ impl Tray {
 
 impl Drop for Tray {
     fn drop(&mut self) {
+        let _ = registry::delete_tree(&self.registry_root());
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -650,4 +671,44 @@ fn s5_t7_end_of_session_resumes_keeps_the_profile_for_next_time() {
     assert!(!t.settings().contains("\"play\""), "the offer is used up");
     assert_eq!(t.quit(), Some(0));
     assert!(t.is_beating("ks-wp8-a.exe"));
+}
+
+#[test]
+fn autostart_from_the_command_line_and_the_menu_uses_the_injected_key() {
+    // The real Run key is only read, before and after.
+    let real_before = registry::read(RUN_KEY, VALUE).unwrap();
+    let mut t = Tray::new();
+    let expected = autostart::command_line(&kaltstellen_exe());
+
+    let (code, out, _) = t.run(&["autostart"]);
+    assert_eq!((code, out.trim()), (0, "start at sign-in: off"));
+    let (code, out, _) = t.run(&["autostart", "on"]);
+    assert_eq!((code, out.trim()), (0, "start at sign-in: on"));
+    assert_eq!(
+        registry::read(&t.run_key(), VALUE).unwrap(),
+        Some(expected.clone())
+    );
+    let (code, out, _) = t.run(&["autostart", "off"]);
+    assert_eq!((code, out.trim()), (0, "start at sign-in: off"));
+    assert_eq!(registry::read(&t.run_key(), VALUE).unwrap(), None);
+
+    // The tray's menu item toggles the same value.
+    t.config("");
+    t.start(1);
+    t.click(ID_AUTOSTART);
+    t.wait_log("tray: start at sign-in on", 1);
+    assert_eq!(registry::read(&t.run_key(), VALUE).unwrap(), Some(expected));
+    t.click(ID_AUTOSTART);
+    t.wait_log("tray: start at sign-in off", 1);
+    assert_eq!(registry::read(&t.run_key(), VALUE).unwrap(), None);
+    assert_eq!(t.quit(), Some(0));
+
+    let root = t.registry_root();
+    drop(t);
+    assert!(!registry::exists(&root).unwrap(), "test key removed");
+    assert_eq!(
+        registry::read(RUN_KEY, VALUE).unwrap(),
+        real_before,
+        "real Run key untouched"
+    );
 }

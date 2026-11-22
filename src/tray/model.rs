@@ -138,6 +138,8 @@ pub struct Status {
     pub pipe_error: Option<String>,
     /// S5: the profile of the last session, offered for one click.
     pub offer: Option<String>,
+    /// Start at sign-in: `None` if the Run key cannot be read.
+    pub autostart: Option<bool>,
 }
 
 impl Default for Status {
@@ -149,6 +151,7 @@ impl Default for Status {
             config_error: None,
             pipe_error: None,
             offer: None,
+            autostart: None,
         }
     }
 }
@@ -240,6 +243,7 @@ fn truncate(text: &str, max_units: usize) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Switch(String),
+    ToggleAutostart,
     Quit,
 }
 
@@ -260,6 +264,8 @@ pub const ID_NEUTRAL: u16 = 1;
 pub const ID_QUIT: u16 = 2;
 /// Applies the profile of the last session (S5).
 pub const ID_LAST: u16 = 3;
+/// Switches start at sign-in on or off.
+pub const ID_AUTOSTART: u16 = 4;
 /// Profile `n` of the configuration has ID `ID_PROFILE_BASE + n`.
 pub const ID_PROFILE_BASE: u16 = 100;
 
@@ -325,6 +331,14 @@ impl Menu {
         if let Some(line) = status.status_line() {
             menu.disabled(escape(&line));
             menu.items.push(Item::Separator);
+        }
+        if let Some(on) = status.autostart {
+            menu.entry(
+                ID_AUTOSTART,
+                "&Start at sign-in".to_owned(),
+                on,
+                Command::ToggleAutostart,
+            );
         }
         menu.disabled("Open kaltstellen…".to_owned());
         menu.entry(ID_QUIT, "&Quit".to_owned(), false, Command::Quit);
@@ -534,6 +548,19 @@ mod tests {
         );
         assert_eq!(menu.command(ID_QUIT), Some(&Command::Quit));
         assert_eq!(menu.command(0), None);
+    }
+
+    #[test]
+    fn start_at_sign_in_is_a_checked_item_when_known() {
+        let on = Status {
+            autostart: Some(true),
+            ..Status::default()
+        };
+        let menu = Menu::build(&[], &on);
+        assert!(labels(&menu).contains(&"[x] &Start at sign-in".to_owned()));
+        assert_eq!(menu.command(ID_AUTOSTART), Some(&Command::ToggleAutostart));
+        let unknown = Menu::build(&[], &Status::default());
+        assert_eq!(unknown.command(ID_AUTOSTART), None);
     }
 
     #[test]

@@ -71,6 +71,17 @@ enum Command {
     },
     /// Run the notification-area icon with the profile menu
     Tray,
+    /// Start the tray at sign-in: show, or switch on or off
+    Autostart {
+        #[arg(value_enum)]
+        switch: Option<OnOff>,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum OnOff {
+    On,
+    Off,
 }
 
 pub fn main() -> ExitCode {
@@ -86,6 +97,7 @@ pub fn main() -> ExitCode {
         Command::Status => status(),
         Command::Recover { no_wait } => recover(!no_wait),
         Command::Tray => crate::tray::main(),
+        Command::Autostart { switch } => autostart(switch),
         command => match run(command) {
             Ok(true) => 0,
             Ok(false) => exit::ERRORS,
@@ -303,6 +315,43 @@ fn recover(wait: bool) -> u8 {
     print_finished(&finished)
 }
 
+/// Start at sign-in (WP7): the per-user Run key points at this executable
+/// with `tray`.
+fn autostart(switch: Option<OnOff>) -> u8 {
+    let at = crate::autostart::Location::current();
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(err) => {
+            eprintln!(
+                "error: {}: cannot find this executable: {err}",
+                Code::AutostartIo
+            );
+            return exit::ERRORS;
+        }
+    };
+    let result = match switch {
+        Some(OnOff::On) => crate::autostart::enable(&at, &exe),
+        Some(OnOff::Off) => crate::autostart::disable(&at).map(|_| ()),
+        None => Ok(()),
+    };
+    if let Err(err) = result {
+        eprintln!("error: {err}");
+        return exit::ERRORS;
+    }
+    match crate::autostart::state(&at, &exe) {
+        Ok(crate::autostart::State::On) => println!("start at sign-in: on"),
+        Ok(crate::autostart::State::Off) => println!("start at sign-in: off"),
+        Ok(crate::autostart::State::Other(command)) => {
+            println!("start at sign-in: on, but for another program: {command}");
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            return exit::ERRORS;
+        }
+    }
+    exit::OK
+}
+
 fn status() -> u8 {
     if let Some(code) = through_tray(protocol::Command::Status) {
         return code;
@@ -447,7 +496,8 @@ fn run(command: Command) -> Result<bool> {
         | Command::Switch { .. }
         | Command::Status
         | Command::Recover { .. }
-        | Command::Tray => unreachable!("handled in main"),
+        | Command::Tray
+        | Command::Autostart { .. } => unreachable!("handled in main"),
     }
 }
 

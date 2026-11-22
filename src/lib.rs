@@ -20,6 +20,7 @@
 // `src/win32/`.
 #![deny(unsafe_code)]
 
+pub mod autostart;
 pub mod cli;
 pub mod config;
 pub mod engine;

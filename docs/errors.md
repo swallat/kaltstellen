@@ -36,4 +36,5 @@ when they apply. Codes are never renumbered or reused. The source of truth is
 | `KS503` | Tray window or message loop could not be set up. |
 | `KS504` | The tray's named pipe could not be created or served (L1). |
 | `KS505` | Malformed pipe message, or another protocol version (exit code 5). |
+| `KS601` | The Run key for start at sign-in could not be read or written. |
 | `KS901` | Logging could not be set up. |

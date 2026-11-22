@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use log::{info, warn};
 
+use crate::autostart;
 use crate::config::{self, NEUTRAL};
 use crate::error::{Code, Error};
 use crate::exit;
@@ -187,8 +188,7 @@ pub fn main() -> u8 {
         }
         // S3: nothing stays frozen after a crash; then `neutral`.
         controller.request(Job::Recover);
-        let menu = Menu::build(&names, &status);
-        Box::new(App {
+        let mut app = App {
             controller,
             done: done_rx,
             incoming: incoming_rx,
@@ -196,13 +196,16 @@ pub fn main() -> u8 {
             source: Arc::clone(&source),
             config_file: config_file.clone(),
             store: store.clone(),
-            menu,
             exit_code: Rc::clone(&exit_code),
             shown: Some(initial_icon),
             running: Vec::new(),
             config_dir: config_dir.clone(),
             waiting: Vec::new(),
-        })
+            menu: Menu::default(),
+        };
+        app.refresh_autostart();
+        app.menu = Menu::build(&names, &app.status);
+        Box::new(app)
     });
     match result {
         Ok(()) => {
@@ -285,6 +288,38 @@ impl App {
     }
 
     /// A request from the menu (`waiter` is `None`) or the pipe.
+    /// Reads start at sign-in for the menu.
+    fn refresh_autostart(&mut self) {
+        let at = autostart::Location::current();
+        self.status.autostart = match std::env::current_exe()
+            .map_err(|e| Error::new(Code::AutostartIo, e.to_string()))
+            .and_then(|exe| autostart::state(&at, &exe))
+        {
+            Ok(state) => Some(state == autostart::State::On),
+            Err(err) => {
+                warn!("tray: {err}");
+                None
+            }
+        };
+    }
+
+    fn toggle_autostart(&mut self) {
+        let at = autostart::Location::current();
+        let result = std::env::current_exe()
+            .map_err(|e| Error::new(Code::AutostartIo, e.to_string()))
+            .and_then(|exe| match autostart::state(&at, &exe)? {
+                autostart::State::On => autostart::disable(&at).map(|_| false),
+                _ => autostart::enable(&at, &exe).map(|()| true),
+            });
+        match result {
+            Ok(on) => {
+                info!("tray: start at sign-in {}", if on { "on" } else { "off" });
+                self.status.autostart = Some(on);
+            }
+            Err(err) => warn!("tray: {err}"),
+        }
+    }
+
     /// Writes the offered last profile to `settings.json` (S5).
     fn save_offer(&self) {
         let Some(dir) = &self.config_dir else {
@@ -464,6 +499,7 @@ impl window::Handler for App {
         {
             self.status.active = state.active_profile;
         }
+        self.refresh_autostart();
         self.redraw();
         self.menu = Menu::build(&names, &self.status);
         self.menu.items.clone()
@@ -478,6 +514,7 @@ impl window::Handler for App {
                 info!("tray: menu asks for \"{target}\"");
                 self.submit(Job::switch(&target), None);
             }
+            Some(MenuCommand::ToggleAutostart) => self.toggle_autostart(),
             Some(MenuCommand::Quit) => self.quit(),
             None => info!("tray: command {id} has no meaning; ignored"),
         }
