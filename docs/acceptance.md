@@ -7,16 +7,16 @@ real machine. Results: `pass`, `fail`, `open` (not run yet), `n/a`.
 | --- | --- | --- | --- | --- |
 | T1 | W1 order resume, stop, suspend, start | WP4 | open | pass |
 | T2 | Shared freeze kept, no resume event | WP4 | open | pass |
-| T3 | Failed stop: switch finishes, exit code 1 | WP4/5 | open | pass (CLI; no tray icon yet) |
-| T4 | Two queued requests: only the last runs | WP4 | open | open |
-| T5 | Kill while frozen, restart: nothing frozen | WP6 | open | pass |
+| T3 | Failed stop: switch finishes, exit code 1 | WP4/5 | open | pass (CLI; tray error state by log, icon not looked at) |
+| T4 | Two queued requests: only the last runs | WP4 | open | pass (tray menu commands; not over the pipe yet) |
+| T5 | Kill while frozen, restart: nothing frozen | WP6 | open | pass (CLI `recover` and tray restart) |
 | T6 | Stale PID ignored, corrupt state renamed | WP6 | open | pass |
 | T7 | Sign-out/shutdown resume, last profile offered | WP8 | open | open |
-| T8 | Invalid config keeps old one, file and line | WP3 | open | pass (CLI; reload needs tray) |
+| T8 | Invalid config keeps old one, file and line | WP3 | open | pass (CLI; tray reload by log, icon not looked at) |
 | T9 | Hard-protected refused in config and CLI | WP2 | open | pass |
 | T10 | `restart_on_neutral` only on neutral | WP4 | open | pass |
 | T11 | `on_timeout = "keep"` with open dialog | WP2 | open | pass (engine) |
-| T12 | Idle footprint Q1 over 60 s | WP7 | open | open |
+| T12 | Idle footprint Q1 over 60 s | WP7 | open | indicative pass (release build, test configuration: private working set 1.3 MB, no measurable CPU over 63 s) |
 | T13 | Long freeze of real programs | none | n/a | open |
 | T14 | Shell responsive with windowed programs frozen | WP2/7 | open | open |
 | T15 | Unmatched programs never opened | WP2 | open | open |

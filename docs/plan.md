@@ -64,3 +64,24 @@ name. Purpose: find out which real apps tolerate being frozen.
   codes of E2; tests in `tests/fixtures/tests/switch.rs`. Still open for M1:
   all VM runs of the acceptance list, T15, T18, T19; W3/T4 (request queue),
   `--no-wait` and the Ctrl+C handler come with the tray app (M2).
+- WP7 tray app, first increment (2026-11-22): `kaltstellen tray` with
+  single-instance mutex, notification icon with the three states and a
+  tooltip naming the active profile, menu from the configuration, switches
+  on a worker thread with the W3 queue, recovery at start (S3), Quit with
+  resume (L2), lazy configuration reload keeping the last valid file
+  (C3/C4). Pure logic in `src/tray/` (`model.rs`: queue, status, menu;
+  `source.rs`: configuration; `worker.rs`: worker and engine runner); the
+  Win32 side in `src/win32/` (window, icon, menu, mutex, console), to which
+  Q4 was widened. Details decided on the way are in spec L4. Tests: unit
+  tests of queue, menu, status and worker; `tests/tray.rs` (process level:
+  single instance, `WM_CLOSE`); `tests/fixtures/tests/tray.rs` (menu
+  commands against fixtures: switch, neutral, Quit, crash recovery, error
+  state, invalid configuration, T4). Indicative Q1 on the desktop with a
+  test configuration: private working set about 1.3 MB, no measurable CPU
+  over 60 s idle. Still open from WP7: the named pipe and forwarding of
+  command-line requests (L1 second half), `--no-wait` and exit code 3 over
+  the pipe, start at sign-in (Run key), idle trim of the tray itself,
+  acknowledging the error state, a per-monitor DPI manifest, and a visual
+  check of icons and menu. Next: WP8 (`WM_QUERYENDSESSION`, shutdown
+  priority, `settings.json` last profile, console handler), then hotkeys,
+  GUI and unassigned programs (M3).

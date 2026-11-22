@@ -21,10 +21,11 @@ Start the flight simulator and its companion tools come up while the music
 software is frozen or closed; switch to the music profile and it is the other
 way round.
 
-**Status: early, command line only.** Profiles work from the command line:
+**Status: early.** Profiles work from the command line:
 `kaltstellen switch <profile>` starts, stops and freezes programs as the
-configuration says and undoes it on the next switch. The tray icon, hotkeys
-and the settings window are planned; see [docs/spec.md](docs/spec.md) and
+configuration says and undoes it on the next switch. A first tray icon
+(`kaltstellen tray`) switches profiles from its menu. Hotkeys and the
+settings window are planned; see [docs/spec.md](docs/spec.md) and
 [docs/plan.md](docs/plan.md).
 
 ## Using it
@@ -38,6 +39,7 @@ kaltstellen switch PROFILE        switch to a profile; "neutral" brings
                                   everything back
 kaltstellen status                show the active profile and what is on ice
 kaltstellen recover               resume everything frozen, e.g. after a crash
+kaltstellen tray                  notification-area icon with the profile menu
 
 kaltstellen list [FILTER]         list running processes
 kaltstellen suspend NAME [--trim] freeze a program by hand: all processes with
@@ -98,9 +100,16 @@ cargo build --release
 The binary is `target\release\kaltstellen.exe`. Freezing processes that run
 elevated or under another user requires an elevated terminal.
 
-## The tray icon (planned)
+## The tray icon
 
-The tray app does not exist yet, but its icon does. One tile, three states:
+`kaltstellen tray` puts an icon in the notification area. Its menu lists the
+profiles of the configuration (the active one checked), `Neutral` and
+`Quit`; the tooltip names the active profile. It runs once per session, and
+on start it resumes anything a crashed instance left frozen. `Quit` resumes
+everything frozen and leaves closed programs closed. Started from a terminal
+it keeps that terminal until `Quit`; started from a shortcut it lets go of
+its console window at once, which may still show for a moment. The command line does not talk to a running
+tray yet. One tile, three states:
 
 | | State | Meaning |
 | :-: | --- | --- |

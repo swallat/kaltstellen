@@ -66,6 +66,19 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
 - **L3 Recover** **[r2]**: `kaltstellen recover` resumes everything recorded in state without needing the tray. Reason: a tray app killed by the user or a crash leaves programs frozen until kaltstellen runs again. The tray app should be started at sign-in so recovery happens automatically.
 - **S3 Crash**: on the next start, recovery resumes every recorded suspended process that still matches (S6), clears state, and sets the active profile to `neutral`.
 
+- **L4 Tray details fixed while implementing** **[assumed]** (WP7):
+  - Single instance (L1): a mutex `Local\kaltstellen-tray` in the session namespace. With `KALTSTELLEN_DATA_DIR` set, the name gets a hash of that folder, so test or portable instances do not block the real one. A second start prints `kaltstellen tray is already running in this session` and exits with code 0; it forwards nothing yet (the pipe of L1 is still open).
+  - Console: the executable stays a console program. Started without a terminal (Explorer, shortcut, Run key), Windows creates a console for it alone; the tray detects that (`GetConsoleProcessList` returns only itself) and releases it with `FreeConsole`, so the window closes again, possibly after showing for a moment. Started from a terminal it stays attached, prints one line and keeps the terminal until Quit. The other subcommands are unchanged.
+  - State: the tray does not hold the state lock while idle. Each job (start-up recovery, switch, Quit) takes the lock, reads `state.json` afresh, runs the engine and writes it back. A command-line switch can therefore run while the tray is idle; one that overlaps a tray switch gets exit code 5 (and the tray's switch fails with `KS303` if the command line got the lock first). When the menu opens and no switch runs, the tray reads the active profile from the file, so a command-line switch shows up there.
+  - Start-up recovery (S3) runs on the worker as the first job and counts as a switch to `neutral` for W3: a `Neutral` click during it is dropped, any other click waits.
+  - Quit (L2) runs `recover` (L3): suspended programs resumed and their records cleared, stopped records kept, active profile `neutral`. If a switch runs, Quit waits for it and drops a waiting request. Exit code 0, or 1 if resuming reported errors (logged). `WM_CLOSE` to the tray window (for example `taskkill` without `/F`) is treated as Quit.
+  - Menu: left and right click both open it (no main window yet). Profiles in file order, the active one checked; an active profile that is no longer in the configuration (C4) is shown checked and disabled with `(no longer in the configuration)`; `Neutral`; a disabled status line that shows, in this order, a running switch, the errors of the last switch (count and the first one), or why the configuration file is not in effect; `Open kaltstellen…` disabled until the GUI (M3); `Quit`.
+  - Error state (W2): set when the last switch or recovery reported errors or the configuration file is invalid; cleared by the next switch without errors, or when the file is valid again. Acknowledging it without a switch is left to the GUI (M3). Icon changes are logged (`tray: icon neutral|active|error`).
+  - Configuration (C3, C4): re-read when the menu opens and when a switch starts, never by a watcher (Q1); a file with unchanged time and size is not parsed again. A missing file means no profiles and is not an error. An invalid file keeps the last valid configuration in effect. A switch takes a copy of the configuration when it starts and keeps it to the end.
+  - Warn-list programs (P6) need a confirmation the tray cannot give yet; such entries fail with `KS113` from the tray until the GUI can confirm them.
+  - The icons are embedded as resources 101 (neutral), 102 (active), 103 (error) and loaded at the system's small-icon size; the process is not per-monitor DPI aware yet. After an Explorer restart (`TaskbarCreated`) the icon is added again.
+  - The tray window is a hidden top-level window (class `kaltstellen-tray`, no taskbar button), not a message-only window, so it can receive `WM_QUERYENDSESSION` in WP8.
+
 ## 5. Configuration (TOML)
 
 Location `%APPDATA%\kaltstellen\config.toml`. The repository ships only `config.example.toml` with generic names.
@@ -158,7 +171,7 @@ hotkey = "Ctrl+Shift+Alt+F1"
 - **Q1** Tray app idle: private working set below 15 MB and CPU below 0.1 % averaged over 60 s, GUI process not running. **[decided]** (thresholds)
 - **Q2** One executable, no installer, no runtime.
 - **Q3** Runs without administrator rights; operations needing them are reported (P7).
-- **Q4** All `unsafe` Win32 code lives in one module.
+- **Q4** All `unsafe` Win32 code lives in one module. Widened in WP7 **[assumed]**: `unsafe` is allowed in `src/process.rs` (process APIs) and in the `src/win32/` tree (tray window, notification icon, menu, single-instance mutex, console), nowhere else. Each of these modules wraps one concern behind a safe interface; all decisions (queue, menu content, icon state, what a click does) are safe code outside them. Enforced by `#![deny(unsafe_code)]` with `#[allow]` on exactly these two modules, and by `scripts/check-unsafe.sh` in CI. Reason: the tray needs about a dozen more Win32 calls, and the safe tray crates bring a second windowing layer for what the existing `windows` dependency already covers (Q1, Q2).
 - **Q5** A switch of 20 programs completes in under 10 s excluding stop timeouts and the minimise wait (W7). **[decided]** Treated as a target, not an acceptance test.
 
 ## 10. Acceptance tests (test host VM; real load stays on the desktop)
