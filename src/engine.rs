@@ -105,6 +105,22 @@ pub fn switch(
     options: Options,
     persist: &mut dyn FnMut(&State) -> Result<()>,
 ) -> Result<Report> {
+    switch_with(config, target, state, options, persist, &|| false)
+}
+
+/// [`switch`] that stops early once `interrupted` returns true (S5, console
+/// control handler): the action on the current program finishes, later
+/// programs and steps are skipped, the report gets `Interrupted` and the
+/// active profile stays as it was. The caller then resumes what is
+/// recorded, see [`recover`].
+pub fn switch_with(
+    config: &Config,
+    target: &str,
+    state: &mut State,
+    options: Options,
+    persist: &mut dyn FnMut(&State) -> Result<()>,
+    interrupted: &dyn Fn() -> bool,
+) -> Result<Report> {
     let (name, apps): (String, &[App]) = if target.trim().eq_ignore_ascii_case(NEUTRAL) {
         (NEUTRAL.to_owned(), &[])
     } else {
@@ -125,6 +141,8 @@ pub fn switch(
         state,
         persist,
         report: Report::default(),
+        interrupted,
+        halted: false,
     };
     let snapshot = Snapshot::take()?;
     run.drop_records_of_previous_boot(&snapshot);
@@ -137,6 +155,10 @@ pub fn switch(
     run.save();
     run.start(apps, to_neutral)?;
 
+    if run.halted {
+        run.save();
+        return Ok(run.report);
+    }
     run.state.active_profile = name;
     run.state.boot = snapshot.boot_marker();
     run.save();
@@ -153,6 +175,8 @@ pub fn recover(state: &mut State, persist: &mut dyn FnMut(&State) -> Result<()>)
         state,
         persist,
         report: Report::default(),
+        interrupted: &|| false,
+        halted: false,
     };
     let snapshot = Snapshot::take()?;
     run.drop_records_of_previous_boot(&snapshot);
@@ -172,9 +196,24 @@ struct Run<'a> {
     state: &'a mut State,
     persist: &'a mut dyn FnMut(&State) -> Result<()>,
     report: Report,
+    interrupted: &'a dyn Fn() -> bool,
+    /// Set once `interrupted` returned true; everything after is skipped.
+    halted: bool,
 }
 
 impl Run<'_> {
+    /// Whether to stop here because of an interrupt.
+    fn halt(&mut self) -> bool {
+        if !self.halted && (self.interrupted)() {
+            self.halted = true;
+            self.report.failed(Error::new(
+                Code::Interrupted,
+                "interrupted; the remaining programs and steps were skipped",
+            ));
+        }
+        self.halted
+    }
+
     fn save(&mut self) {
         if let Err(err) = (self.persist)(self.state) {
             self.report.failed(err);
@@ -258,8 +297,14 @@ impl Run<'_> {
         if stops.is_empty() {
             return Ok(());
         }
+        if self.halt() {
+            return Ok(());
+        }
         let snapshot = Snapshot::take()?;
         for app in stops {
+            if self.halt() {
+                break;
+            }
             let AppAction::Stop {
                 on_timeout,
                 restart_on_neutral,
@@ -311,8 +356,14 @@ impl Run<'_> {
         // W6: the second pass freezes processes that appeared meanwhile, for
         // example children spawned just before their parent froze.
         for pass in 0..2 {
+            if self.halt() {
+                return Ok(());
+            }
             let snapshot = Snapshot::take()?;
             for app in &suspends {
+                if self.halt() {
+                    return Ok(());
+                }
                 let AppAction::Suspend { trim } = app.action else {
                     continue;
                 };
@@ -387,6 +438,9 @@ impl Run<'_> {
     }
 
     fn start(&mut self, target: &[App], to_neutral: bool) -> Result<()> {
+        if self.halt() {
+            return Ok(());
+        }
         let starts: Vec<&App> = target
             .iter()
             .filter(|app| matches!(app.action, AppAction::Start { .. }))
@@ -405,6 +459,9 @@ impl Run<'_> {
         }
         let snapshot = Snapshot::take()?;
         for app in starts {
+            if self.halt() {
+                return Ok(());
+            }
             let (AppAction::Start { args, cwd }, Some(path)) = (&app.action, &app.path) else {
                 continue;
             };

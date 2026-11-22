@@ -65,6 +65,9 @@ pub enum Code {
     UnknownProfile = 401,
     /// The request was superseded by a later one (W3, E2 exit code 3).
     Superseded = 402,
+    /// A switch was interrupted (Ctrl+C, Ctrl+Break, console closed) and
+    /// what it froze was resumed (S5).
+    Interrupted = 403,
 
     // 5xx: tray communication
     /// The tray instance could not be reached.
@@ -109,6 +112,7 @@ impl Code {
         Code::StateLocked,
         Code::UnknownProfile,
         Code::Superseded,
+        Code::Interrupted,
         Code::TrayUnreachable,
         Code::TrayInstance,
         Code::TrayWindow,

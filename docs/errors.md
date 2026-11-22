@@ -30,6 +30,7 @@ when they apply. Codes are never renumbered or reused. The source of truth is
 | `KS303` | Another switch holds the state lock (exit code 5). |
 | `KS401` | Unknown profile (exit code 4). |
 | `KS402` | Request superseded by a later one (W3, exit code 3). |
+| `KS403` | Switch interrupted (Ctrl+C, Ctrl+Break, console closed); what was frozen is resumed (exit code 1). |
 | `KS501` | Tray instance not reachable. |
 | `KS502` | Single-instance mutex of the tray could not be created (L1). |
 | `KS503` | Tray window or message loop could not be set up. |

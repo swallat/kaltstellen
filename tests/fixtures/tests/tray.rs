@@ -19,7 +19,10 @@ use common::*;
 use kaltstellen::state::Store;
 use kaltstellen::tray::model::{ID_NEUTRAL, ID_PROFILE_BASE, ID_QUIT};
 use kaltstellen::win32::tray::CLASS;
+use std::os::windows::process::CommandExt;
+
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetWindowThreadProcessId, PostMessageW, WM_COMMAND,
 };
@@ -524,4 +527,62 @@ fn l1_a_request_equal_to_the_running_switch_shares_its_result() {
     assert_eq!(finish(first).0, 0);
     assert_eq!(t.logged("tray: running switch to \"slow\""), 1, "ran once");
     assert_eq!(t.quit(), Some(0));
+}
+
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+#[test]
+fn s5_ctrl_break_during_an_in_process_switch_leaves_nothing_frozen() {
+    let mut t = Tray::new();
+    t.cleanup.push(KillProgram("ks-ctrl-slow.exe".to_owned()));
+    let slow = copy_fixture(WINDOW, t.dir.path(), "ks-ctrl-slow.exe");
+    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "3000"]) else {
+        return;
+    };
+    let _a = t.program("ks-ctrl-a.exe");
+    let _b = t.program("ks-ctrl-b.exe");
+    t.config(&format!(
+        "{}{}",
+        profile("first", &[("ks-ctrl-a.exe", "suspend")]),
+        profile(
+            "second",
+            &[
+                ("ks-ctrl-a.exe", "suspend"),
+                ("ks-ctrl-slow.exe", "stop"),
+                ("ks-ctrl-b.exe", "suspend"),
+            ],
+        ),
+    ));
+    // No tray: both switches run in-process.
+    assert_eq!(t.run(&["switch", "first"]).0, 0);
+    assert!(t.is_frozen("ks-ctrl-a.exe"));
+
+    let child = t
+        .cli(&["switch", "second"])
+        .creation_flags(CREATE_NEW_PROCESS_GROUP)
+        .spawn()
+        .unwrap();
+    // The slow stop runs for 3 s; interrupt in the middle of it.
+    std::thread::sleep(Duration::from_millis(1000));
+    // SAFETY: sends Ctrl+Break to the child's own process group on the
+    // console this test shares with it.
+    if let Err(err) = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) } {
+        eprintln!("skipped: cannot send Ctrl+Break here ({err})");
+        let _ = finish(child);
+        return;
+    }
+    let (code, out, err) = finish(child);
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert!(err.contains("KS403"), "{err}");
+    assert!(
+        out.contains("stop ks-ctrl-slow.exe"),
+        "the running step finished: {out}"
+    );
+    assert!(out.contains("recover ks-ctrl-a.exe"), "{out}");
+    assert!(out.contains("active profile: neutral"), "{out}");
+    assert!(t.is_beating("ks-ctrl-a.exe"), "resumed after the interrupt");
+    assert!(t.is_beating("ks-ctrl-b.exe"), "never frozen");
+    let state = t.store().peek().unwrap();
+    assert!(state.suspended.is_empty());
+    assert_eq!(state.active_profile, "neutral");
 }

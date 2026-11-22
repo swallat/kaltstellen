@@ -90,6 +90,12 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
   - `--no-wait` returns after the tray answered `accepted` and prints `started by the tray` or `queued by the tray`; without a tray it has no effect and the command runs in-process to the end.
   - The protocol is versioned (`version: 1`); a mismatch is `KS505`, exit code 5.
 
+- **L6 Interrupting a command-line switch** **[assumed]** (S5 last sentence; M1):
+  - Only an in-process switch (no tray running) installs the handler (`SetConsoleCtrlHandler`). Ctrl+C, Ctrl+Break and closing the console window no longer end the process at once. The switch checks for the interrupt before each step and before each program: the action on the current program finishes (a freeze, a close request with its `stop_timeout_s`, a start), later programs and steps are skipped and the error `KS403` is reported. Then kaltstellen runs `recover` (L3): everything recorded as suspended is resumed, also what earlier switches froze, stopped records are kept, the active profile becomes `neutral`. Exit code 1. Reason: a half-applied profile is neither the old nor the new one; going back to `neutral` is the state the user can reason about.
+  - Closing the console gives the process about 5 s before Windows ends it; the handler holds it open up to 4.5 s while the switch winds down. A current step that takes longer (a slow close with a long `stop_timeout_s`) can therefore still be cut off by Windows; its suspend records stay in `state.json` for the next `recover` or tray start.
+  - `CTRL_LOGOFF_EVENT` and `CTRL_SHUTDOWN_EVENT` are handled the same way, but Windows does not send them to processes that use `user32.dll`, which kaltstellen does; sign-out during a command-line switch is covered only as far as the console's close event arrives.
+  - A command handed to the tray (L5) is not interrupted: Ctrl+C ends the waiting command line, the tray finishes the request.
+
 ## 5. Configuration (TOML)
 
 Location `%APPDATA%\kaltstellen\config.toml`. The repository ships only `config.example.toml` with generic names.

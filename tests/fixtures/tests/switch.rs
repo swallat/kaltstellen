@@ -416,3 +416,37 @@ fn warn_list_needs_force() {
     assert!(w.is_frozen("rustdesk.exe"));
     w.switch("neutral");
 }
+
+#[test]
+fn s5_interrupted_switch_stops_after_the_current_program() {
+    let mut w = World::new();
+    let _a = w.run("ks-int-a.exe");
+    let _b = w.run("ks-int-b.exe");
+    w.profile("p", vec![suspend("ks-int-a.exe"), suspend("ks-int-b.exe")]);
+    // The third check comes before the second program: interrupt there.
+    let checks = std::cell::Cell::new(0);
+    let interrupted = || {
+        checks.set(checks.get() + 1);
+        checks.get() > 2
+    };
+    let store = w.store.clone();
+    let report = engine::switch_with(
+        &w.config,
+        "p",
+        &mut w.state,
+        Options::default(),
+        &mut |s| store.save(s),
+        &interrupted,
+    )
+    .expect("switch ran");
+    assert_eq!(report.errors.len(), 1, "{:?}", report.errors);
+    assert_eq!(report.errors[0].code, Code::Interrupted);
+    assert!(w.is_frozen("ks-int-a.exe"), "the current program finished");
+    assert!(w.is_beating("ks-int-b.exe"), "later programs are skipped");
+    assert_eq!(w.state.active_profile, "neutral", "profile not reached");
+    assert_eq!(w.store.load().0, w.state, "state written");
+
+    let recovered = engine::recover(&mut w.state, &mut |s| store.save(s)).unwrap();
+    assert_eq!(recovered.events.len(), 1);
+    assert!(w.is_beating("ks-int-a.exe"));
+}

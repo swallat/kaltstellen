@@ -18,6 +18,7 @@ use crate::protection::{self, Protection};
 use crate::state::{Lock, State, Store};
 use crate::tray::protocol::{self, Body, Finished};
 use crate::tray::{Endpoints, client};
+use crate::win32::console::Interrupts;
 
 /// Put background apps on ice: suspend, resume and trim Windows processes.
 #[derive(Parser)]
@@ -234,16 +235,55 @@ fn switch(target: &str, force: bool, wait: bool) -> u8 {
     };
     let mut state = load_state(&store);
     let options = engine::Options { force };
-    let finished = match engine::switch(&config, target, &mut state, options, &mut |s| {
-        store.save(s)
-    }) {
-        Ok(report) => Finished::new(true, &state.active_profile, &report.events, &report.errors),
+    // S5: Ctrl+C, Ctrl+Break or closing the console must not leave anything
+    // frozen; they stop the switch early and everything is resumed below.
+    let interrupts = match Interrupts::catch() {
+        Ok(interrupts) => Some(interrupts),
+        Err(err) => {
+            warn!("{err}");
+            None
+        }
+    };
+    let interrupted = || interrupts.as_ref().is_some_and(Interrupts::requested);
+    let mut persist = |s: &State| store.save(s);
+    let finished = match engine::switch_with(
+        &config,
+        target,
+        &mut state,
+        options,
+        &mut persist,
+        &interrupted,
+    ) {
+        Ok(report) => {
+            let mut finished =
+                Finished::new(true, &state.active_profile, &report.events, &report.errors);
+            if report.errors.iter().any(|e| e.code == Code::Interrupted) {
+                info!("switch interrupted; resuming what is recorded as frozen");
+                match engine::recover(&mut state, &mut persist) {
+                    Ok(recovered) => {
+                        finished
+                            .events
+                            .extend(recovered.events.iter().map(protocol::EventLine::from));
+                        finished
+                            .errors
+                            .extend(recovered.errors.iter().map(ToString::to_string));
+                    }
+                    Err(err) => finished.errors.push(err.to_string()),
+                }
+                finished.active_profile = Some(state.active_profile.clone());
+                finished.exit_code = exit::ERRORS;
+            }
+            finished
+        }
         Err(err) => {
             let mut finished = Finished::new(false, &state.active_profile, &[], &[err]);
             finished.profiles = config.profiles.iter().map(|p| p.name.clone()).collect();
             finished
         }
     };
+    if let Some(interrupts) = &interrupts {
+        interrupts.finished();
+    }
     print_finished(&finished)
 }
 
