@@ -4,8 +4,8 @@
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, WIN32_ERROR};
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
-    REG_VALUE_TYPE, RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegDeleteValueW, RegOpenKeyExW,
-    RegQueryValueExW, RegSetValueExW,
+    REG_VALUE_TYPE, RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegDeleteValueW, RegEnumKeyExW,
+    RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
 };
 use windows::core::PCWSTR;
 
@@ -149,6 +149,37 @@ pub fn delete(subkey: &str, value: &str) -> Result<bool> {
         return Err(failed("delete a value of", subkey, status));
     }
     Ok(true)
+}
+
+/// Names of the keys directly below `HKCU\subkey`; empty if it is missing.
+pub fn subkeys(subkey: &str) -> Result<Vec<String>> {
+    let Some(key) = open(subkey, false)? else {
+        return Ok(Vec::new());
+    };
+    let mut names = Vec::new();
+    for index in 0.. {
+        let mut buffer = [0u16; 256];
+        let mut len = buffer.len() as u32;
+        // SAFETY: the buffer holds `len` units.
+        let status = unsafe {
+            RegEnumKeyExW(
+                key.0,
+                index,
+                Some(windows::core::PWSTR(buffer.as_mut_ptr())),
+                &mut len,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        if status.is_err() {
+            // ERROR_NO_MORE_ITEMS ends the list; other errors end it too.
+            break;
+        }
+        names.push(String::from_utf16_lossy(&buffer[..len as usize]));
+    }
+    Ok(names)
 }
 
 /// Deletes `HKCU\subkey` with everything below it; for test keys only.

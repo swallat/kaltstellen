@@ -142,6 +142,8 @@ pub struct Status {
     pub autostart: Option<bool>,
     /// Hotkeys another program holds (C5), as `hotkey (profile)`.
     pub hotkeys_unavailable: Vec<String>,
+    /// N1: unassigned programs of the active profile at the last snapshot.
+    pub unassigned: usize,
 }
 
 impl Default for Status {
@@ -155,6 +157,7 @@ impl Default for Status {
             offer: None,
             autostart: None,
             hotkeys_unavailable: Vec::new(),
+            unassigned: 0,
         }
     }
 }
@@ -282,6 +285,8 @@ pub const ID_AUTOSTART: u16 = 4;
 /// Clears the error state (spec section 8, "when acknowledged").
 pub const ID_ACKNOWLEDGE: u16 = 5;
 pub const ID_OPEN: u16 = 6;
+/// `Unassigned programs (N)`: opens the main window.
+pub const ID_UNASSIGNED: u16 = 7;
 /// Profile `n` of the configuration has ID `ID_PROFILE_BASE + n`.
 pub const ID_PROFILE_BASE: u16 = 100;
 
@@ -355,6 +360,14 @@ impl Menu {
                 );
             }
             menu.items.push(Item::Separator);
+        }
+        if status.unassigned > 0 && !status.is_neutral() {
+            menu.entry(
+                ID_UNASSIGNED,
+                format!("&Unassigned programs ({})", status.unassigned),
+                false,
+                Command::OpenWindow,
+            );
         }
         for hotkey in &status.hotkeys_unavailable {
             menu.disabled(format!("Hotkey not available: {}", escape(hotkey)));
@@ -596,6 +609,20 @@ mod tests {
         status.acknowledge();
         assert_eq!(status.icon(), Icon::Error);
         assert_eq!(Menu::build(&[], &status).command(ID_ACKNOWLEDGE), None);
+    }
+
+    #[test]
+    fn n1_unassigned_line_only_with_programs_and_a_profile() {
+        let mut status = Status {
+            active: "focus".into(),
+            unassigned: 2,
+            ..Status::default()
+        };
+        let menu = Menu::build(&["focus".to_owned()], &status);
+        assert!(labels(&menu).contains(&"&Unassigned programs (2)".to_owned()));
+        assert_eq!(menu.command(ID_UNASSIGNED), Some(&Command::OpenWindow));
+        status.unassigned = 0;
+        assert_eq!(Menu::build(&[], &status).command(ID_UNASSIGNED), None);
     }
 
     #[test]

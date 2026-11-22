@@ -877,3 +877,47 @@ fn wp10_open_kaltstellen_starts_the_main_window_as_its_own_process() {
         .all(|p| *p != pid)));
     assert_eq!(t.quit(), Some(0));
 }
+
+#[test]
+fn t22_n1_unassigned_programs_status_and_tray_menu() {
+    let mut t = Tray::new();
+    t.cleanup.push(KillProgram("ks-n1-win.exe".to_owned()));
+    let _a = t.program("ks-n1-a.exe");
+    t.config(&profile("play", &[("ks-n1-a.exe", "ignore")]));
+    // Make "play" active in-process first (no tray yet).
+    assert_eq!(t.run(&["switch", "play"]).0, 0);
+    let (code, out, err) = t.run(&["status", "--unassigned"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("unassigned in \"play\":"), "{out}");
+    assert!(!out.contains("ks-n1-a.exe"), "it has an entry: {out}");
+
+    // A program with a visible window that appears later is new.
+    std::thread::sleep(Duration::from_millis(1100));
+    let window = copy_fixture(WINDOW, t.dir.path(), "ks-n1-win.exe");
+    let Some(_window) = window_fixture(str_of(&window), &[]) else {
+        return;
+    };
+    let (_, out, _) = t.run(&["status", "--unassigned"]);
+    assert!(out.contains("  ks-n1-win.exe (new)"), "{out}");
+    let seen = fs::read_to_string(t.data().join("seen.json")).unwrap();
+    assert!(seen.contains("ks-n1-win.exe"));
+
+    // The tray counts them after applying the profile and shows the line.
+    t.start(1);
+    t.click(ID_PROFILE_BASE);
+    t.wait_log("tray: switch to \"play\" finished", 1);
+    t.wait_log("unassigned program(s) in \"play\"", 1);
+    let count: usize = t
+        .log()
+        .split("tray: ")
+        .filter_map(|l| {
+            l.split(" unassigned program(s) in \"play\"")
+                .next()?
+                .parse()
+                .ok()
+        })
+        .last()
+        .unwrap();
+    assert!(count >= 1);
+    assert_eq!(t.quit(), Some(0));
+}

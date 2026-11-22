@@ -136,6 +136,13 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
   - Deleting a profile asks first. If it is the active profile, the window switches to `neutral` first and deletes only if that worked (M1).
   - `Apply profile` runs `kaltstellen switch <profile>` as a child process without a console window, so it goes through the tray's pipe when a tray runs and works in-process otherwise; the status line shows the result. Memory shown for running programs is the private working set from the same system query as the process snapshot, so no process is opened for it (A7).
 
+- **N2 Unassigned programs, details** **[assumed]** (WP11; N1):
+  - Sources, read only: the values `ExecutablePath` below `HKCU\Control Panel\NotifyIconSettings` (Windows 11), counted only while a process of that name runs in the session, plus processes of the session that own a visible top-level window. Only window handles are queried, no process is opened (A7). Hard-protected programs and kaltstellen itself are left out. A path is kept only when the registry gives an absolute one (entries starting with a known-folder GUID keep the name only).
+  - Snapshots: when the main window opens, when its profile selection changes, on `Refresh`, after it saved an edit, after the tray applied a profile (not `neutral`), and on `kaltstellen status --unassigned`. Plain `status` takes none.
+  - `seen.json` (data directory): each program with `first_seen`; per profile a fingerprint of its entries and when it last changed; per profile the dismissed programs. Written atomically; an unreadable file is reported (`KS304`) and treated as empty.
+  - A program is unassigned in a profile when it runs now, has no entry with its executable name in that profile (any action counts, `ignore` too) and was not dismissed for that profile. It is `new` when it was first seen after the profile last changed (seconds). `neutral` lists nothing.
+  - The tray menu shows `Unassigned programs (N)` for the active profile when N > 0; it opens the main window. The icon keeps its three states.
+
 ## 5. Configuration (TOML)
 
 Location `%APPDATA%\kaltstellen\config.toml`. The repository ships only `config.example.toml` with generic names.

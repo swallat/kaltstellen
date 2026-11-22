@@ -62,6 +62,8 @@ pub enum Code {
     StateCorrupt = 302,
     /// Another switch holds the state lock (E2 exit code 5).
     StateLocked = 303,
+    /// `seen.json` (N1) could not be read or written.
+    SeenIo = 304,
 
     // 4xx: switch engine
     /// The requested profile does not exist (E2 exit code 4).
@@ -122,6 +124,7 @@ impl Code {
         Code::StateIo,
         Code::StateCorrupt,
         Code::StateLocked,
+        Code::SeenIo,
         Code::UnknownProfile,
         Code::Superseded,
         Code::Interrupted,

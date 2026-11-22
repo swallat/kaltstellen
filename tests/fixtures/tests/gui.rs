@@ -234,6 +234,9 @@ fn wp10_window_has_its_controls_and_edits_keep_the_file_valid_and_commented() {
         ids::RUNNING,
         ids::ADD_RUNNING,
         ids::REFRESH,
+        ids::UNASSIGNED,
+        ids::ADD_UNASSIGNED,
+        ids::DISMISS,
         ids::STATUS,
     ] {
         g.control(id);

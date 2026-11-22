@@ -114,3 +114,9 @@ name. Purpose: find out which real apps tolerate being frozen.
   clicks change the file as expected, invalid edits change nothing, apply
   runs the switch, the process ends on close. Visual checks are listed in
   `docs/manual-checks.md`, decisions in `docs/open-decisions.md`.
+- WP11 (2026-11-22): unassigned programs (spec N2): `src/unassigned.rs` with
+  `seen.json`, notification-icon registry and visible-window sources (read
+  only), `new` marker, dismiss; `kaltstellen status --unassigned`; tray menu
+  line `Unassigned programs (N)`; list with `Add to profile` and `Dismiss` in
+  the main window. Tests use injected observations; the live snapshot is
+  only read.

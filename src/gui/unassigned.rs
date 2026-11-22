@@ -1,27 +1,22 @@
-//! Unassigned programs (N1, WP11) as the main window lists them.
-//! Placeholder until WP11: the list is empty.
+//! Unassigned programs (N1, WP11) for the main window: a snapshot is taken
+//! whenever the list is shown.
+
+use log::warn;
 
 use crate::config::Config;
+use crate::paths;
+pub use crate::unassigned::Unassigned;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Unassigned {
-    pub exe: String,
-    pub path: Option<String>,
-    pub new: bool,
+pub fn current(config: &Config, profile: &str) -> Vec<Unassigned> {
+    paths::data_dir()
+        .map(|dir| crate::unassigned::refresh(&dir, config, profile))
+        .unwrap_or_default()
 }
 
-impl Unassigned {
-    pub fn row(&self) -> Vec<String> {
-        vec![
-            self.exe.clone(),
-            if self.new { "new" } else { "" }.to_owned(),
-            self.path.clone().unwrap_or_default(),
-        ]
+pub fn dismiss(profile: &str, item: &Unassigned) {
+    if let Some(dir) = paths::data_dir()
+        && let Err(err) = crate::unassigned::dismiss(&dir, profile, &item.exe)
+    {
+        warn!("gui: {err}");
     }
 }
-
-pub fn current(_config: &Config, _profile: &str) -> Vec<Unassigned> {
-    Vec::new()
-}
-
-pub fn dismiss(_profile: &str, _item: &Unassigned) {}

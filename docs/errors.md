@@ -29,6 +29,7 @@ when they apply. Codes are never renumbered or reused. The source of truth is
 | `KS301` | State file could not be read or written. |
 | `KS302` | State file was corrupt and has been renamed (S9). |
 | `KS303` | Another switch holds the state lock (exit code 5). |
+| `KS304` | `seen.json` (unassigned programs, N1) could not be read or written. |
 | `KS401` | Unknown profile (exit code 4). |
 | `KS402` | Request superseded by a later one (W3, exit code 3). |
 | `KS403` | Switch interrupted (Ctrl+C, Ctrl+Break, console closed); what was frozen is resumed (exit code 1). |

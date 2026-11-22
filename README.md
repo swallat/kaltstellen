@@ -37,7 +37,9 @@ Copy [config.example.toml](config.example.toml) to
 kaltstellen check-config [FILE]   validate the configuration
 kaltstellen switch PROFILE        switch to a profile; "neutral" brings
           [--force] [--no-wait]   everything back
-kaltstellen status                show the active profile and what is on ice
+kaltstellen status [--unassigned] show the active profile and what is on ice;
+                                  --unassigned also lists running programs
+                                  without an entry in it
 kaltstellen recover [--no-wait]   resume everything frozen, e.g. after a crash
 kaltstellen tray                  notification-area icon with the profile menu
 kaltstellen autostart [on|off]    start the tray at sign-in (per-user Run key)

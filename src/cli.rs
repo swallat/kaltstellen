@@ -62,7 +62,11 @@ enum Command {
         no_wait: bool,
     },
     /// Show the active profile and what kaltstellen has put on ice
-    Status,
+    Status {
+        /// Also list running programs without an entry in the active profile
+        #[arg(long)]
+        unassigned: bool,
+    },
     /// Resume everything recorded as frozen, e.g. after a crash
     Recover {
         /// With a tray running: return once the tray has queued the request
@@ -96,7 +100,14 @@ pub fn main() -> ExitCode {
             force,
             no_wait,
         } => switch(&profile, force, !no_wait),
-        Command::Status => status(),
+        Command::Status { unassigned } => {
+            let code = status();
+            if unassigned && code == exit::OK {
+                status_unassigned()
+            } else {
+                code
+            }
+        }
         Command::Recover { no_wait } => recover(!no_wait),
         Command::Tray => crate::tray::main(),
         Command::Gui => crate::gui::main(),
@@ -367,6 +378,36 @@ fn status() -> u8 {
     exit::OK
 }
 
+/// N1: the running programs without an entry in the active profile.
+fn status_unassigned() -> u8 {
+    let Some(data) = paths::data_dir() else {
+        return exit::ERRORS;
+    };
+    let active = Store::new(&data)
+        .peek()
+        .map_or_else(|| config::NEUTRAL.to_owned(), |s| s.active_profile);
+    let config = match config::for_switch(paths::config_file().as_deref(), &active) {
+        Ok((config, _)) => config,
+        Err(lines) => {
+            for line in lines {
+                eprintln!("{line}");
+            }
+            return exit::CONFIG_INVALID;
+        }
+    };
+    let list = crate::unassigned::refresh(&data, &config, &active);
+    println!("unassigned in \"{active}\": {}", list.len());
+    for item in list {
+        println!(
+            "  {}{}{}",
+            item.exe,
+            if item.new { " (new)" } else { "" },
+            item.path.map_or(String::new(), |p| format!(", {p}"))
+        );
+    }
+    exit::OK
+}
+
 fn print_status(state: &State) {
     let snapshot = Snapshot::take().ok();
     println!("active profile: {}", state.active_profile);
@@ -497,7 +538,7 @@ fn run(command: Command) -> Result<bool> {
         Command::Resume { name } => for_each(&name, "resumed", Target::resume),
         Command::CheckConfig { .. }
         | Command::Switch { .. }
-        | Command::Status
+        | Command::Status { .. }
         | Command::Recover { .. }
         | Command::Tray
         | Command::Gui

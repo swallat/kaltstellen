@@ -569,6 +569,33 @@ fn is_minimized(hwnd: HWND) -> bool {
 }
 
 /// Number of visible top-level windows of the given processes.
+/// N1: processes that own a visible top-level window, without opening any
+/// process (only window handles are queried).
+pub fn pids_with_visible_windows() -> HashSet<u32> {
+    struct Search {
+        found: HashSet<u32>,
+    }
+    unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> BOOL {
+        // SAFETY: `param` is the pointer to the `Search` below, which
+        // outlives the EnumWindows call.
+        let search = unsafe { &mut *(param.0 as *mut Search) };
+        // SAFETY: a stale handle makes these calls fail harmlessly.
+        if unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            let mut pid = 0u32;
+            unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+            search.found.insert(pid);
+        }
+        true.into()
+    }
+    let mut search = Search {
+        found: HashSet::new(),
+    };
+    // SAFETY: the callback only uses `search`, which lives until the call
+    // returns.
+    let _ = unsafe { EnumWindows(Some(visit), LPARAM(&raw mut search as isize)) };
+    search.found
+}
+
 pub fn visible_window_count(pids: &[u32]) -> usize {
     windows_of(pids)
         .into_iter()

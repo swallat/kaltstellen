@@ -335,6 +335,23 @@ impl App {
         self.status.hotkeys_unavailable = self.hotkeys.unavailable.clone();
     }
 
+    /// N1: after a profile was applied, the snapshot of unassigned programs.
+    fn refresh_unassigned(&mut self) {
+        self.status.unassigned = match paths::data_dir() {
+            Some(dir) if !self.status.is_neutral() => {
+                let config = lock(&self.source).config().clone();
+                let list = crate::unassigned::refresh(&dir, &config, &self.status.active);
+                info!(
+                    "tray: {} unassigned program(s) in \"{}\"",
+                    list.len(),
+                    self.status.active
+                );
+                list.len()
+            }
+            _ => 0,
+        };
+    }
+
     /// Reads start at sign-in for the menu.
     fn refresh_autostart(&mut self) {
         let at = autostart::Location::current();
@@ -466,6 +483,9 @@ impl App {
             return;
         }
         self.status.finished(done.outcome.active, errors);
+        if done.outcome.ran && matches!(done.job, Job::Switch { .. }) {
+            self.refresh_unassigned();
+        }
         self.status.config_error = lock(&self.source).problem().map(str::to_owned);
         if let Some(next) = self.controller.finished(&done.job) {
             self.status.switching = Some(next.leads_to().to_owned());

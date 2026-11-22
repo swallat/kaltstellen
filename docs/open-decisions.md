@@ -37,3 +37,13 @@ owner says so.
    `kaltstellen gui` only reports instead of bringing the window to the
    front; fixed window size; deleting asks for confirmation; copying a
    profile drops its hotkey.
+
+## Unassigned programs (N1)
+
+9. **N2 details**: only programs running at the snapshot are listed; an
+   entry of any action removes a program from the list; programs are
+   compared by executable name only (a path in an entry is not needed to
+   count as a decision); "new" uses second resolution; plain
+   `kaltstellen status` takes no snapshot, only `status --unassigned` does;
+   the tray takes one after every applied profile and shows
+   `Unassigned programs (N)`, which opens the main window.

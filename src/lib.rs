@@ -36,5 +36,6 @@ pub mod protection;
 pub mod settings;
 pub mod state;
 pub mod tray;
+pub mod unassigned;
 #[allow(unsafe_code)]
 pub mod win32;

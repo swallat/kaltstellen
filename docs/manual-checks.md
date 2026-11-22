@@ -71,3 +71,13 @@ Start with the test configuration from above (copy `config.example.toml`).
    in the window: the status line says the file was changed and reloads it.
 10. Tray menu `Open kaltstellen…` opens the window without a console
     window; closing the window ends its process.
+
+## Unassigned programs (T22)
+
+1. Apply a test profile, then start a program with a tray icon that has no
+   entry in it (for example a chat or sync tool).
+2. Open the tray menu: `Unassigned programs (1)` (or more) appears; it opens
+   the main window.
+3. In the main window, select the profile: the program is listed as `new`.
+   `Add to profile` adds it and it leaves the list; for another program,
+   `Dismiss` removes it from the list of this profile only.

@@ -26,7 +26,7 @@ real machine. Results: `pass`, `fail`, `open` (not run yet), `n/a`.
 | T19 | Trim measured as available memory | WP2 | open | open |
 | T20 | Shutdown not blocked by frozen programs | WP8 | open | open (needs a real shutdown on the VM) |
 | T21 | Defender does not block or quarantine | all | open | open |
-| T22 | N1 unassigned programs marked new | WP11 | open | open |
+| T22 | N1 unassigned programs marked new | WP11 | open | open (logic passes: a window fixture that starts later is listed as new by `status --unassigned`, an entry removes it, the tray counts it; the list in the window not looked at) |
 
 ## Test fixtures
 
