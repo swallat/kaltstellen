@@ -313,9 +313,10 @@ fn wp10_missing_runtime_invalid_file_and_second_window() {
         let _ = first.kill();
         let out = first.wait_with_output().unwrap();
         panic!(
-            "the window started no WebView2 (exit {:?}): {}",
+            "the window started no WebView2 (exit {:?}): {}\nlog:\n{}",
             out.status.code(),
-            String::from_utf8_lossy(&out.stderr)
+            String::from_utf8_lossy(&out.stderr),
+            fs::read_to_string(world.path("data").join("kaltstellen.log")).unwrap_or_default()
         );
     }
     let webview = descendants(pid);
