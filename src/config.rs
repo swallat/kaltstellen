@@ -14,7 +14,7 @@ use toml::Spanned;
 
 use crate::error::Code;
 use crate::hotkey::Hotkey;
-use crate::process;
+use crate::protection;
 
 /// Name of the built-in profile without entries (C1).
 pub const NEUTRAL: &str = "neutral";
@@ -481,7 +481,7 @@ impl Check<'_> {
             format!("{name}.exe")
         };
         // P6: hard-protected programs are refused whatever the action is.
-        if process::is_hard_protected(&exe) {
+        if protection::is_hard_protected(&exe) {
             self.error(
                 &span,
                 format!(

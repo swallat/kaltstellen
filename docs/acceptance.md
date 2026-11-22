@@ -13,14 +13,14 @@ real machine. Results: `pass`, `fail`, `open` (not run yet), `n/a`.
 | T6 | Stale PID ignored, corrupt state renamed | WP6 | open | open |
 | T7 | Sign-out/shutdown resume, last profile offered | WP8 | open | open |
 | T8 | Invalid config keeps old one, file and line | WP3 | open | open |
-| T9 | Hard-protected refused in config and CLI | WP2 | open | open |
+| T9 | Hard-protected refused in config and CLI | WP2 | open | pass |
 | T10 | `restart_on_neutral` only on neutral | WP4 | open | open |
-| T11 | `on_timeout = "keep"` with open dialog | WP2 | open | open |
+| T11 | `on_timeout = "keep"` with open dialog | WP2 | open | pass (engine) |
 | T12 | Idle footprint Q1 over 60 s | WP7 | open | open |
 | T13 | Long freeze of real programs | none | n/a | open |
 | T14 | Shell responsive with windowed programs frozen | WP2/7 | open | open |
 | T15 | Unmatched programs never opened | WP2 | open | open |
-| T16 | Self and ancestor protection | WP2 | open | open |
+| T16 | Self and ancestor protection | WP2 | open | open (unit-tested) |
 | T17 | Hotkey taken or `Ctrl+Alt+<printable>` | WP9 | open | open |
 | T18 | Elevated target reported, switch continues | WP2 | open | open |
 | T19 | Trim measured as available memory | WP2 | open | open |

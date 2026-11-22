@@ -8,9 +8,11 @@ use clap::{Parser, Subcommand};
 use log::{LevelFilter, info, warn};
 
 use crate::config;
+use crate::error::{Code, Error};
 use crate::logging;
 use crate::paths;
-use crate::process::{self, ProcessInfo};
+use crate::process::{Access, Snapshot, Target};
+use crate::protection;
 
 /// Put background apps on ice: suspend, resume and trim Windows processes.
 #[derive(Parser)]
@@ -127,50 +129,76 @@ fn run(cli: Cli) -> Result<bool> {
     match cli.command {
         Command::List { filter } => {
             let filter = filter.map(|f| f.to_lowercase());
-            let mut processes = process::list()?;
+            let snapshot = Snapshot::take()?;
+            let mut processes = snapshot.processes().to_vec();
             processes.sort_by_key(|p| (p.name.to_lowercase(), p.pid));
-            println!("{:>8} {:>8}  NAME", "PID", "PARENT");
+            println!("{:>8} {:>8} {:>7}  NAME", "PID", "PARENT", "SESSION");
             for p in processes {
                 if filter
                     .as_ref()
                     .is_none_or(|f| p.name.to_lowercase().contains(f))
                 {
-                    println!("{:>8} {:>8}  {}", p.pid, p.parent_pid, p.name);
+                    println!(
+                        "{:>8} {:>8} {:>7}  {}",
+                        p.pid, p.parent_pid, p.session_id, p.name
+                    );
                 }
             }
             Ok(true)
         }
-        Command::Suspend { name, trim } => for_each(&name, "suspended", |p| {
-            process::suspend(p.pid)?;
+        Command::Suspend { name, trim } => for_each(&name, "suspended", |target| {
+            target.suspend()?;
             if trim {
-                process::trim_working_set(p.pid)?;
+                target.trim()?;
             }
             Ok(())
         }),
-        Command::Resume { name } => for_each(&name, "resumed", |p| process::resume(p.pid)),
+        Command::Resume { name } => for_each(&name, "resumed", Target::resume),
         Command::CheckConfig { .. } => unreachable!("handled in main"),
     }
 }
 
-fn for_each(name: &str, done: &str, action: impl Fn(&ProcessInfo) -> Result<()>) -> Result<bool> {
-    let processes = process::find(name)?;
-    if processes.is_empty() {
-        eprintln!("no running process named {name}");
-        return Ok(false);
+/// Applies `action` to every process of the program `name`: the processes
+/// with that executable name in this session and their children (A7).
+fn for_each(
+    name: &str,
+    done: &str,
+    action: impl Fn(&Target) -> crate::error::Result<()>,
+) -> Result<bool> {
+    if protection::is_hard_protected(name) {
+        return Err(Error::new(
+            Code::HardProtected,
+            "protected system program; it is never touched",
+        )
+        .program(name)
+        .into());
     }
+    let processes = Snapshot::take()?.program(name);
+    let mut touched = 0;
     let mut all_ok = true;
     for p in &processes {
-        match action(p) {
+        let result = match Target::open(p, Access::Suspend) {
+            // Exited since the snapshot: not an error (A7).
+            Ok(None) => continue,
+            Ok(Some(target)) => action(&target),
+            Err(err) => Err(err),
+        };
+        touched += 1;
+        match result {
             Ok(()) => {
                 info!("{done} {} (pid {})", p.name, p.pid);
                 println!("{done} {} (pid {})", p.name, p.pid);
             }
             Err(err) => {
                 all_ok = false;
-                warn!("failed {} (pid {}): {err:#}", p.name, p.pid);
-                eprintln!("failed {} (pid {}): {err:#}", p.name, p.pid);
+                warn!("failed pid {}: {err}", p.pid);
+                eprintln!("failed pid {}: {err}", p.pid);
             }
         }
+    }
+    if touched == 0 {
+        eprintln!("no running process named {name}");
+        return Ok(false);
     }
     Ok(all_ok)
 }

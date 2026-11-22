@@ -30,10 +30,13 @@ switching are planned; see [docs/requirements.md](docs/requirements.md) and
 
 ```text
 kaltstellen list [FILTER]         list running processes
-kaltstellen suspend NAME [--trim] freeze all processes with that executable name
+kaltstellen suspend NAME [--trim] freeze a program: all processes with that
+                                  executable name and their child processes
 kaltstellen resume NAME           continue them
+kaltstellen check-config [FILE]   validate a configuration file
 ```
 
+- Only processes of your own Windows session are touched.
 - A suspended process uses no CPU and keeps its state.
 - `--trim` also asks Windows to move the process's memory out of RAM. Because a
   frozen process never touches its pages, they stay out until it is resumed.

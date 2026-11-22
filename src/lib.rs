@@ -24,4 +24,5 @@ pub mod logging;
 pub mod paths;
 #[allow(unsafe_code)]
 pub mod process;
+pub mod protection;
 pub mod state;

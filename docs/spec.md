@@ -42,6 +42,13 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
 - **W7 Minimise before freeze** **[r2]**: when `minimize_before_suspend` is true, visible top-level windows of the process are minimised (`ShowWindowAsync`), and kaltstellen waits until they report minimised or 1 s has passed before freezing. Windows that cannot be minimised from a lower integrity level are skipped. The previous window layout is not restored on resume. This reduces, but does not guarantee, "not responding" ghost windows (S4 is best effort).
 - **P5 Neutral** **[decided]**: switching to `neutral` resumes everything kaltstellen suspended. Programs it stopped are restarted only if their entry set `restart_on_neutral = true` (default `false`); that setting is honoured only on a switch to `neutral`, never on a switch to another profile. Programs started by kaltstellen are not stopped again. **[assumed]**
 - **A2 Stop**: send a close request to the program's windows, wait `stop_timeout_s`, then act according to the entry's `on_timeout`: `kill` (terminate, default) or `keep` (leave running, report an error). **[decided]** (A2 in `requirements.md` says "then terminate"; `keep` protects programs with unsaved-changes dialogs.)
+- **A8 Details fixed while implementing** **[assumed]** (WP2):
+  - The process list comes from one system query (`NtQuerySystemInformation`) that returns PID, parent PID, session, creation time and name without opening any process (A7 least access). A process is opened only once it matched an entry; entries with a `path` open the processes of that name to read their image path.
+  - A hard-protected process below a matched program (typically its console host) is left out together with everything below it.
+  - Self-protection: an ancestor of kaltstellen that matches an entry is skipped itself, its other children are still part of the program. Processes started by kaltstellen's own process are never part of a program.
+  - Stop: the close request (`WM_CLOSE`) goes to all top-level windows of the program, hidden ones included, so programs that live in the notification area can close too. A program without any window cannot be asked; `on_timeout` then applies at once instead of after `stop_timeout_s`.
+  - Start: without `cwd` the program starts in the folder of its executable. It gets its own console and inherits no handles.
+  - A step on a process that has exited meanwhile counts as done.
 
 ## 4. Session and lifecycle
 

@@ -49,3 +49,11 @@ name. Purpose: find out which real apps tolerate being frozen.
   (exit code 2 when invalid), `config.example.toml`. Details decided on the
   way are in spec C8. Still open from WP3: hot reload (C4) and `settings.json`,
   both needed first by the tray app; T8 on the VM.
+- WP2 process engine (2026-11-22): `src/process.rs` with handle-free
+  snapshot, tree resolution with creation-time guard, self-protection,
+  suspend/resume/trim, graceful stop with `on_timeout`, minimise, start;
+  protection tiers in `src/protection.rs`; tests against the fixtures in
+  `tests/fixtures/tests/engine.rs`. Details decided on the way are in spec
+  A8. Still open from WP2: T15 (handle trace), T18 (elevated target), T19
+  (trim measured) and T14, all on the VM; the warn list is not enforced yet
+  (`--force`, WP5).
