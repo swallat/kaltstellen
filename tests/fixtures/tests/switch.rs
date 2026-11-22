@@ -17,11 +17,13 @@ use kaltstellen::state::{State, Store};
 
 /// One test's world: a temp folder with its own programs and state file.
 struct World {
-    dir: tempfile::TempDir,
     config: Config,
     state: State,
     store: Store,
     cleanup: Vec<KillProgram>,
+    /// Dropped last, after the programs running from it were ended, so
+    /// the folder can be removed.
+    dir: tempfile::TempDir,
 }
 
 impl World {

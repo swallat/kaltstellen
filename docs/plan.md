@@ -120,5 +120,6 @@ name. Purpose: find out which real apps tolerate being frozen.
   line `Unassigned programs (N)`; list with `Add to profile` and `Dismiss` in
   the main window. Tests use injected observations; the live snapshot is
   only read.
-- M4 design notes (2026-11-22): `docs/design-elevated-helper.md` (A5, P8) and`n  `docs/design-automatic-triggers.md` (U4), for the owner to decide; no code.
+- M4 design notes (2026-11-22): `docs/design-elevated-helper.md` (A5, P8) and
+  `docs/design-automatic-triggers.md` (U4), for the owner to decide; no code.
 

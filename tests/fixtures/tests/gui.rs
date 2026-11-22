@@ -64,9 +64,11 @@ fn window_of(pid: u32, class: &str) -> Option<HWND> {
 }
 
 struct Gui {
-    dir: tempfile::TempDir,
     child: Option<Child>,
     main: HWND,
+    /// Dropped last, after the programs running from it were ended, so
+    /// the folder can be removed.
+    dir: tempfile::TempDir,
 }
 
 impl Gui {

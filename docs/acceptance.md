@@ -16,7 +16,7 @@ real machine. Results: `pass`, `fail`, `open` (not run yet), `n/a`.
 | T9 | Hard-protected refused in config and CLI | WP2 | open | pass |
 | T10 | `restart_on_neutral` only on neutral | WP4 | open | pass |
 | T11 | `on_timeout = "keep"` with open dialog | WP2 | open | pass (engine) |
-| T12 | Idle footprint Q1 over 60 s | WP7 | open | indicative pass (release build with pipe server, test configuration: private working set 1.4 MB, no measurable CPU over 63 s) |
+| T12 | Idle footprint Q1 over 60 s | WP7 | open | indicative pass (release build with pipe server and hotkeys, test configuration: private working set 1.5 MB, no measurable CPU over 63 s) |
 | T13 | Long freeze of real programs | none | n/a | open |
 | T14 | Shell responsive with windowed programs frozen | WP2/7 | open | open |
 | T15 | Unmatched programs never opened | WP2 | open | open |

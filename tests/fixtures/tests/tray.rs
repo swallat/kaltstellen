@@ -88,9 +88,11 @@ fn window_of(pid: u32, class: &str) -> Option<HWND> {
 
 /// One tray with its own folders and programs.
 struct Tray {
-    dir: tempfile::TempDir,
     child: Option<Child>,
     cleanup: Vec<KillProgram>,
+    /// Dropped last, after the programs running from it were ended, so
+    /// the folder can be removed.
+    dir: tempfile::TempDir,
 }
 
 impl Tray {
