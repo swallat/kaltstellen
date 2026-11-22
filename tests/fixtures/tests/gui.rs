@@ -121,6 +121,33 @@ fn descendants(pid: u32) -> HashSet<u32> {
     found
 }
 
+/// The WebView2 processes of `world`, by the user data folder on their
+/// command line. Not every runtime starts them as descendants of the
+/// window process (seen on the CI runner), so the tree alone misses them.
+fn webview_of(world: &World) -> HashSet<u32> {
+    let folder = world.path("data").join("webview2");
+    let script = format!(
+        "Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | \
+         Where-Object {{ $_.CommandLine -and $_.CommandLine.Contains('{}') }} | \
+         ForEach-Object {{ $_.ProcessId }}",
+        folder.to_string_lossy().replace('\'', "''")
+    );
+    let out = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .stdin(Stdio::null())
+        .output()
+        .expect("powershell.exe");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect()
+}
+
+fn page_ready(world: &World) -> bool {
+    fs::read_to_string(world.path("data").join("kaltstellen.log"))
+        .is_ok_and(|log| log.contains("gui: page ready"))
+}
+
 fn alive(pids: &HashSet<u32>) -> Vec<u32> {
     let snapshot = Snapshot::take().unwrap();
     pids.iter()
@@ -307,7 +334,7 @@ fn wp10_missing_runtime_invalid_file_and_second_window() {
     // Ends the window if an assertion below fails.
     let _guard = KillProcess(info_of(pid));
     let started = wait_for(LONG, || {
-        !descendants(pid).is_empty() || first.try_wait().ok().flatten().is_some()
+        page_ready(&world) || first.try_wait().ok().flatten().is_some()
     });
     if first.try_wait().ok().flatten().is_some() || !started {
         let _ = first.kill();
@@ -319,7 +346,9 @@ fn wp10_missing_runtime_invalid_file_and_second_window() {
             fs::read_to_string(world.path("data").join("kaltstellen.log")).unwrap_or_default()
         );
     }
-    let webview = descendants(pid);
+    let mut webview = descendants(pid);
+    webview.extend(webview_of(&world));
+    assert!(!webview.is_empty(), "no WebView2 process found");
     // M6: a second start brings the open window back, also when minimised.
     assert!(wait_for(LONG, || main_window(pid).is_some()));
     let window = main_window(pid).unwrap();
