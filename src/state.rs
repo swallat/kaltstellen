@@ -61,6 +61,11 @@ pub struct Stopped {
     /// Image path of the program, used to start it again.
     pub image: Option<String>,
     pub restart_on_neutral: bool,
+    /// Arguments and folder for the restart, from the profile entry.
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 /// The state file in kaltstellen's data directory.
@@ -179,6 +184,8 @@ mod tests {
                 exe: "chat.exe".into(),
                 image: Some("C:\\apps\\chat.exe".into()),
                 restart_on_neutral: true,
+                args: Vec::new(),
+                cwd: None,
             }],
         }
     }

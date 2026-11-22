@@ -43,11 +43,18 @@ hotkey = "Ctrl+Shift+Alt+F1"
   action = "stop"
   on_timeout = "kill"           # kill | keep (keep: leave it running and report)
   restart_on_neutral = true     # start it again when switching to "neutral"
+  args = ["--minimized"]        # optional: arguments (and cwd) for that restart
 
   # A deliberate decision to leave a program alone.
   [[profile.app]]
   exe = "player.exe"
   action = "ignore"
+
+  # Remote-access tools, graphics drivers, licence services, security software
+  # and shells are skipped unless you confirm the entry.
+  [[profile.app]]
+  exe = "terminal.exe"
+  confirmed = true
 
 [[profile]]
 name = "studio"

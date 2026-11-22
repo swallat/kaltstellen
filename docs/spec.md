@@ -42,7 +42,7 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
 - **W7 Minimise before freeze** **[r2]**: when `minimize_before_suspend` is true, visible top-level windows of the process are minimised (`ShowWindowAsync`), and kaltstellen waits until they report minimised or 1 s has passed before freezing. Windows that cannot be minimised from a lower integrity level are skipped. The previous window layout is not restored on resume. This reduces, but does not guarantee, "not responding" ghost windows (S4 is best effort).
 - **P5 Neutral** **[decided]**: switching to `neutral` resumes everything kaltstellen suspended. Programs it stopped are restarted only if their entry set `restart_on_neutral = true` (default `false`); that setting is honoured only on a switch to `neutral`, never on a switch to another profile. Programs started by kaltstellen are not stopped again. **[assumed]**
 - **A2 Stop**: send a close request to the program's windows, wait `stop_timeout_s`, then act according to the entry's `on_timeout`: `kill` (terminate, default) or `keep` (leave running, report an error). **[decided]** (A2 in `requirements.md` says "then terminate"; `keep` protects programs with unsaved-changes dialogs.)
-- **A8 Details fixed while implementing** **[assumed]** (WP2):
+- **A8 Details fixed while implementing** **[decided]** (WP2, WP4, WP6; confirmed by the owner 2026-11-22):
   - The process list comes from one system query (`NtQuerySystemInformation`) that returns PID, parent PID, session, creation time and name without opening any process (A7 least access). A process is opened only once it matched an entry; entries with a `path` open the processes of that name to read their image path.
   - A hard-protected process below a matched program (typically its console host) is left out together with everything below it.
   - Self-protection: an ancestor of kaltstellen that matches an entry is skipped itself, its other children are still part of the program. Processes started by kaltstellen's own process are never part of a program.
@@ -50,7 +50,7 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
   - Start: without `cwd` the program starts in the folder of its executable. It gets its own console and inherits no handles.
   - A step on a process that has exited meanwhile counts as done.
   - State (WP6): the boot time of S10 is the creation time of the `System` process. A suspended process is recorded and the state written before it is frozen, so a crash in between leaves a record to undo, never an unknown frozen process. The in-process lock of L1 is a separate file `state.lock` opened without sharing.
-  - A program stopped by kaltstellen is restarted on `neutral` from its image path, without the arguments it originally ran with (reading another process's command line is not attempted).
+  - A program stopped by kaltstellen is restarted on `neutral` from its image path with the `args` and `cwd` of its stop entry (C6). The command line it originally ran with is not read from the process.
   - A suspended record whose resume fails is kept for the next switch or `recover`.
   - Without a tray instance there is nothing to queue: W3 and exit code 3 apply to requests sent to the tray; a second command-line switch during a running one ends with exit code 5.
   - `switch neutral` and `recover` work without a readable configuration.
@@ -66,7 +66,7 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
 - **L3 Recover** **[r2]**: `kaltstellen recover` resumes everything recorded in state without needing the tray. Reason: a tray app killed by the user or a crash leaves programs frozen until kaltstellen runs again. The tray app should be started at sign-in so recovery happens automatically.
 - **S3 Crash**: on the next start, recovery resumes every recorded suspended process that still matches (S6), clears state, and sets the active profile to `neutral`.
 
-- **L4 Tray details fixed while implementing** **[assumed]** (WP7):
+- **L4 Tray details fixed while implementing** **[decided]** (WP7; confirmed by the owner 2026-11-22):
   - Single instance (L1): a mutex `Local\kaltstellen-tray` in the session namespace. With `KALTSTELLEN_DATA_DIR` set, the name gets a hash of that folder, so test or portable instances do not block the real one. A second start prints `kaltstellen tray is already running in this session` and exits with code 0; it forwards nothing yet (the pipe of L1 is still open).
   - Console: the executable stays a console program. Started without a terminal (Explorer, shortcut, Run key), Windows creates a console for it alone; the tray detects that (`GetConsoleProcessList` returns only itself) and releases it with `FreeConsole`, so the window closes again, possibly after showing for a moment. Started from a terminal it stays attached, prints one line and keeps the terminal until Quit. The other subcommands are unchanged.
   - State: the tray does not hold the state lock while idle. Each job (start-up recovery, switch, Quit) takes the lock, reads `state.json` afresh, runs the engine and writes it back. A command-line switch can therefore run while the tray is idle; one that overlaps a tray switch gets exit code 5 (and the tray's switch fails with `KS303` if the command line got the lock first). When the menu opens and no switch runs, the tray reads the active profile from the file, so a command-line switch shows up there.
@@ -75,7 +75,7 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
   - Menu: left and right click both open it (no main window yet). Profiles in file order, the active one checked; an active profile that is no longer in the configuration (C4) is shown checked and disabled with `(no longer in the configuration)`; `Neutral`; a disabled status line that shows, in this order, a running switch, the errors of the last switch (count and the first one), or why the configuration file is not in effect; `Open kaltstellen…` disabled until the GUI (M3); `Quit`.
   - Error state (W2): set when the last switch or recovery reported errors or the configuration file is invalid; cleared by the next switch without errors, or when the file is valid again. Acknowledging it without a switch is left to the GUI (M3). Icon changes are logged (`tray: icon neutral|active|error`).
   - Configuration (C3, C4): re-read when the menu opens and when a switch starts, never by a watcher (Q1); a file with unchanged time and size is not parsed again. A missing file means no profiles and is not an error. An invalid file keeps the last valid configuration in effect. A switch takes a copy of the configuration when it starts and keeps it to the end.
-  - Warn-list programs (P6) need a confirmation the tray cannot give yet; such entries fail with `KS113` from the tray until the GUI can confirm them.
+  - Warn-list programs (P6) are touched from the tray only if their entry has `confirmed = true`; otherwise the entry fails with `KS113` and the rest of the switch runs.
   - The icons are embedded as resources 101 (neutral), 102 (active), 103 (error) and loaded at the system's small-icon size; the process is not per-monitor DPI aware yet. After an Explorer restart (`TaskbarCreated`) the icon is added again.
   - The tray window is a hidden top-level window (class `kaltstellen-tray`, no taskbar button), not a message-only window, so it can receive `WM_QUERYENDSESSION` in WP8.
 
@@ -110,16 +110,21 @@ hotkey = "Ctrl+Shift+Alt+F1"
   action = "stop"
   on_timeout = "kill"         # kill | keep
   restart_on_neutral = true
+  args = ["--minimized"]      # optional, with cwd: used for the restart
+
+  [[profile.app]]
+  exe = "remote.exe"
+  confirmed = true            # warn-list program, touched deliberately
 ```
 
 - **C1** Profile names are unique and non-empty; `neutral` is reserved.
-- **C2** An `exe` appears at most once per profile; it may appear in several profiles; the active profile alone decides its action.
+- **C2** An `exe` appears at most once per profile, unless every entry of that name has a `path` and the paths differ (A7) **[decided]**; it may appear in several profiles; the active profile alone decides its action.
 - **C3** An invalid file is rejected as a whole with file, line and reason. The previous valid configuration stays in effect and the tray shows the error state. Unknown keys are errors, so typos are caught.
 - **C4** The file is re-read on change. A running switch finishes with the old configuration. If the active profile was removed or renamed, it stays active under its old name until the next switch.
 - **C5** Hotkeys must be unique. A hotkey that cannot be registered (taken by another program) is reported once at start and ignored; the profile stays usable from tray and command line.
-- **C6** `args` only for `start`; `restart_on_neutral` and `on_timeout` only for `stop`. Other combinations are errors. An entry with `action = "start"` requires `path` **[r2]** (a name alone cannot be launched).
+- **C6** `args` and `cwd` for `start`, and for `stop` together with `restart_on_neutral = true`, where they are used for the restart on `neutral` **[decided]**; `restart_on_neutral` and `on_timeout` only for `stop`; `trim` only for `suspend`; `confirmed` only for `stop` and `suspend`. Other combinations are errors. An entry with `action = "start"` requires `path` **[r2]** (a name alone cannot be launched).
 - **C7 Hotkey syntax** **[r2]**: modifiers plus one key. `Ctrl+Alt` combined with a printable key is rejected with a warning, because on layouts with AltGr (such as German) `Ctrl+Alt+key` produces characters like `{`, `[`, `@`, `€` and registering it would steal them. Function keys with `Ctrl+Shift+Alt` are recommended. `RegisterHotKey` uses `MOD_NOREPEAT`. Hotkeys do not fire on the secure desktop (UAC, lock screen).
-- **C8 Details fixed while implementing** **[assumed]** (WP3):
+- **C8 Details fixed while implementing** **[decided]** (WP3; confirmed by the owner 2026-11-22):
   - `action` may be omitted in an entry; it then takes `settings.default_action`, which cannot be `start`.
   - `exe` is a file name without folder; a name without extension gets `.exe`. If `path` is set it must be absolute and end in that file name. An empty `path` or `cwd` counts as not set.
   - C2 with A7: two entries of one profile may share an `exe` only if both have a `path` and the paths differ.
@@ -141,7 +146,7 @@ hotkey = "Ctrl+Shift+Alt+F1"
 
 - **P6 Two tiers** **[decided]**:
   - *Hard-protected*: core Windows processes, the shell, console hosts (`conhost`, `OpenConsole`), error reporting and the desktop window manager **[r2]**. Never touched, whatever the config says (A6). Not selectable in the GUI; rejected by the command line.
-  - *Warn list*: remote-access tools, graphics drivers, licence services, security software, developer tools. Allowed only after explicit confirmation in the GUI (command line: `--force`). The list is data shipped with the tool. (User-extendable lists are post-v1 **[decided]**.)
+  - *Warn list*: remote-access tools, graphics drivers, licence services, security software, developer tools. Allowed only after explicit confirmation: `confirmed = true` in the entry **[decided]**, which the GUI sets after asking, or `--force` on the command line for one switch. The list is data shipped with the tool. (User-extendable lists are post-v1 **[decided]**.)
 - **P7** Processes of higher integrity (elevated) cannot be frozen or terminated from a non-elevated kaltstellen because of mandatory integrity control; `OpenProcess` for suspend/terminate fails with access denied **[r2]**. User Interface Privilege Isolation additionally blocks window messages, so the graceful close (`WM_CLOSE`) and the minimise step (W7) also fail for elevated windows. Protected processes (PPL) cannot be opened even by administrators. All of these are reported as "needs administrator" or "protected" and skipped. Not fatal (W2); never silent (Q3). `start` of a program that requires elevation fails with `ERROR_ELEVATION_REQUIRED` and is reported the same way; kaltstellen does not trigger UAC prompts.
 - **P9** **[r2]** Processes started by kaltstellen are not placed in a job object and survive Quit of the tray. They do not inherit kaltstellen's handles. A future elevated tray would hand its elevation to every started program, which is one more reason for the helper design (P8).
 - **P8** Services and an elevated helper are deferred. Decision: a small elevated helper, so the tray app never runs elevated. **[decided]**
@@ -171,7 +176,7 @@ hotkey = "Ctrl+Shift+Alt+F1"
 - **Q1** Tray app idle: private working set below 15 MB and CPU below 0.1 % averaged over 60 s, GUI process not running. **[decided]** (thresholds)
 - **Q2** One executable, no installer, no runtime.
 - **Q3** Runs without administrator rights; operations needing them are reported (P7).
-- **Q4** All `unsafe` Win32 code lives in one module. Widened in WP7 **[assumed]**: `unsafe` is allowed in `src/process.rs` (process APIs) and in the `src/win32/` tree (tray window, notification icon, menu, single-instance mutex, console), nowhere else. Each of these modules wraps one concern behind a safe interface; all decisions (queue, menu content, icon state, what a click does) are safe code outside them. Enforced by `#![deny(unsafe_code)]` with `#[allow]` on exactly these two modules, and by `scripts/check-unsafe.sh` in CI. Reason: the tray needs about a dozen more Win32 calls, and the safe tray crates bring a second windowing layer for what the existing `windows` dependency already covers (Q1, Q2).
+- **Q4** All `unsafe` Win32 code lives in one module. Widened in WP7 **[decided]** (2026-11-22): `unsafe` is allowed in `src/process.rs` (process APIs) and in the `src/win32/` tree (tray window, notification icon, menu, single-instance mutex, console), nowhere else. Each of these modules wraps one concern behind a safe interface; all decisions (queue, menu content, icon state, what a click does) are safe code outside them. Enforced by `#![deny(unsafe_code)]` with `#[allow]` on exactly these two modules, and by `scripts/check-unsafe.sh` in CI. Reason: the tray needs about a dozen more Win32 calls, and the safe tray crates bring a second windowing layer for what the existing `windows` dependency already covers (Q1, Q2).
 - **Q5** A switch of 20 programs completes in under 10 s excluding stop timeouts and the minimise wait (W7). **[decided]** Treated as a target, not an acceptance test.
 
 ## 10. Acceptance tests (test host VM; real load stays on the desktop)
@@ -210,7 +215,7 @@ hotkey = "Ctrl+Shift+Alt+F1"
 
 ## 12. Confirmation status
 
-All eight points of the round 2 review were confirmed by the owner on 2026-11-21 and are marked **[decided]**. The remaining **[assumed]** items (not raised in round 2) still await confirmation.
+All eight points of the round 2 review were confirmed by the owner on 2026-11-21 and are marked **[decided]**. The remaining **[assumed]** items (not raised in round 2) still await confirmation. On 2026-11-22 the owner confirmed the implementation details A8, C8 and L4, the widened Q4, the C2 exception for entries with paths, restart arguments on stop entries (C6) and `confirmed` for warn-list entries (P6).
 
 The ones with most impact among the remaining **[assumed]** items: the resume-except-still-suspended optimisation (W1), re-applying the active profile (W4), the single-instance and pipe design (L1), the config file as source of truth, and the GUI toolkit and window layout.
 

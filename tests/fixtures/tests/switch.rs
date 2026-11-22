@@ -96,6 +96,7 @@ fn suspend(exe: &str) -> App {
         exe: exe.to_owned(),
         path: None,
         action: AppAction::Suspend { trim: true },
+        confirmed: false,
     }
 }
 
@@ -106,7 +107,10 @@ fn stop(exe: &str, restart_on_neutral: bool) -> App {
         action: AppAction::Stop {
             on_timeout: OnTimeout::Kill,
             restart_on_neutral,
+            args: Vec::new(),
+            cwd: None,
         },
+        confirmed: false,
     }
 }
 
@@ -118,6 +122,7 @@ fn start(path: &Path, args: &[&str]) -> App {
             args: args.iter().map(|a| (*a).to_owned()).collect(),
             cwd: None,
         },
+        confirmed: false,
     }
 }
 
@@ -252,13 +257,13 @@ fn t10_restart_on_neutral_only_on_neutral() {
     let mut w = World::new();
     let mut back = w.run("ks-t10-back.exe");
     let mut gone = w.run("ks-t10-gone.exe");
-    w.profile(
-        "quiet",
-        vec![
-            stop("ks-t10-back.exe", true),
-            stop("ks-t10-gone.exe", false),
-        ],
-    );
+    // The restart gets the entry's arguments: a beat file of its own.
+    let restart_beat = w.beat_file("ks-t10-restarted");
+    let mut with_args = stop("ks-t10-back.exe", true);
+    if let AppAction::Stop { args, .. } = &mut with_args.action {
+        args.push(str_of(&restart_beat).to_owned());
+    }
+    w.profile("quiet", vec![with_args, stop("ks-t10-gone.exe", false)]);
     w.profile("other", Vec::new());
 
     let report = w.switch("quiet");
@@ -282,6 +287,10 @@ fn t10_restart_on_neutral_only_on_neutral() {
         wait_for(Duration::from_secs(5), || pids_of("ks-t10-back.exe").len()
             == 1),
         "program with restart_on_neutral did not come back"
+    );
+    assert!(
+        beating(&restart_beat),
+        "the restart did not get the arguments of its entry"
     );
     assert!(pids_of("ks-t10-gone.exe").is_empty());
     assert!(w.state.stopped.is_empty());
@@ -396,6 +405,14 @@ fn warn_list_needs_force() {
     )
     .unwrap();
     assert!(forced.errors.is_empty(), "{:?}", forced.errors);
+    assert!(w.is_frozen("rustdesk.exe"));
+    w.switch("neutral");
+    assert!(w.is_beating("rustdesk.exe"));
+
+    // `confirmed = true` in the entry does the same without --force.
+    w.config.profiles[0].apps[0].confirmed = true;
+    let confirmed = w.switch("p");
+    assert!(confirmed.errors.is_empty(), "{:?}", confirmed.errors);
     assert!(w.is_frozen("rustdesk.exe"));
     w.switch("neutral");
 }

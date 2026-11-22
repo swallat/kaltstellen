@@ -85,3 +85,6 @@ name. Purpose: find out which real apps tolerate being frozen.
   check of icons and menu. Next: WP8 (`WM_QUERYENDSESSION`, shutdown
   priority, `settings.json` last profile, console handler), then hotkeys,
   GUI and unassigned programs (M3).
+- Owner decisions (2026-11-22): spec blocks A8, C8, L4 and the widened Q4
+  confirmed. Added on request: `args`/`cwd` on stop entries for the restart on
+  `neutral`, and `confirmed = true` for warn-list entries (works from the tray).

@@ -297,10 +297,11 @@ fn check_config(file: Option<PathBuf>) -> u8 {
                         app.action,
                         config::AppAction::Ignore | config::AppAction::Start { .. }
                     );
-                    if let (true, Protection::Warn(category)) = (touches, protection::of(&app.exe))
+                    if let (true, Protection::Warn(category)) =
+                        (touches && !app.confirmed, protection::of(&app.exe))
                     {
                         eprintln!(
-                            "{}: warning: profile \"{}\": {} is a {}; switching needs --force",
+                            "{}: warning: profile \"{}\": {} is a {}; it is skipped unless its entry has confirmed = true (or --force)",
                             file.display(),
                             profile.name,
                             app.exe,

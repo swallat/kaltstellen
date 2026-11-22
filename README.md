@@ -53,7 +53,8 @@ kaltstellen resume NAME           continue them
   `%LOCALAPPDATA%\kaltstellen\state.json` before it happens. If kaltstellen
   is killed, `kaltstellen recover` brings everything back.
 - Remote-access tools, graphics driver components, licence services,
-  security software and shells are only touched with `--force`.
+  security software and shells are only touched if their entry has
+  `confirmed = true`, or with `--force` for one switch.
 - Only processes of your own Windows session are touched.
 - A suspended process uses no CPU and keeps its state.
 - `--trim` also asks Windows to move the process's memory out of RAM. Because a

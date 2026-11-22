@@ -67,6 +67,19 @@ pub struct App {
     /// Full path, to tell programs with equal names apart (A7).
     pub path: Option<PathBuf>,
     pub action: AppAction,
+    /// P6: the owner confirmed that this warn-list program may be touched.
+    pub confirmed: bool,
+}
+
+impl App {
+    pub fn new(exe: impl Into<String>, path: Option<PathBuf>, action: AppAction) -> Self {
+        Self {
+            exe: exe.into(),
+            path,
+            action,
+            confirmed: false,
+        }
+    }
 }
 
 /// What a profile does with a program, with the options valid for it (C6).
@@ -79,6 +92,9 @@ pub enum AppAction {
     Stop {
         on_timeout: OnTimeout,
         restart_on_neutral: bool,
+        /// Arguments and folder for the restart on `neutral`.
+        args: Vec<String>,
+        cwd: Option<PathBuf>,
     },
     Suspend {
         /// Entry override, else `settings.trim`.
@@ -245,6 +261,7 @@ struct RawApp {
     on_timeout: Option<Spanned<OnTimeout>>,
     restart_on_neutral: Option<Spanned<bool>>,
     trim: Option<Spanned<bool>>,
+    confirmed: Option<Spanned<bool>>,
 }
 
 struct Check<'a> {
@@ -394,41 +411,75 @@ impl Check<'_> {
                 .action
                 .as_ref()
                 .map_or(settings.default_action, |a| *a.get_ref());
-            // C6: every option belongs to exactly one action.
+            // C6: every option belongs to certain actions.
+            const STOP: &[Action] = &[Action::Stop];
+            const LAUNCH: &[Action] = &[Action::Start, Action::Stop];
+            const TOUCH: &[Action] = &[Action::Stop, Action::Suspend];
             let options = [
-                ("args", raw.args.as_ref().map(Spanned::span), Action::Start),
-                ("cwd", raw.cwd.as_ref().map(Spanned::span), Action::Start),
+                ("args", raw.args.as_ref().map(Spanned::span), LAUNCH),
+                ("cwd", raw.cwd.as_ref().map(Spanned::span), LAUNCH),
                 (
                     "on_timeout",
                     raw.on_timeout.as_ref().map(Spanned::span),
-                    Action::Stop,
+                    STOP,
                 ),
                 (
                     "restart_on_neutral",
                     raw.restart_on_neutral.as_ref().map(Spanned::span),
-                    Action::Stop,
+                    STOP,
                 ),
                 (
                     "trim",
                     raw.trim.as_ref().map(Spanned::span),
-                    Action::Suspend,
+                    &[Action::Suspend][..],
+                ),
+                (
+                    "confirmed",
+                    raw.confirmed.as_ref().map(Spanned::span),
+                    TOUCH,
                 ),
             ];
             for (key, option_span, valid_for) in options {
                 if let Some(option_span) = option_span
-                    && action != valid_for
+                    && !valid_for.contains(&action)
                 {
+                    let names: Vec<String> = valid_for
+                        .iter()
+                        .map(|a| format!("\"{}\"", a.name()))
+                        .collect();
                     self.error(
                         &option_span,
                         format!(
-                            "{key} is only valid with action = \"{}\", but \"{exe}\" has \
+                            "{key} is only valid with action = {}, but \"{exe}\" has \
                              action = \"{}\"",
-                            valid_for.name(),
+                            names.join(" or "),
                             action.name()
                         ),
                     );
                 }
             }
+            let restart = raw
+                .restart_on_neutral
+                .as_ref()
+                .is_some_and(|r| *r.get_ref());
+            if action == Action::Stop && !restart {
+                // Arguments of a stop entry are for the restart only.
+                for (key, option_span) in [
+                    ("args", raw.args.as_ref().map(Spanned::span)),
+                    ("cwd", raw.cwd.as_ref().map(Spanned::span)),
+                ] {
+                    if let Some(option_span) = option_span {
+                        self.error(
+                            &option_span,
+                            format!(
+                                "{key} of a stop entry is used for the restart and needs \
+                                 restart_on_neutral = true"
+                            ),
+                        );
+                    }
+                }
+            }
+            let confirmed = raw.confirmed.is_some_and(Spanned::into_inner);
 
             let action = match action {
                 Action::Start => {
@@ -448,14 +499,21 @@ impl Check<'_> {
                 }
                 Action::Stop => AppAction::Stop {
                     on_timeout: raw.on_timeout.map_or(OnTimeout::Kill, Spanned::into_inner),
-                    restart_on_neutral: raw.restart_on_neutral.is_some_and(Spanned::into_inner),
+                    restart_on_neutral: restart,
+                    args: raw.args.map(Spanned::into_inner).unwrap_or_default(),
+                    cwd: self.absolute_path(raw.cwd.as_ref(), "cwd"),
                 },
                 Action::Suspend => AppAction::Suspend {
                     trim: raw.trim.map_or(settings.trim, Spanned::into_inner),
                 },
                 Action::Ignore => AppAction::Ignore,
             };
-            apps.push(App { exe, path, action });
+            apps.push(App {
+                exe,
+                path,
+                action,
+                confirmed,
+            });
         }
         apps
     }
@@ -587,6 +645,7 @@ hotkey = "Ctrl+Shift+Alt+F1"
                     exe: "browser.exe".into(),
                     path: None,
                     action: AppAction::Suspend { trim: true },
+                    confirmed: false,
                 },
                 App {
                     exe: "tool.exe".into(),
@@ -595,6 +654,7 @@ hotkey = "Ctrl+Shift+Alt+F1"
                         args: vec!["--minimized".into()],
                         cwd: Some(PathBuf::from("C:\\tools")),
                     },
+                    confirmed: false,
                 },
                 App {
                     exe: "chat.exe".into(),
@@ -602,7 +662,10 @@ hotkey = "Ctrl+Shift+Alt+F1"
                     action: AppAction::Stop {
                         on_timeout: OnTimeout::Keep,
                         restart_on_neutral: true,
+                        args: Vec::new(),
+                        cwd: None,
                     },
+                    confirmed: false,
                 },
             ]
         );
@@ -627,7 +690,10 @@ name = "a"
                 action: AppAction::Stop {
                     on_timeout: OnTimeout::Kill,
                     restart_on_neutral: false,
+                    args: Vec::new(),
+                    cwd: None,
                 },
+                confirmed: false,
             }
         );
     }
@@ -754,7 +820,7 @@ name = "a"
     fn c6_options_belong_to_one_action() {
         for (option, action) in [
             ("args = [\"-x\"]", "suspend"),
-            ("cwd = \"C:\\\\x\"", "stop"),
+            ("cwd = \"C:\\\\x\"", "ignore"),
             ("on_timeout = \"keep\"", "suspend"),
             ("restart_on_neutral = true", "ignore"),
             ("trim = false", "stop"),
@@ -765,6 +831,56 @@ name = "a"
             let (line, message) = rejected(&text);
             assert_eq!(line, 6, "{option}");
             assert!(message.contains("only valid with"), "{message}");
+        }
+    }
+
+    #[test]
+    fn c6_stop_entry_may_carry_restart_arguments() {
+        let loaded = ok(r#"
+[[profile]]
+name = "a"
+  [[profile.app]]
+  exe = "chat.exe"
+  action = "stop"
+  restart_on_neutral = true
+  args = ["--minimized"]
+  cwd = "C:\\chat"
+"#);
+        assert_eq!(
+            loaded.config.profiles[0].apps[0].action,
+            AppAction::Stop {
+                on_timeout: OnTimeout::Kill,
+                restart_on_neutral: true,
+                args: vec!["--minimized".into()],
+                cwd: Some(PathBuf::from("C:\\chat")),
+            }
+        );
+
+        // Without a restart the arguments would never be used.
+        let (line, message) = rejected(
+            "[[profile]]\nname = \"a\"\n[[profile.app]]\nexe = \"chat.exe\"\naction = \"stop\"\nargs = [\"-x\"]\n",
+        );
+        assert_eq!(line, 6);
+        assert!(message.contains("restart_on_neutral = true"), "{message}");
+    }
+
+    #[test]
+    fn p6_confirmed_is_for_entries_that_touch_a_program() {
+        let loaded = ok(
+            "[[profile]]\nname = \"a\"\n[[profile.app]]\nexe = \"a.exe\"\nconfirmed = true\n\
+             [[profile.app]]\nexe = \"b.exe\"\naction = \"stop\"\n",
+        );
+        let apps = &loaded.config.profiles[0].apps;
+        assert!(apps[0].confirmed);
+        assert!(!apps[1].confirmed);
+
+        for action in ["start", "ignore"] {
+            let text = format!(
+                "[[profile]]\nname = \"a\"\n[[profile.app]]\nexe = \"a.exe\"\npath = \"C:\\\\x\\\\a.exe\"\naction = \"{action}\"\nconfirmed = true\n"
+            );
+            let (line, message) = rejected(&text);
+            assert_eq!(line, 7, "{action}");
+            assert!(message.contains("confirmed is only valid"), "{message}");
         }
     }
 
