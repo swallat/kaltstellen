@@ -8,6 +8,7 @@
 //! - [`engine`]: switch planner and executor (W1 to W6).
 //! - [`state`]: state file and recovery (S1 to S10).
 //! - [`cli`]: command-line interface (U2, E2).
+//! - [`hotkey`]: hotkey syntax (C7).
 //! - [`error`], [`logging`], [`paths`]: shared infrastructure.
 
 // Q4: the compiler rejects `unsafe` everywhere except in `process`.
@@ -18,6 +19,7 @@ pub mod cli;
 pub mod config;
 pub mod engine;
 pub mod error;
+pub mod hotkey;
 pub mod logging;
 pub mod paths;
 #[allow(unsafe_code)]

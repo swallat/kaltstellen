@@ -1,11 +1,13 @@
 //! Command-line interface (U2). Exit codes follow spec E2.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use log::{LevelFilter, info, warn};
 
+use crate::config;
 use crate::logging;
 use crate::paths;
 use crate::process::{self, ProcessInfo};
@@ -35,17 +37,72 @@ enum Command {
         /// Executable name, e.g. "notepad" or "notepad.exe"
         name: String,
     },
+    /// Validate the configuration file and show what it defines
+    CheckConfig {
+        /// File to check instead of %APPDATA%\kaltstellen\config.toml
+        file: Option<PathBuf>,
+    },
 }
+
+/// E2 exit codes.
+const EXIT_ERRORS: u8 = 1;
+const EXIT_CONFIG_INVALID: u8 = 2;
 
 pub fn main() -> ExitCode {
     let cli = Cli::parse();
     init_logging();
+    if let Command::CheckConfig { file } = cli.command {
+        return ExitCode::from(check_config(file));
+    }
     match run(cli) {
         Ok(true) => ExitCode::SUCCESS,
-        Ok(false) => ExitCode::FAILURE,
+        Ok(false) => ExitCode::from(EXIT_ERRORS),
         Err(err) => {
             eprintln!("error: {err:#}");
-            ExitCode::FAILURE
+            ExitCode::from(EXIT_ERRORS)
+        }
+    }
+}
+
+/// Prints problems as `file:line: message`, the form editors can jump to.
+fn check_config(file: Option<PathBuf>) -> u8 {
+    let Some(file) = file.or_else(paths::config_file) else {
+        eprintln!("error: no configuration directory (APPDATA unset); name a file");
+        return EXIT_CONFIG_INVALID;
+    };
+    let location = |issue: &config::Issue| match issue.line {
+        Some(line) => format!("{}:{line}", file.display()),
+        None => file.display().to_string(),
+    };
+    match config::load(&file) {
+        Ok(loaded) => {
+            for warning in &loaded.warnings {
+                eprintln!("{}: warning: {}", location(warning), warning.message);
+            }
+            println!("{}: ok", file.display());
+            for profile in &loaded.config.profiles {
+                let hotkey = profile
+                    .hotkey
+                    .map_or(String::new(), |h| format!(", hotkey {h}"));
+                println!(
+                    "  profile \"{}\": {} program(s){hotkey}",
+                    profile.name,
+                    profile.apps.len()
+                );
+            }
+            0
+        }
+        Err(rejected) => {
+            warn!("{}: {rejected}", file.display());
+            for issue in &rejected.issues {
+                eprintln!(
+                    "{}: error {}: {}",
+                    location(issue),
+                    rejected.code,
+                    issue.message
+                );
+            }
+            EXIT_CONFIG_INVALID
         }
     }
 }
@@ -91,6 +148,7 @@ fn run(cli: Cli) -> Result<bool> {
             Ok(())
         }),
         Command::Resume { name } => for_each(&name, "resumed", |p| process::resume(p.pid)),
+        Command::CheckConfig { .. } => unreachable!("handled in main"),
     }
 }
 

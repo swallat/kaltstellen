@@ -94,6 +94,14 @@ hotkey = "Ctrl+Shift+Alt+F1"
 - **C5** Hotkeys must be unique. A hotkey that cannot be registered (taken by another program) is reported once at start and ignored; the profile stays usable from tray and command line.
 - **C6** `args` only for `start`; `restart_on_neutral` and `on_timeout` only for `stop`. Other combinations are errors. An entry with `action = "start"` requires `path` **[r2]** (a name alone cannot be launched).
 - **C7 Hotkey syntax** **[r2]**: modifiers plus one key. `Ctrl+Alt` combined with a printable key is rejected with a warning, because on layouts with AltGr (such as German) `Ctrl+Alt+key` produces characters like `{`, `[`, `@`, `€` and registering it would steal them. Function keys with `Ctrl+Shift+Alt` are recommended. `RegisterHotKey` uses `MOD_NOREPEAT`. Hotkeys do not fire on the secure desktop (UAC, lock screen).
+- **C8 Details fixed while implementing** **[assumed]** (WP3):
+  - `action` may be omitted in an entry; it then takes `settings.default_action`, which cannot be `start`.
+  - `exe` is a file name without folder; a name without extension gets `.exe`. If `path` is set it must be absolute and end in that file name. An empty `path` or `cwd` counts as not set.
+  - C2 with A7: two entries of one profile may share an `exe` only if both have a `path` and the paths differ.
+  - `cwd` is valid only for `start`, the per-entry `trim` (R5) only for `suspend`.
+  - Profile names and hotkeys compare case-insensitively; names are trimmed.
+  - Hotkey keys: `A` to `Z`, `0` to `9`, `F1` to `F24`, `Space`, `Tab`, `Enter`, `Esc`, `Insert`, `Delete`, `Home`, `End`, `PageUp`, `PageDown` and the arrow keys; modifiers `Ctrl`, `Alt`, `Shift`, `Win`. A function key may stand alone, every other key needs a modifier. Malformed hotkeys are errors (C3); only the AltGr case of C7 is a warning.
+  - All rule violations of a file are reported together, each with its line.
 
 ## 6. State file
 

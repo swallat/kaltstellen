@@ -1,0 +1,68 @@
+# Example configuration for kaltstellen.
+#
+# Copy to %APPDATA%\kaltstellen\config.toml and adapt it. Check it with
+#
+#     kaltstellen check-config
+#
+# Unknown keys are errors, so typos are caught. The profile "neutral" is built
+# in: it has no entries and brings everything back.
+
+[settings]
+default_action = "suspend"      # action of entries that name none: suspend | stop | ignore
+trim = true                     # move a frozen program's memory out of RAM
+stop_timeout_s = 8              # how long a program gets to close before on_timeout applies
+minimize_before_suspend = true  # avoids "not responding" ghost windows
+
+[[profile]]
+name = "focus"
+# Modifiers plus one key. Function keys with Ctrl+Shift+Alt are recommended;
+# Ctrl+Alt with a letter or digit is ignored because it collides with AltGr.
+hotkey = "Ctrl+Shift+Alt+F1"
+
+  # Freeze a program. This is the default action.
+  [[profile.app]]
+  exe = "browser.exe"
+
+  # Freeze, but leave its memory where it is (faster to resume).
+  [[profile.app]]
+  exe = "editor.exe"
+  action = "suspend"
+  trim = false
+
+  # Start a program unless it is already running. A start entry needs a path.
+  [[profile.app]]
+  exe = "tool.exe"
+  path = "C:\\tools\\tool.exe"
+  action = "start"
+  args = ["--minimized"]
+  cwd = "C:\\tools"
+
+  # Close a program that does not tolerate being frozen.
+  [[profile.app]]
+  exe = "chat.exe"
+  action = "stop"
+  on_timeout = "kill"           # kill | keep (keep: leave it running and report)
+  restart_on_neutral = true     # start it again when switching to "neutral"
+
+  # A deliberate decision to leave a program alone.
+  [[profile.app]]
+  exe = "player.exe"
+  action = "ignore"
+
+[[profile]]
+name = "studio"
+hotkey = "Ctrl+Shift+Alt+F2"
+
+  [[profile.app]]
+  exe = "browser.exe"
+
+  # Two programs with the same name are told apart by their path.
+  [[profile.app]]
+  exe = "helper.exe"
+  path = "C:\\studio\\helper.exe"
+  action = "start"
+
+  [[profile.app]]
+  exe = "helper.exe"
+  path = "C:\\other\\helper.exe"
+  action = "stop"

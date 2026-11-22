@@ -44,3 +44,8 @@ name. Purpose: find out which real apps tolerate being frozen.
 - WP1 foundation (2026-11-22): module layout, error codes (`docs/errors.md`),
   rotating file logger, test fixtures (`tests/fixtures`), CI with fmt,
   unsafe check, clippy and tests. Acceptance checklist in `docs/acceptance.md`.
+- WP3 configuration (2026-11-22): TOML schema and rules C1 to C7 in
+  `src/config.rs`, hotkey syntax in `src/hotkey.rs`, `kaltstellen check-config`
+  (exit code 2 when invalid), `config.example.toml`. Details decided on the
+  way are in spec C8. Still open from WP3: hot reload (C4) and `settings.json`,
+  both needed first by the tray app; T8 on the VM.

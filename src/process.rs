@@ -36,6 +36,9 @@ const PROTECTED: &[&str] = &[
     "fontdrvhost.exe",
     "dwm.exe",
     "explorer.exe",
+    "conhost.exe",
+    "openconsole.exe",
+    "werfault.exe",
 ];
 
 #[derive(Debug, Clone)]
@@ -105,7 +108,7 @@ pub fn find(name: &str) -> Result<Vec<ProcessInfo>> {
     } else {
         format!("{name}.exe")
     };
-    if is_protected(name) || is_protected(&wanted) {
+    if is_hard_protected(name) || is_hard_protected(&wanted) {
         bail!("{name} is a protected system process and will not be touched");
     }
     let own_pid = std::process::id();
@@ -115,7 +118,9 @@ pub fn find(name: &str) -> Result<Vec<ProcessInfo>> {
         .collect())
 }
 
-fn is_protected(name: &str) -> bool {
+/// Whether the executable name is on the hard-protected list (spec P6).
+/// Expects the name with its extension; the comparison ignores case.
+pub fn is_hard_protected(name: &str) -> bool {
     PROTECTED.iter().any(|p| p.eq_ignore_ascii_case(name))
 }
 

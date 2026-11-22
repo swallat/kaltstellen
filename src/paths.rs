@@ -17,6 +17,11 @@ pub fn config_dir() -> Option<PathBuf> {
     dir("KALTSTELLEN_CONFIG_DIR", "APPDATA")
 }
 
+/// The configuration file `config.toml`.
+pub fn config_file() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("config.toml"))
+}
+
 /// Directory of the state file, the seen list and the logs.
 pub fn data_dir() -> Option<PathBuf> {
     dir("KALTSTELLEN_DATA_DIR", "LOCALAPPDATA")
