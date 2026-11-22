@@ -52,6 +52,8 @@ const WM_WAKE: u32 = WM_APP + 2;
 const ICON_ID: u32 = 1;
 /// The one timer of the tray window (UP1: the next update check).
 const TIMER_ID: usize = 1;
+/// The repeating re-check of errors (L9).
+const RECHECK_ID: usize = 2;
 const SHUTDOWN_LEVEL: u32 = 0x3FF;
 /// `szTip` has 128 units; the last one stays NUL.
 const TIP_UNITS: usize = 127;
@@ -88,6 +90,33 @@ pub trait Handler {
     fn hotkey(&mut self, id: i32);
     /// The timer set with [`set_timer`] is due (it fires once).
     fn timer(&mut self);
+    /// The repeating timer of [`set_recheck`] fired (L9).
+    fn recheck(&mut self);
+}
+
+/// L9: a repeating timer while errors of the last switch could still
+/// resolve themselves; `None` stops it. Window thread only.
+pub fn set_recheck(interval: Option<std::time::Duration>) {
+    let hwnd = WINDOW.with_borrow(|w| w.as_ref().map(|w| w.hwnd));
+    let Some(hwnd) = hwnd else {
+        return;
+    };
+    // SAFETY: the window belongs to this thread; no callback.
+    unsafe {
+        match interval {
+            Some(interval) => {
+                let ms = u32::try_from(interval.as_millis())
+                    .unwrap_or(u32::MAX)
+                    .max(10);
+                if SetTimer(Some(hwnd), RECHECK_ID, ms, None) == 0 {
+                    warn!("cannot set the re-check timer");
+                }
+            }
+            None => {
+                let _ = KillTimer(Some(hwnd), RECHECK_ID);
+            }
+        }
+    }
 }
 
 /// Registers a global hotkey on the tray window. Window thread only. The
@@ -457,6 +486,10 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         WM_POWERBROADCAST => {
             with_handler(|h| h.power(wparam.0 as u32));
             LRESULT(1)
+        }
+        WM_TIMER if wparam.0 == RECHECK_ID => {
+            with_handler(|h| h.recheck());
+            LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_ID => {
             // One-shot: the handler sets the next one.

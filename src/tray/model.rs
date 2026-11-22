@@ -5,6 +5,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::config::NEUTRAL;
+use crate::error::{Code, Error, Step};
 use crate::process::Guest;
 
 /// Profile names compare like `Config::profile` does: trimmed, any case.
@@ -177,7 +178,8 @@ pub struct Status {
     /// Target of the switch that runs right now.
     pub switching: Option<String>,
     /// Errors of the last finished switch (W2); empty after a clean one.
-    pub switch_errors: Vec<String>,
+    /// They stay until the next switch or until their cause is gone (L9).
+    pub switch_errors: Vec<SwitchError>,
     /// The configuration file is invalid (C3); the last valid one is used.
     pub config_error: Option<String>,
     /// The pipe for the command line could not be set up (L1).
@@ -196,6 +198,75 @@ pub struct Status {
     pub update_locked: bool,
     /// UP1: a newer version found by the last check.
     pub update: Option<UpdateOffer>,
+}
+
+/// L9: when an error of the last switch counts as resolved without a switch,
+/// judged from the handle-free snapshot (A7: no process is opened).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolution {
+    /// Resolved once a process of this program runs (a failed start).
+    Runs(String),
+    /// Resolved once no process of this program runs (a failed stop,
+    /// close or freeze).
+    Gone(String),
+}
+
+/// One error of the last switch, as shown and as checked again (L9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchError {
+    pub text: String,
+    /// `None`: nothing observable resolves it; it stays until the next
+    /// switch.
+    pub resolution: Option<Resolution>,
+}
+
+impl SwitchError {
+    /// L9 rules per error code (`[assumed]` in the spec):
+    /// - `KS110` start failed, `KS111` start needs elevation: resolved when
+    ///   the program runs.
+    /// - `KS108` close timed out (`on_timeout = "keep"`), `KS109` terminate
+    ///   failed, `KS105` suspend failed: resolved when the program no
+    ///   longer runs.
+    /// - `KS102` needs administrator, `KS103` protected, in the stop or
+    ///   suspend step: resolved when the program no longer runs.
+    /// - Everything else (state or log I/O, warn list, resume, snapshot):
+    ///   stays until the next switch.
+    pub fn of(error: &Error) -> Self {
+        let program = error.program.clone();
+        let resolution = program.and_then(|exe| match (error.code, error.step) {
+            (Code::StartFailed | Code::ElevationRequired, _) => Some(Resolution::Runs(exe)),
+            (Code::CloseTimeout | Code::TerminateFailed | Code::SuspendFailed, _) => {
+                Some(Resolution::Gone(exe))
+            }
+            (Code::NeedsAdmin | Code::Protected, Some(Step::Stop | Step::Suspend)) => {
+                Some(Resolution::Gone(exe))
+            }
+            _ => None,
+        });
+        Self {
+            text: error.to_string(),
+            resolution,
+        }
+    }
+
+    /// Whether `running(exe)` shows the cause is gone.
+    pub fn resolved(&self, running: &dyn Fn(&str) -> bool) -> bool {
+        match &self.resolution {
+            Some(Resolution::Runs(exe)) => running(exe),
+            Some(Resolution::Gone(exe)) => !running(exe),
+            None => false,
+        }
+    }
+}
+
+impl From<&str> for SwitchError {
+    /// An error without an observable resolution.
+    fn from(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            resolution: None,
+        }
+    }
 }
 
 /// UP1: a newer version the menu offers.
@@ -249,16 +320,26 @@ impl Status {
 
     /// One switch finished. A clean switch clears the error state (spec
     /// section 8); one with errors sets it.
-    pub fn finished(&mut self, active: String, errors: Vec<String>) {
+    pub fn finished(&mut self, active: String, errors: Vec<SwitchError>) {
         self.active = active;
         self.switching = None;
         self.switch_errors = errors;
     }
 
-    /// The user has seen the errors of the last switch. Errors that still
-    /// hold (invalid configuration, no pipe) stay until their cause is gone.
-    pub fn acknowledge(&mut self) {
-        self.switch_errors.clear();
+    /// L9: drops the errors whose cause is gone and returns them. An
+    /// invalid configuration or a missing pipe is not touched here.
+    pub fn resolve(&mut self, running: &dyn Fn(&str) -> bool) -> Vec<SwitchError> {
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.switch_errors)
+            .into_iter()
+            .partition(|e| e.resolved(running));
+        self.switch_errors = kept;
+        gone
+    }
+
+    /// Whether a later check could still resolve an error (the re-check
+    /// timer runs only then).
+    pub fn resolvable(&self) -> bool {
+        self.switch_errors.iter().any(|e| e.resolution.is_some())
     }
 
     pub fn tooltip(&self) -> String {
@@ -281,7 +362,7 @@ impl Status {
     pub fn status_line(&self) -> Option<String> {
         let line = if let Some(target) = &self.switching {
             format!("Switching to {target}…")
-        } else if let Some(first) = self.switch_errors.first() {
+        } else if let Some(first) = self.switch_errors.first().map(|e| &e.text) {
             match self.switch_errors.len() {
                 1 => format!("Last switch: {first}"),
                 n => format!("Last switch: {n} errors, first: {first}"),
@@ -320,8 +401,6 @@ fn truncate(text: &str, max_units: usize) -> String {
 pub enum Command {
     Switch(String),
     ToggleAutostart,
-    /// Clears the error state of the last switch without a new switch.
-    Acknowledge,
     /// Starts the main window (`kaltstellen gui`).
     OpenWindow,
     /// UP1: switches the daily update check on or off.
@@ -350,8 +429,6 @@ pub const ID_QUIT: u16 = 2;
 pub const ID_LAST: u16 = 3;
 /// Switches start at sign-in on or off.
 pub const ID_AUTOSTART: u16 = 4;
-/// Clears the error state (spec section 8, "when acknowledged").
-pub const ID_ACKNOWLEDGE: u16 = 5;
 pub const ID_OPEN: u16 = 6;
 /// `Unassigned programs (N)`: opens the main window.
 pub const ID_UNASSIGNED: u16 = 7;
@@ -423,14 +500,6 @@ impl Menu {
         menu.items.push(Item::Separator);
         if let Some(line) = status.status_line() {
             menu.disabled(escape(&line));
-            if !status.switch_errors.is_empty() {
-                menu.entry(
-                    ID_ACKNOWLEDGE,
-                    "&Clear error state".to_owned(),
-                    false,
-                    Command::Acknowledge,
-                );
-            }
             menu.items.push(Item::Separator);
         }
         if status.unassigned > 0 && !status.is_neutral() {
@@ -752,19 +821,50 @@ mod tests {
     }
 
     #[test]
-    fn errors_of_the_last_switch_can_be_acknowledged() {
+    fn l9_errors_resolve_when_their_cause_is_gone() {
+        let start = Error::new(Code::StartFailed, "missing")
+            .program("tool.exe")
+            .step(Step::Start);
+        let keep = Error::new(Code::CloseTimeout, "left running")
+            .program("chat.exe")
+            .step(Step::Stop);
+        let admin = Error::new(Code::NeedsAdmin, "denied")
+            .program("svc.exe")
+            .step(Step::Suspend);
+        let io = Error::new(Code::StateIo, "disk full");
         let mut status = Status::default();
-        status.finished("focus".into(), vec!["KS105 boom".into()]);
-        let menu = Menu::build(&[], &status);
-        assert_eq!(menu.command(ID_ACKNOWLEDGE), Some(&Command::Acknowledge));
-        status.acknowledge();
-        assert_eq!(status.icon(), Icon::Active);
-        assert_eq!(Menu::build(&[], &status).command(ID_ACKNOWLEDGE), None);
-        // A broken configuration is not acknowledged away.
-        status.config_error = Some("KS202".into());
-        status.acknowledge();
+        status.finished(
+            "focus".into(),
+            [&start, &keep, &admin, &io]
+                .iter()
+                .map(|e| SwitchError::of(e))
+                .collect(),
+        );
         assert_eq!(status.icon(), Icon::Error);
-        assert_eq!(Menu::build(&[], &status).command(ID_ACKNOWLEDGE), None);
+        assert!(status.resolvable());
+        // Nothing changed yet: tool.exe does not run, the others still do.
+        let running = |exe: &str| exe != "tool.exe";
+        assert!(status.resolve(&running).is_empty());
+        // tool.exe started by hand, chat.exe and svc.exe closed by hand.
+        let running = |exe: &str| exe == "tool.exe";
+        let gone = status.resolve(&running);
+        assert_eq!(gone.len(), 3);
+        assert_eq!(status.switch_errors.len(), 1, "the state error stays");
+        assert!(!status.resolvable(), "no timer needed for it");
+        assert_eq!(status.icon(), Icon::Error);
+        // The next switch replaces the list.
+        status.finished("focus".into(), vec![]);
+        assert_eq!(status.icon(), Icon::Active);
+        // A broken configuration is not resolved this way.
+        status.config_error = Some("KS202".into());
+        assert!(status.resolve(&|_: &str| true).is_empty());
+        assert_eq!(status.icon(), Icon::Error);
+        assert!(
+            Menu::build(&[], &status)
+                .items
+                .iter()
+                .all(|i| !matches!(i, Item::Entry { label, .. } if label.contains("Clear")))
+        );
     }
 
     #[test]
@@ -832,7 +932,6 @@ mod tests {
                 "&Neutral",
                 "-",
                 "Last switch: KS110 [start] tool.exe: missing (disabled)",
-                "&Clear error state",
                 "-",
                 "Check for updates &daily",
                 "&Open kaltstellen…",

@@ -19,7 +19,7 @@ use common::*;
 use kaltstellen::autostart::{self, RUN_KEY, VALUE};
 use kaltstellen::state::Store;
 use kaltstellen::tray::model::{
-    ID_ACKNOWLEDGE, ID_AUTOSTART, ID_LAST, ID_NEUTRAL, ID_OPEN, ID_PROFILE_BASE, ID_QUIT,
+    ID_AUTOSTART, ID_LAST, ID_NEUTRAL, ID_OPEN, ID_PROFILE_BASE, ID_QUIT,
 };
 use kaltstellen::win32::registry;
 use kaltstellen::win32::tray::CLASS;
@@ -33,7 +33,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
-    WM_COMMAND, WM_ENDSESSION, WM_HOTKEY, WM_POWERBROADCAST, WM_QUERYENDSESSION,
+    WM_COMMAND, WM_ENDSESSION, WM_HOTKEY, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER,
 };
 use windows::core::BOOL;
 
@@ -732,22 +732,34 @@ fn autostart_from_the_command_line_and_the_menu_uses_the_injected_key() {
 }
 
 #[test]
-fn w2_error_state_can_be_acknowledged_without_a_switch() {
+fn l9_an_error_resolves_by_itself_when_its_cause_is_gone() {
     let mut t = Tray::new();
-    let missing = t.dir.path().join("ks-ack-missing.exe");
+    t.cleanup.push(KillProgram("ks-l9-tool.exe".to_owned()));
+    let missing = t.dir.path().join("tools").join("ks-l9-tool.exe");
     t.config(&format!(
-        "[[profile]]\nname = \"broken\"\n\n  [[profile.app]]\n  exe = \"ks-ack-missing.exe\"\n  path = '{}'\n  action = \"start\"\n",
+        "[[profile]]\nname = \"work\"\n\n  [[profile.app]]\n  exe = \"ks-l9-tool.exe\"\n  path = '{}'\n  action = \"start\"\n",
         missing.display()
     ));
     t.start(1);
     t.click(ID_PROFILE_BASE);
     t.wait_log("tray: icon error", 1);
-    t.click(ID_ACKNOWLEDGE);
-    t.wait_log("tray: error state acknowledged", 1);
+    // A re-check before anything changed keeps the error.
+    t.post(WM_TIMER, 2);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(t.logged("error resolved by itself"), 0);
+    // The owner starts the program by hand: the error is gone without a
+    // switch at the next re-check (posted here instead of waiting 30 s).
+    fs::create_dir_all(missing.parent().unwrap()).unwrap();
+    fs::copy(HEARTBEAT, &missing).unwrap();
+    let beat = t.dir.path().join("tool.beat");
+    let _tool = Fixture::spawn(str_of(&missing), &[str_of(&beat)]);
+    assert!(beating(&beat));
+    t.post(WM_TIMER, 2);
+    t.wait_log("tray: error resolved by itself: KS110", 1);
     t.wait_log("tray: icon active", 1);
     assert_eq!(
         t.store().peek().unwrap().active_profile,
-        "broken",
+        "work",
         "no switch"
     );
     assert_eq!(t.quit(), Some(0));

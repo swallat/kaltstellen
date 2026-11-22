@@ -32,6 +32,11 @@ reasoning is. Implementation choices made without the owner are marked
    run; after they exit, their ancestors are ordinary processes for the rest
    of that switch.
 
+8. **L9 re-check** `[assumed]`: errors are checked again when the menu
+   opens and every 30 s while one could still resolve; rules per error code
+   in spec L9 (start errors resolve when the program runs, stop and freeze
+   errors when it no longer runs, the rest stays until the next switch).
+
 ## Decided by the owner on 2026-11-23
 
 - **L5 pipe**: as built, including no fallback when a running tray does not

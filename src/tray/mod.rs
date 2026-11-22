@@ -29,10 +29,11 @@ use crate::config::{self, NEUTRAL};
 use crate::error::{Code, Error};
 use crate::exit;
 use crate::paths;
+use crate::process::Snapshot;
 use crate::settings;
 use crate::state::Store;
 use crate::win32::{console, instance::Instance, pipe, tray as window};
-use model::{Command as MenuCommand, Decision, Guests, Icon, Menu, Status};
+use model::{Command as MenuCommand, Decision, Guests, Icon, Menu, Status, SwitchError};
 use protocol::{Body, Command, Finished, TrayStatus};
 use server::Incoming;
 use source::Source;
@@ -289,6 +290,10 @@ struct App {
     updates: update::Updates,
 }
 
+/// L9: how often errors of the last switch are checked again while one
+/// could still resolve itself.
+const RECHECK: Duration = Duration::from_secs(30);
+
 /// How long `WM_QUERYENDSESSION` waits for everything to be resumed. Windows
 /// treats a window that takes about 5 s as not responding.
 const END_SESSION_WAIT: Duration = Duration::from_secs(4);
@@ -323,6 +328,41 @@ impl App {
     }
 
     /// A request from the menu (`waiter` is `None`) or the pipe.
+    /// L9: runs the re-check timer while an error could still resolve.
+    fn arm_recheck(&self) {
+        window::set_recheck(self.status.resolvable().then_some(RECHECK));
+    }
+
+    /// L9: drops the errors of the last switch whose cause is gone, from
+    /// the handle-free snapshot (no process is opened, A7).
+    fn recheck_errors(&mut self) {
+        if !self.status.resolvable() {
+            window::set_recheck(None);
+            return;
+        }
+        let Ok(snapshot) = Snapshot::take() else {
+            return;
+        };
+        let session = snapshot.own_session();
+        let running = |exe: &str| {
+            let exe = exe.to_lowercase();
+            let exe = if exe.ends_with(".exe") {
+                exe
+            } else {
+                format!("{exe}.exe")
+            };
+            snapshot
+                .processes()
+                .iter()
+                .any(|p| Some(p.session_id) == session && p.name.to_lowercase() == exe)
+        };
+        for gone in self.status.resolve(&running) {
+            info!("tray: error resolved by itself: {}", gone.text);
+        }
+        self.arm_recheck();
+        self.redraw();
+    }
+
     /// WP9: registers what the configuration asks for now (C4 re-read),
     /// releases what it no longer does.
     fn sync_hotkeys(&mut self) {
@@ -540,7 +580,11 @@ impl App {
             window::exit();
             return;
         }
-        self.status.finished(done.outcome.active, errors);
+        self.status.finished(
+            done.outcome.active,
+            done.outcome.errors.iter().map(SwitchError::of).collect(),
+        );
+        self.arm_recheck();
         if done.outcome.ran && matches!(done.job, Job::Switch { .. }) {
             self.refresh_unassigned();
         }
@@ -679,11 +723,6 @@ impl window::Handler for App {
             Some(MenuCommand::OpenWindow) => open_window(),
             Some(MenuCommand::ToggleUpdateCheck) => self.toggle_update_check(),
             Some(MenuCommand::InstallUpdate) => update::open_install(),
-            Some(MenuCommand::Acknowledge) => {
-                info!("tray: error state acknowledged");
-                self.status.acknowledge();
-                self.redraw();
-            }
             Some(MenuCommand::Quit) => self.quit(),
             None => info!("tray: command {id} has no meaning; ignored"),
         }
@@ -706,6 +745,10 @@ impl window::Handler for App {
             self.schedule_update();
         }
         self.redraw();
+    }
+
+    fn recheck(&mut self) {
+        self.recheck_errors();
     }
 
     fn timer(&mut self) {

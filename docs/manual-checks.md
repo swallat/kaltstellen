@@ -24,9 +24,12 @@ Afterwards remove `%TEMP%\ks-manual` and `HKCU\Software\kaltstellen-manual`.
    `Quit`. Clicking elsewhere closes it.
 4. Choose a profile whose programs are not running: the icon turns orange,
    the tooltip names the profile, the profile is checked.
-5. Make a switch fail (a `start` entry with a missing `path`): the icon
-   turns red with an exclamation mark; the menu shows the error line and
-   `Clear error state`. Choose it: the icon is orange again.
+5. Make a switch fail (a `start` entry whose `path` does not exist yet):
+   the icon turns red with an exclamation mark and the menu shows the error
+   line; opening and closing the menu changes nothing. Now put the program
+   at that path and start it by hand: within about 30 s (or when the menu
+   opens) the error disappears and the icon is orange again, without a
+   switch.
 6. Break the configuration file (an unknown key): the icon turns red and the
    menu shows `Configuration invalid: …`; fix the file and open the menu
    again: the error is gone.
