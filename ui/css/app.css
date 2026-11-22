@@ -38,10 +38,7 @@ p { margin: 0; }
   background: var(--color-topbar); color: var(--color-on-topbar);
 }
 .brand { display: flex; align-items: center; gap: var(--space-2); font-size: 1.05rem; font-weight: 600; }
-.brand-mark {
-  display: inline-grid; place-items: center; width: 1.6rem; height: 1.6rem;
-  border-radius: 4px; background: var(--brand-blue); color: #FFFFFF; font-weight: 700;
-}
+.brand-mark { display: block; width: 1.75rem; height: 1.75rem; }
 .active-badge { margin-left: auto; font-size: 0.875rem; }
 .active-badge strong { color: var(--brand-orange); font-weight: 600; }
 .autostart { display: flex; align-items: center; gap: var(--space-1); font-size: 0.875rem; }

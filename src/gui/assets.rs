@@ -27,6 +27,12 @@ const FILES: &[(&str, &[u8], &str)] = &[
         include_bytes!("../../ui/js/bridge.js"),
         "text/javascript; charset=utf-8",
     ),
+    // The ice cube logo (branding/logos/09-eiswuerfel-warm-avatar.svg).
+    (
+        "img/logo.svg",
+        include_bytes!("../../ui/img/logo.svg"),
+        "image/svg+xml",
+    ),
 ];
 
 /// The file at `path` below the page's origin, with its MIME type.
@@ -48,13 +54,16 @@ mod tests {
     #[test]
     fn every_reference_of_the_page_is_embedded_and_nothing_is_remote() {
         let html = text("index.html");
-        for reference in ["css/tokens.css", "css/app.css", "js/app.js"] {
+        for reference in ["css/tokens.css", "css/app.css", "js/app.js", "img/logo.svg"] {
             assert!(html.contains(reference), "{reference}");
             assert!(get(reference).is_some(), "{reference} not embedded");
         }
         assert!(text("js/app.js").contains("from './bridge.js'"));
         for (name, bytes, _) in FILES {
-            let content = std::str::from_utf8(bytes).unwrap();
+            // The SVG namespace is a name, not something loaded.
+            let content = std::str::from_utf8(bytes)
+                .unwrap()
+                .replace("xmlns=\"http://www.w3.org/2000/svg\"", "");
             for remote in ["http://", "https://", "//cdn", "<script>"] {
                 assert!(!content.contains(remote), "{name} contains {remote}");
             }
