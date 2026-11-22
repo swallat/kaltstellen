@@ -6,34 +6,48 @@ publishes is defined in [release-requirements.md](release-requirements.md).
 
 ## Where the version comes from
 
-The version lives in one place: `version` in `Cargo.toml`. From there it goes
-into
+The tag sets the version. `Cargo.toml` only holds the placeholder
+`0.0.0-dev` and is never raised by hand.
 
-- `kaltstellen --version` (also `-v` and `-V`), which prints
-  `kaltstellen <version>`,
-- the file properties of the executable (file and product version),
-- the updater, which compares it with the latest release.
+- **Release build:** the workflow writes the version of the tag into
+  `Cargo.toml` and `Cargo.lock` (`scripts/set-version.sh`) and builds with
+  `KALTSTELLEN_RELEASE=1`. The executable then reports exactly that version
+  in `kaltstellen --version` (also `-v` and `-V`), in its file properties and
+  to the updater.
+- **Any other build** (local, VM, CI) is a development build. Its version is
+  derived from Git by `build.rs`: the last version tag, the commits since,
+  and the commit hash.
 
-The tag does not set the version. It must match it: the workflow fails when
-the tag is not exactly `v<version from Cargo.toml>`.
+  | Situation | `kaltstellen -v` |
+  | --- | --- |
+  | 5 commits after `v1.2.0` | `kaltstellen 1.2.1-dev.5+1a2b3c4` |
+  | exactly on `v1.2.0` | `kaltstellen 1.2.0+1a2b3c4` |
+  | 5 commits after `v1.3.0-rc.1` | `kaltstellen 1.3.0-rc.1.dev.5+1a2b3c4` |
+  | no version tag reachable (also a shallow clone) | `kaltstellen 0.0.0-dev+1a2b3c4` |
+  | no Git (source archive) | `kaltstellen 0.0.0-dev` |
+
+  The patch number is raised after a release, so a development build sorts
+  after the release it grew from. Development builds follow the stable
+  update channel and never install an update by themselves. Fetch the tags
+  (`git fetch --tags`) to get the right base. The hash is the commit that
+  was checked out; uncommitted changes are not shown. The file properties of
+  a development build show the placeholder.
 
 ## Steps
 
-1. On `main`, raise `version` in `Cargo.toml`, run `cargo check` so
-   `Cargo.lock` follows, and merge that change.
-2. Tag that commit of `main` and push the tag:
+1. Tag a commit of `main` and push the tag. That is all:
 
    ```text
    git tag -s v1.2.0 -m "kaltstellen 1.2.0"
    git push origin v1.2.0
    ```
 
-3. The workflow checks the tag (matches `Cargo.toml`, sits on a commit of
-   `main`), runs the same checks as CI, builds the executable with
-   `KALTSTELLEN_RELEASE=1`, checks that it reports the version, writes
-   `checksums.txt`, attaches a build provenance attestation and publishes the
-   GitHub release. A version with a `-` (`1.2.0-rc.1`) becomes a pre-release.
-
+2. The workflow checks the tag (form `v<MAJOR.MINOR.PATCH>` or with
+   `-<pre>`, on a commit of `main`), runs the same checks as CI, sets the
+   version, builds the executable, checks that it reports the version,
+   writes `checksums.txt`, attaches a build provenance attestation and
+   publishes the GitHub release. A version with a `-` (`1.2.0-rc.1`) becomes
+   a pre-release.
 The release is created as a draft and published only after all files are
 uploaded, so the updater never sees a release without its files.
 
@@ -41,7 +55,8 @@ uploaded, so the updater never sees a release without its files.
 
 - Run the workflow by hand (Actions, Release, Run workflow), or change
   `release.yml` in a pull request. Both build and check the same files and
-  keep them as the workflow artifact `release-files`; nothing is published.
+  keep them as the workflow artifact `release-files`, as version
+  `0.0.0-dryrun`; nothing is published.
 - A release that went wrong: delete the GitHub release and the tag, fix, tag
   again. Clients only ever see published releases.
 

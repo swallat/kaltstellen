@@ -10,10 +10,11 @@ updater, without changing the client.
 
 - Tag `v<version>`, for example `v1.2.0`. `<version>` is
   `MAJOR.MINOR.PATCH`, optionally `-<pre-release>` (`v1.2.0-beta.1`).
-- The version in `Cargo.toml` must equal the tag without `v`: the updater
-  starts the downloaded file with `--version` and refuses it unless it
-  prints exactly `kaltstellen <version>`. The workflow should check this
-  before building.
+- The executable must report the version of the tag: the updater starts the
+  downloaded file with `--version` and refuses it unless the first line is
+  `kaltstellen <version>` (build metadata after a `+` is ignored). The
+  workflow writes the tag's version into `Cargo.toml` before building and
+  checks the output.
 - A tag with `-` is published as a GitHub *pre-release*. `releases/latest`
   leaves pre-releases out, so only clients that run a pre-release see them.
 - Drafts are ignored by the updater; publish the release only when all files

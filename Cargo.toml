@@ -1,6 +1,8 @@
 [package]
 name = "kaltstellen"
-version = "0.1.0"
+# Placeholder: the release workflow sets the real version from the tag
+# (docs/releasing.md). Development builds append the commit hash.
+version = "0.0.0-dev"
 edition = "2024"
 description = "Switch between app profiles on Windows by suspending, stopping and starting processes"
 license = "MIT OR Apache-2.0"

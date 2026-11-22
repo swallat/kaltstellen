@@ -153,3 +153,7 @@ name. Purpose: find out which real apps tolerate being frozen.
   `release.yml` publishes on a tag `v<version>` that matches `Cargo.toml`
   and sits on `main`, dry run otherwise (`docs/releasing.md`). `-v` is
   accepted next to `-V` and `--version`. No release has been made.
+- Version from the tag (2026-11-23, owner decision): `Cargo.toml` holds
+  the placeholder `0.0.0-dev`; the release workflow sets the version from
+  the tag; development builds derive theirs from the last tag and the
+  commit (`build.rs`, `docs/releasing.md`).

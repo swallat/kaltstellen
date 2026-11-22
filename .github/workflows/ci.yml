@@ -47,8 +47,8 @@ jobs:
         shell: bash
         run: |
           cargo build --release --locked
-          version=$(scripts/release-version.sh | sed -n 's/^version=//p')
+          # A development build: placeholder or last tag, plus the commit hash.
           out=$(target/release/kaltstellen.exe --version | head -n 1 | tr -d '\r')
           echo "$out"
-          test "$out" = "kaltstellen $version"
+          echo "$out" | grep -Eq '^kaltstellen [0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?\+[0-9a-f]{7,}$'
           test "$(target/release/kaltstellen.exe -v | head -n 1 | tr -d '\r')" = "$out"

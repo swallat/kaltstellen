@@ -1,9 +1,10 @@
 name: Release
 
 # A tag v<version> on a commit of main builds and publishes a release with the
-# files the updater expects (docs/release-requirements.md). Everything else
-# is a dry run: it builds and checks the same files and keeps them as a
-# workflow artifact, but publishes nothing.
+# files the updater expects (docs/release-requirements.md). The tag sets the
+# version: Cargo.toml only holds a placeholder. Everything else is a dry run:
+# it builds and checks the same files as version 0.0.0-dryrun and keeps them
+# as a workflow artifact, but publishes nothing.
 on:
   push:
     tags: ["v*"]
@@ -12,6 +13,7 @@ on:
     paths:
       - .github/workflows/release.yml
       - scripts/release-version.sh
+      - scripts/set-version.sh
 
 permissions:
   contents: read
@@ -66,6 +68,9 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install
       - run: rustup target add ${{ matrix.target }}
+      - name: Set the version from the tag
+        shell: bash
+        run: scripts/set-version.sh "$VERSION"
       # No build cache: a release is built from scratch.
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: The executable reports exactly this version
