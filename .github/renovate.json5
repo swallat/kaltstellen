@@ -1,0 +1,28 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended", ":dependencyDashboard", "helpers:pinGitHubActionDigests"],
+  timezone: "Europe/Berlin",
+  schedule: ["before 6am on monday"],
+  // Security fixes are raised immediately, regardless of the schedule.
+  vulnerabilityAlerts: {
+    enabled: true,
+    schedule: ["at any time"],
+    labels: ["security"],
+  },
+  osvVulnerabilityAlerts: true,
+  lockFileMaintenance: { enabled: true },
+  prConcurrentLimit: 5,
+  labels: ["dependencies"],
+  packageRules: [
+    {
+      description: "Group Windows API crates, they are released together",
+      matchPackageNames: ["windows", "windows-*"],
+      groupName: "windows crates",
+    },
+    {
+      description: "Group GitHub Actions updates",
+      matchManagers: ["github-actions"],
+      groupName: "github actions",
+    },
+  ],
+}
