@@ -8,7 +8,7 @@ mod common;
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
@@ -53,10 +53,6 @@ fn main_window(pid: u32) -> Option<HWND> {
 
 const LONG: Duration = Duration::from_secs(120);
 
-fn kaltstellen_exe() -> PathBuf {
-    Path::new(HEARTBEAT).with_file_name("kaltstellen.exe")
-}
-
 /// A test folder with configuration and data; removed last.
 struct World {
     dir: tempfile::TempDir,
@@ -64,6 +60,7 @@ struct World {
 
 impl Drop for World {
     fn drop(&mut self) {
+        let _ = kaltstellen::win32::registry::delete_tree(&self.run_root());
         remove_dir_retry(self.dir.path());
     }
 }
@@ -74,6 +71,12 @@ impl World {
         fs::create_dir_all(dir.path().join("config")).unwrap();
         fs::write(dir.path().join("config").join("config.toml"), config).unwrap();
         World { dir }
+    }
+
+    /// A Run key of this test only, removed with the folder.
+    fn run_root(&self) -> String {
+        let name = self.dir.path().file_name().unwrap().to_string_lossy();
+        format!("Software\\kaltstellen-test-{name}")
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -87,10 +90,7 @@ impl World {
             .env("KALTSTELLEN_CONFIG_DIR", self.path("config"))
             .env("KALTSTELLEN_DATA_DIR", self.path("data"))
             .env_remove("KALTSTELLEN_UPDATE")
-            .env(
-                "KALTSTELLEN_RUN_KEY",
-                "Software\\kaltstellen-test-gui-unused\\Run",
-            )
+            .env("KALTSTELLEN_RUN_KEY", format!("{}\\Run", self.run_root()))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -161,11 +161,11 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
     let steps = r#"[
         {"type": "create_profile", "name": "play"},
         {"type": "add_entry", "profile": "play", "exe": "ks-wv-a.exe"},
-        {"type": "add_entry", "profile": "play", "exe": "explorer.exe"},
         {"type": "set_hotkey", "profile": "play", "hotkey": "Ctrl+Alt+Banana"},
         {"type": "set_update_mode", "mode": "off"},
         {"type": "install_update"},
-        {"type": "apply", "profile": "play"}
+        {"type": "apply", "profile": "play"},
+        {"type": "add_entry", "profile": "play", "exe": "explorer.exe"}
     ]"#;
     fs::write(world.path("steps.json"), steps).unwrap();
     let png = world.path("after.png");
@@ -198,11 +198,11 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
         .collect();
     assert_eq!(
         ok,
-        vec![true, true, false, false, true, false, true],
+        vec![true, true, false, true, false, true, false],
         "{results}"
     );
     assert!(
-        results[2]["error"].as_str().unwrap().contains("protected"),
+        results[6]["error"].as_str().unwrap().contains("protected"),
         "{results}"
     );
     // UP1 in the window: the mode is saved like the tray's (off: no check,
@@ -210,13 +210,13 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
     let settings = fs::read_to_string(world.path("config").join("settings.json")).unwrap();
     assert!(settings.contains("\"update\": \"off\""), "{settings}");
     assert!(
-        results[5]["error"]
+        results[4]["error"]
             .as_str()
             .unwrap()
             .contains("check first"),
         "{results}"
     );
-    assert_eq!(results[6]["status"], "Applied \"play\".", "{results}");
+    assert_eq!(results[5]["status"], "Applied \"play\".", "{results}");
 
     let config = world.config();
     assert!(config.starts_with("# Owner's notes stay."), "{config}");
@@ -304,6 +304,8 @@ fn wp10_missing_runtime_invalid_file_and_second_window() {
     // A second window while one is open only reports.
     let first = world.command(&["gui"]).spawn().unwrap();
     let pid = first.id();
+    // Ends the window if an assertion below fails.
+    let _guard = KillProcess(info_of(pid));
     assert!(wait_for(LONG, || !descendants(pid).is_empty()));
     let webview = descendants(pid);
     // M6: a second start brings the open window back, also when minimised.

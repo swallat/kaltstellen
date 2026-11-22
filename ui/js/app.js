@@ -169,6 +169,8 @@ async function loadUnassigned() {
   unassigned = [];
   if (profile) {
     const reply = await call('unassigned', { profile: profile.name });
+    // Another profile was selected meanwhile: its own request draws it.
+    if (current()?.name !== profile.name) return;
     unassigned = reply.ok ? reply.data : [];
   }
   renderUnassigned();

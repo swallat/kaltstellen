@@ -11,7 +11,7 @@
 mod common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::Duration;
 
@@ -38,16 +38,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::BOOL;
 
 const LONG: Duration = Duration::from_secs(20);
-
-fn kaltstellen_exe() -> PathBuf {
-    let exe = Path::new(HEARTBEAT).with_file_name("kaltstellen.exe");
-    assert!(
-        exe.exists(),
-        "{} missing; run `cargo test --workspace` or `cargo build` first",
-        exe.display()
-    );
-    exe
-}
 
 /// The tray window of process `pid`.
 fn tray_window(pid: u32) -> Option<HWND> {
@@ -263,11 +253,12 @@ impl Tray {
 
 impl Drop for Tray {
     fn drop(&mut self) {
-        let _ = registry::delete_tree(&self.registry_root());
+        // The tray first, so it cannot write the Run value again.
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
+        let _ = registry::delete_tree(&self.registry_root());
     }
 }
 
@@ -616,8 +607,10 @@ fn s5_ctrl_break_during_an_in_process_switch_leaves_nothing_frozen() {
         .creation_flags(CREATE_NEW_PROCESS_GROUP)
         .spawn()
         .unwrap();
-    // The slow stop runs for 3 s; interrupt in the middle of it.
-    std::thread::sleep(Duration::from_millis(1000));
+    // The slow stop runs for 3 s; interrupt in the middle of it. The Ctrl
+    // handler is in place before the switch logs its start.
+    t.wait_log("switch from \"first\" to \"second\"", 1);
+    std::thread::sleep(Duration::from_millis(500));
     // SAFETY: sends Ctrl+Break to the child's own process group on the
     // console this test shares with it.
     if let Err(err) = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) } {
@@ -747,7 +740,9 @@ fn l9_an_error_resolves_by_itself_when_its_cause_is_gone() {
     t.wait_log("tray: icon error", 1);
     // A re-check before anything changed keeps the error.
     t.post(WM_TIMER, 2);
-    std::thread::sleep(Duration::from_millis(500));
+    // A pipe request is answered on the window thread after the timer
+    // message posted before it, so the re-check has run by then.
+    assert_eq!(t.run(&["status"]).0, 0);
     assert_eq!(t.logged("error resolved by itself"), 0);
     // The owner starts the program by hand: the error is gone without a
     // switch at the next re-check (posted here instead of waiting 30 s).

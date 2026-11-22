@@ -127,6 +127,11 @@ impl Queue {
             self.running = Some(job.clone());
             return Decision::Start(job);
         };
+        // Quit and the end of the session resume everything; no later
+        // request may replace them while they wait (as while quitting).
+        if matches!(self.pending, Some(Job::Quit | Job::EndSession)) {
+            return Decision::Dropped { superseded: None };
+        }
         let superseded = self.pending.take();
         if same_profile(running.leads_to(), job.leads_to()) {
             Decision::Dropped { superseded }
@@ -672,6 +677,21 @@ mod tests {
             }
         );
         assert_eq!(q.finish(), None);
+    }
+
+    #[test]
+    fn s5_a_waiting_end_of_session_or_quit_is_never_superseded() {
+        for last in [Job::EndSession, Job::Quit] {
+            let mut q = Queue::default();
+            q.request(sw("slow"));
+            assert_eq!(q.jump(last.clone()), Err(None));
+            assert_eq!(
+                q.request(sw("other")),
+                Decision::Dropped { superseded: None }
+            );
+            assert_eq!(q.pending(), Some(&last));
+            assert_eq!(q.finish(), Some(last));
+        }
     }
 
     #[test]

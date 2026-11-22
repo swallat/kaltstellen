@@ -302,11 +302,25 @@ pub fn client_pid(file: &File) -> Option<u32> {
     Some(pid)
 }
 
-/// Ends blocking pipe I/O of the thread that created it once `timeout` has
-/// passed (`CancelSynchronousIo`); the I/O then fails. Dropping it before
-/// stops the watch. For a client that connects and never sends, or never
-/// reads, so it cannot hold a thread of the tray for ever.
-pub struct Deadline {
+/// Runs `io` (blocking pipe I/O on this thread) and ends it with
+/// `CancelSynchronousIo` once `timeout` has passed; the I/O then fails.
+/// For a client that connects and never sends, or never reads, so it
+/// cannot hold a thread of the tray for ever.
+///
+/// `io` should do nothing but the I/O: a cancel that is already under way
+/// when it returns may also hit a synchronous call that follows inside
+/// `io`, but never one after this function returned. Without a thread
+/// handle `io` simply runs without a deadline.
+pub fn with_deadline<T>(timeout: Duration, io: impl FnOnce() -> T) -> T {
+    let deadline = Deadline::new(timeout);
+    let result = io();
+    drop(deadline);
+    result
+}
+
+/// See [`with_deadline`]. Dropping it waits until the watcher is done, so
+/// no cancel can come later.
+struct Deadline {
     shared: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
     watcher: Option<std::thread::JoinHandle<()>>,
 }
@@ -326,7 +340,7 @@ impl Drop for ThreadHandle {
 impl Deadline {
     /// `None` if the thread handle cannot be had; the I/O then simply has
     /// no deadline.
-    pub fn new(timeout: Duration) -> Option<Deadline> {
+    fn new(timeout: Duration) -> Option<Deadline> {
         let mut thread = HANDLE::default();
         // SAFETY: duplicates this thread's pseudo handle into a real one
         // with only the right CancelSynchronousIo needs.
@@ -357,8 +371,8 @@ impl Deadline {
                     .wait_timeout_while(guard, timeout, |done| !*done)
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if !*guard {
-                    // Still under the lock: the watched thread cannot have
-                    // left the I/O and started other work yet.
+                    // Under the lock: the watched thread cannot leave
+                    // `with_deadline` before this cancel is done.
                     // SAFETY: a valid thread handle with THREAD_TERMINATE.
                     let _ = unsafe { CancelSynchronousIo(thread.0) };
                 }
@@ -469,34 +483,55 @@ mod tests {
 
     #[test]
     fn l1_a_silent_client_cannot_hold_a_server_thread() {
+        /// Runs `serve` on the server end while the client connects and
+        /// then neither sends nor reads; returns what `serve` returned and
+        /// how long it took.
+        fn against_a_silent_client<T: Send + 'static>(
+            serve: impl FnOnce(&File) -> T + Send + 'static,
+        ) -> (T, Duration) {
+            let name = name();
+            let mut listener = Listener::bind(&name).unwrap();
+            let server = std::thread::spawn(move || {
+                let conn = listener.accept().unwrap();
+                let started = Instant::now();
+                let result = serve(&conn);
+                (result, started.elapsed())
+            });
+            let _client = connect(&name, Duration::from_secs(2)).unwrap().unwrap();
+            server.join().unwrap()
+        }
+        let short = Duration::from_millis(300);
+        // Never sends: the read fails.
+        let (read, took) = against_a_silent_client(move |conn| {
+            with_deadline(short, || {
+                BufReader::new(conn).read_line(&mut String::new()).is_err()
+            })
+        });
+        assert!(read, "the read must fail at the deadline");
+        assert!(took < Duration::from_secs(5), "took {took:?}");
+        // Never reads: a reply larger than the pipe buffer fails, and so
+        // does waiting until a small one was read.
+        let (write, took) = against_a_silent_client(move |mut conn| {
+            with_deadline(short, || conn.write_all(&[b'x'; 1 << 20]).is_err())
+        });
+        assert!(write, "the write must fail at the deadline");
+        assert!(took < Duration::from_secs(5), "took {took:?}");
+        let (flush, took) = against_a_silent_client(move |mut conn| {
+            conn.write_all(b"small\n").unwrap();
+            with_deadline(short, || conn.sync_all().is_err())
+        });
+        assert!(flush, "the flush must fail at the deadline");
+        assert!(took < Duration::from_secs(5), "took {took:?}");
+
+        // A client that sends in time is not disturbed, and a deadline that
+        // has ended does not touch later reads of the thread.
         let name = name();
         let mut listener = Listener::bind(&name).unwrap();
         let server = std::thread::spawn(move || {
             let conn = listener.accept().unwrap();
-            let started = Instant::now();
-            let deadline = Deadline::new(Duration::from_millis(300)).unwrap();
-            let mut line = String::new();
-            let read = BufReader::new(&conn).read_line(&mut line);
-            drop(deadline);
-            (read.is_err(), started.elapsed())
-        });
-        // Connects and never sends.
-        let _client = connect(&name, Duration::from_secs(2)).unwrap().unwrap();
-        let (failed, took) = server.join().unwrap();
-        assert!(failed, "the read must fail at the deadline");
-        assert!(took < Duration::from_secs(5), "took {took:?}");
-
-        // A client that sends in time is not disturbed, and a deadline that
-        // was dropped does not touch later reads of the thread.
-        let name = super::tests::name();
-        let mut listener = Listener::bind(&name).unwrap();
-        let server = std::thread::spawn(move || {
-            let conn = listener.accept().unwrap();
             let mut reader = BufReader::new(&conn);
-            let deadline = Deadline::new(Duration::from_secs(5)).unwrap();
             let mut first = String::new();
-            reader.read_line(&mut first).unwrap();
-            drop(deadline);
+            with_deadline(Duration::from_secs(5), || reader.read_line(&mut first)).unwrap();
             let mut second = String::new();
             reader.read_line(&mut second).unwrap();
             (first, second)

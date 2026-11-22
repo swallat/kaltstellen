@@ -258,6 +258,8 @@ pub struct Bridge<H: Host> {
     pending_delete: Option<String>,
     applying: bool,
     checking: bool,
+    /// The document before the edit that is being handled.
+    snapshot: Option<Document>,
 }
 
 impl<H: Host> Bridge<H> {
@@ -270,6 +272,7 @@ impl<H: Host> Bridge<H> {
             pending_delete: None,
             applying: false,
             checking: false,
+            snapshot: None,
         }
     }
 
@@ -308,7 +311,13 @@ impl<H: Host> Bridge<H> {
     /// Handles one raw message from the page and returns the reply.
     pub fn handle(&mut self, raw: &str) -> String {
         let (id, result) = match self.parse(raw) {
-            Ok((id, request)) => (id, self.dispatch(request)),
+            Ok((id, request)) => {
+                // An edit whose save fails is taken back (see `saved`).
+                self.snapshot = Some(self.document.clone());
+                let result = self.dispatch(request);
+                self.snapshot = None;
+                (id, result)
+            }
             Err((id, error)) => (id, Err(error)),
         };
         let reply = match result {
@@ -370,7 +379,12 @@ impl<H: Host> Bridge<H> {
                     self.document = fresh;
                     self.status = format!("{err}. Reloaded; please repeat the change.");
                 } else {
-                    self.status = err.to_string();
+                    // Not saved: the window shows the file as it is, and a
+                    // later edit does not write this one by the way.
+                    if let Some(before) = self.snapshot.take() {
+                        self.document = before;
+                    }
+                    self.status = format!("{err}. Not saved.");
                 }
                 Err(self.status.clone())
             }
@@ -378,6 +392,25 @@ impl<H: Host> Bridge<H> {
     }
 
     fn dispatch(&mut self, request: Request) -> Result<Option<Value>, String> {
+        // M1: while a profile waits to be deleted, no profile may be edited,
+        // so the one that is deleted is the one that was meant.
+        if let Some(name) = &self.pending_delete
+            && matches!(
+                request,
+                Request::CreateProfile { .. }
+                    | Request::CopyProfile { .. }
+                    | Request::RenameProfile { .. }
+                    | Request::DeleteProfile { .. }
+                    | Request::SetHotkey { .. }
+                    | Request::AddEntry { .. }
+                    | Request::UpdateEntry { .. }
+                    | Request::RemoveEntry { .. }
+            )
+        {
+            return Err(format!(
+                "\"{name}\" is being deleted; wait until the switch to neutral has ended"
+            ));
+        }
         match request {
             Request::GetState => Ok(None),
             Request::CreateProfile { name } => {
@@ -405,6 +438,13 @@ impl<H: Host> Bridge<H> {
                 check_text(&[&name])?;
                 if self.document.config().profile(&name).is_none() {
                     return Err(format!("no profile named \"{name}\""));
+                }
+                if self.applying {
+                    // The running switch may be the one to this profile.
+                    return Err(format!(
+                        "a switch is running; delete \"{}\" when it has ended",
+                        name.trim()
+                    ));
                 }
                 if self.host.active_profile().eq_ignore_ascii_case(name.trim()) {
                     // M1: switch to neutral first, delete when that worked.
@@ -636,8 +676,10 @@ impl<H: Host> Bridge<H> {
         self.status = model::applied(target, code, stderr);
         if let Some(name) = self.pending_delete.take() {
             if target == NEUTRAL && code <= crate::exit::ERRORS {
+                self.snapshot = Some(self.document.clone());
                 let result = self.document.delete_profile(&name);
                 let _ = self.saved(format!("Profile \"{name}\" deleted"), result);
+                self.snapshot = None;
             } else {
                 self.status = format!("{} Profile \"{name}\" not deleted.", self.status);
             }
@@ -976,5 +1018,74 @@ mod tests {
         assert!(b.document().config().profiles.is_empty());
         let file = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
         assert!(!file.contains("focus"));
+    }
+
+    #[test]
+    fn m1_no_profile_edit_while_a_delete_waits_and_no_delete_while_applying() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, fake) = bridge(&dir);
+        *fake.active.borrow_mut() = "focus".into();
+        let ok = |b: &mut Bridge<Fake>, request: Value| send(b, request)["ok"] == true;
+        assert!(ok(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "delete_profile", "name": "focus"})
+        ));
+        // Renaming and creating again must not make the delete hit another
+        // profile.
+        assert!(!ok(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "rename_profile", "from": "focus", "to": "old"})
+        ));
+        assert!(!ok(
+            &mut b,
+            json!({"v": 1, "id": 3, "type": "create_profile", "name": "x"})
+        ));
+        *fake.active.borrow_mut() = "neutral".into();
+        b.applied("neutral", 0, "");
+        assert!(b.document().config().profiles.is_empty());
+        // While a switch runs, a profile is not deleted (it may be the
+        // target of that switch).
+        assert!(ok(
+            &mut b,
+            json!({"v": 1, "id": 4, "type": "create_profile", "name": "play"})
+        ));
+        assert!(ok(
+            &mut b,
+            json!({"v": 1, "id": 5, "type": "apply", "profile": "play"})
+        ));
+        assert!(!ok(
+            &mut b,
+            json!({"v": 1, "id": 6, "type": "delete_profile", "name": "play"})
+        ));
+        b.applied("play", 0, "");
+        assert_eq!(b.document().config().profiles.len(), 1);
+    }
+
+    #[test]
+    fn m1_an_edit_that_cannot_be_saved_is_taken_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        let file = dir.path().join("config.toml");
+        let mut permissions = std::fs::metadata(&file).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&file, permissions.clone()).unwrap();
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "create_profile", "name": "music"}),
+        );
+        assert_eq!(reply["ok"], false, "{reply}");
+        assert_eq!(reply["state"]["profiles"].as_array().unwrap().len(), 1);
+        assert!(b.document().config().profile("music").is_none());
+        // Writable again: the next edit does not bring the lost one along.
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&file, permissions).unwrap();
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "create_profile", "name": "games"}),
+        );
+        assert_eq!(reply["ok"], true, "{reply}");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("games") && !text.contains("music"), "{text}");
     }
 }

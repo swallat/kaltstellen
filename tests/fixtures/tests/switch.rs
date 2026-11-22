@@ -378,19 +378,22 @@ fn s10_records_from_before_a_reboot_are_dropped_without_resuming() {
 
 #[test]
 fn warn_list_needs_force() {
-    let mut w = World::new();
     // The name of a remote-access tool on the warn list; the process is a
-    // heartbeat fixture in this test's folder.
-    let _app = w.run("rustdesk.exe");
-    let own = pids_of("rustdesk.exe");
-    w.profile("p", vec![suspend("rustdesk.exe")]);
-
-    // Other tests and real programs must not be affected: only go on if the
-    // only process of that name is this test's.
-    if own.len() != 1 {
+    // heartbeat fixture in this test's folder. A real program of that name
+    // must never be touched: skip before anything starts, match the entry
+    // by this copy's path only, and end the copy by its PID (not by name).
+    if !pids_of("rustdesk.exe").is_empty() {
         eprintln!("skipped: a real program of that name is running");
         return;
     }
+    let mut w = World::new();
+    let exe = copy_fixture(HEARTBEAT, w.dir.path(), "rustdesk.exe");
+    let beat = w.beat_file("rustdesk.exe");
+    let _app = Fixture::spawn(str_of(&exe), &[str_of(&beat)]);
+    assert!(beating(&beat), "the copy never started beating");
+    let mut entry = suspend("rustdesk.exe");
+    entry.path = Some(exe.clone());
+    w.profile("p", vec![entry]);
     let report = w.switch("p");
     assert_eq!(report.errors.len(), 1);
     assert_eq!(report.errors[0].code, Code::WarnListUnconfirmed);

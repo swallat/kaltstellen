@@ -134,6 +134,11 @@ impl Updates {
         }
     }
 
+    /// Whether an automatic install started by this tray still runs.
+    pub fn installing(&self) -> bool {
+        self.installing.is_some()
+    }
+
     /// Whether an automatic install ended since the last call while this
     /// tray still runs: it gave up, or the new version did not start.
     pub fn install_ended(&mut self) -> bool {

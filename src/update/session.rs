@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use log::{info, warn};
 
-use super::install::Session;
+use super::install::{Probe, Session};
 use crate::config::NEUTRAL;
 use crate::engine;
 use crate::error::{Code, Error, Result};
@@ -56,6 +56,18 @@ impl System {
         })
     }
 
+    /// One install at a time per data directory: they share the staged
+    /// files next to the executable and `update.json`. `KS808` if another
+    /// install runs.
+    pub fn exclusive(&self) -> Result<Instance> {
+        Instance::acquire(&format!("{}-update", self.endpoints.mutex))?.ok_or_else(|| {
+            Error::new(
+                Code::UpdateTray,
+                "another update is being installed; nothing was changed",
+            )
+        })
+    }
+
     fn wait_gone(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instance::exists(&self.endpoints.mutex) {
@@ -86,7 +98,7 @@ impl System {
 }
 
 /// Waits for `child` at most `timeout`; ends it after that.
-fn wait_child(child: &mut Child, timeout: Duration) -> std::result::Result<(), String> {
+fn wait_child(child: &mut Child, timeout: Duration) -> std::result::Result<(), Probe> {
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
@@ -95,9 +107,12 @@ fn wait_child(child: &mut Child, timeout: Duration) -> std::result::Result<(), S
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("no answer within {} s", timeout.as_secs()));
+                return Err(Probe::TimedOut(format!(
+                    "no answer within {} s",
+                    timeout.as_secs()
+                )));
             }
-            Err(err) => return Err(err.to_string()),
+            Err(err) => return Err(Probe::Failed(err.to_string())),
         }
     }
 }
@@ -127,6 +142,11 @@ impl Session for System {
                         "the tray stays ({}); nothing was changed, the update is tried again later",
                         lines.join("; ")
                     ),
+                )),
+                // The tray was quit from its menu meanwhile.
+                Ok(None) => Err(Error::new(
+                    Code::UpdateTray,
+                    "the tray has ended; the automatic update needs it and changed nothing",
                 )),
                 other => {
                     if let Ok(Some(Body::Done(finished))) = &other {
@@ -236,14 +256,14 @@ impl Session for System {
         }
     }
 
-    fn did_not_start(&mut self, version: &str) {
+    fn install_failed(&mut self, version: &str) {
         match crate::update::record::mark_failed(&self.data_dir, version) {
             Ok(()) => info!("update: version {version} is not installed automatically again"),
             Err(err) => warn!("update: {err}"),
         }
     }
 
-    fn version_of(&self, exe: &Path) -> std::result::Result<String, String> {
+    fn version_of(&self, exe: &Path) -> std::result::Result<String, Probe> {
         let mut child = Command::new(exe)
             .arg("--version")
             .stdin(Stdio::null())
@@ -251,7 +271,7 @@ impl Session for System {
             .stderr(Stdio::null())
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
-            .map_err(|e| format!("cannot start it: {e}"))?;
+            .map_err(|e| Probe::Failed(format!("cannot start it: {e}")))?;
         wait_child(&mut child, PROBE_WAIT)?;
         let mut out = String::new();
         if let Some(mut stdout) = child.stdout.take() {

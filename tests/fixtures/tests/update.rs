@@ -12,8 +12,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
 use common::*;
@@ -32,16 +33,6 @@ const BAD_UPDATE: &str = env!("CARGO_BIN_EXE_ks-badupdate");
 /// Appended to the served copy so the swap can be seen in the bytes; data
 /// after the image does not change what runs.
 const MARKER: &[u8] = b"\0ks-update-test: the served version\0";
-
-fn kaltstellen_exe() -> PathBuf {
-    let exe = Path::new(HEARTBEAT).with_file_name("kaltstellen.exe");
-    assert!(
-        exe.exists(),
-        "{} missing; run `cargo test --workspace` first",
-        exe.display()
-    );
-    exe
-}
 
 /// The version the built executable reports, without the build metadata
 /// (`+<commit>`) a development build appends.
@@ -63,12 +54,16 @@ fn built_version() -> String {
 /// Serves `routes` (path to body) on loopback until the test process
 /// ends; anything else is 404.
 fn serve(routes: HashMap<String, Vec<u8>>) -> String {
-    serve_slow(routes, None)
+    serve_gated(routes, None)
 }
 
-/// [`serve`], but paths ending in `slow.0` wait `slow.1` before they answer
-/// (a download that takes a while).
-fn serve_slow(routes: HashMap<String, Vec<u8>>, slow: Option<(&'static str, Duration)>) -> String {
+/// [`serve`], but a path ending in `gate.0` is answered only when the test
+/// sends on the other end of `gate.1` (a download that takes as long as
+/// the test wants) or has dropped it.
+fn serve_gated(
+    routes: HashMap<String, Vec<u8>>,
+    gate: Option<(&'static str, Receiver<()>)>,
+) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {
@@ -85,10 +80,10 @@ fn serve_slow(routes: HashMap<String, Vec<u8>>, slow: Option<(&'static str, Dura
                 }
             }
             let path = first.split_whitespace().nth(1).unwrap_or("/");
-            if let Some((suffix, delay)) = slow
+            if let Some((suffix, gate)) = &gate
                 && path.ends_with(suffix)
             {
-                std::thread::sleep(delay);
+                let _ = gate.recv_timeout(LONG);
             }
             let (status, body) = match routes.get(path) {
                 Some(body) => ("200 OK", body.clone()),
@@ -109,11 +104,11 @@ fn serve_slow(routes: HashMap<String, Vec<u8>>, slow: Option<(&'static str, Dura
 /// A release `version` whose executable is `served`; `checksums.txt` holds
 /// the sum of `summed`. Returns the API base for `KALTSTELLEN_UPDATE_URL`.
 fn github(version: &str, served: &[u8], summed: &[u8]) -> String {
-    github_slow(version, served, summed, Duration::ZERO)
+    github_gated(version, served, summed, None)
 }
 
-/// [`github`] whose executable takes `delay` to download.
-fn github_slow(version: &str, served: &[u8], summed: &[u8], delay: Duration) -> String {
+/// [`github`] whose executable downloads only when `gate` lets it.
+fn github_gated(version: &str, served: &[u8], summed: &[u8], gate: Option<Receiver<()>>) -> String {
     let arch = std::env::consts::ARCH;
     let name = format!("kaltstellen-{version}-windows-{arch}.exe");
     let sum = hash::hex(&hash::sha256(summed).unwrap());
@@ -125,7 +120,7 @@ fn github_slow(version: &str, served: &[u8], summed: &[u8], delay: Duration) -> 
     );
     // Two steps: start the server with the files, then add the metadata
     // that points at it.
-    let files = serve_slow(routes, (!delay.is_zero()).then_some((".exe", delay)));
+    let files = serve_gated(routes, gate.map(|g| (".exe", g)));
     let latest = format!(
         r#"{{"tag_name":"v{version}","html_url":"{files}/page","draft":false,"prerelease":false,
             "assets":[{{"name":"{name}","browser_download_url":"{files}/dl/{name}"}},
@@ -227,6 +222,9 @@ impl Setup {
             )
             .env("KALTSTELLEN_UPDATE_URL", &self.api)
             .env_remove("KALTSTELLEN_UPDATE")
+            // A tray that an update starts again must not ask about start
+            // at sign-in either (L8).
+            .env("KALTSTELLEN_AUTOSTART_PROMPT", "skip")
             .stdin(Stdio::null());
     }
 
@@ -343,7 +341,13 @@ fn up1_check_reports_a_newer_release_and_records_it() {
     let (code, out, err) = s.run(&["update", "--check", "--quiet"], &[]);
     assert_eq!((code, out.as_str(), err.as_str()), (0, "", ""));
     // No server: KS801, exit code 1, recorded.
-    let offline = Setup::new("http://127.0.0.1:9/repos/o/r".to_owned());
+    // A port that was just free: nothing answers there.
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let offline = Setup::new(format!("http://127.0.0.1:{port}/repos/o/r"));
     let (code, _, err) = offline.run(&["update", "--check"], &[]);
     assert_eq!(code, 1);
     assert!(err.contains("KS801"), "{err}");
@@ -462,13 +466,12 @@ fn up1_wrong_checksum_or_broken_file_changes_nothing() {
 
     // A file with the right sum that is no program: refused by the probe.
     let junk = b"MZ not really a program".to_vec();
-    let mut t = Setup::new(github(&version, &junk, &junk));
+    let t = Setup::new(github(&version, &junk, &junk));
     let (code, _, err) = t.run(&["update", "--force"], &[]);
     assert_eq!(code, 1);
     assert!(err.contains("KS806"), "{err}");
     assert_eq!(t.bin_names().len(), 1);
     assert_eq!(fs::read(&t.exe).unwrap(), t.original);
-    t.tray = None;
 }
 
 #[test]
@@ -552,9 +555,11 @@ fn up1_automatic_install_waits_for_neutral_and_an_idle_tray() {
 
 #[test]
 fn up1_automatic_install_gives_up_when_a_profile_starts_during_the_download() {
-    // A "new version" that passes the probe; the download takes a while.
+    // A "new version" that passes the probe; its download waits until the
+    // test lets it go.
     let bad = fs::read(BAD_UPDATE).unwrap();
-    let mut s = Setup::new(github_slow("9.9.9", &bad, &bad, Duration::from_secs(6)));
+    let (release, gate) = channel();
+    let mut s = Setup::new(github_gated("9.9.9", &bad, &bad, Some(gate)));
     let (_program, beat) = s.program();
     s.start_tray_with(&[("KS_FAKE_VERSION", "9.9.9")]);
     let pid = s.tray.as_ref().unwrap().id();
@@ -566,6 +571,9 @@ fn up1_automatic_install_gives_up_when_a_profile_starts_during_the_download() {
     let (code, _, err) = s.run(&["switch", "play"], &[]);
     assert_eq!(code, 0, "{err}");
     assert!(frozen(&beat));
+    // The download ends now; later ones (the second attempt) run at once.
+    release.send(()).unwrap();
+    drop(release);
     // When the download is done, the tray refuses to quit; the install
     // gives up without changing anything.
     s.wait_log("the tray is busy; it waits", 1);
@@ -575,7 +583,7 @@ fn up1_automatic_install_gives_up_when_a_profile_starts_during_the_download() {
     assert_eq!(fs::read(&s.exe).unwrap(), s.original);
     assert!(
         wait_for(LONG, || s.bin_names().len() == 1),
-        "the staged file stays: {:?}",
+        "the staged file is left behind: {:?}",
         s.bin_names()
     );
     let record = fs::read_to_string(s.data().join("update.json")).unwrap();
@@ -616,8 +624,12 @@ fn up1_a_version_that_did_not_start_is_never_installed_automatically_again() {
     ));
     s.start_tray_with(&fake);
     let pid = s.tray.as_ref().unwrap().id();
-    click(pid, ID_UPDATE_AUTO);
     s.wait_log("tray: update 9.9.9 did not start here before", 1);
+    // The check that the click starts has run and been decided on: the
+    // tray schedules the next one right after deciding.
+    let scheduled = s.log().matches("tray: next update check in").count();
+    click(pid, ID_UPDATE_AUTO);
+    s.wait_log("tray: next update check in", scheduled + 1);
     assert_eq!(
         s.log()
             .matches("tray: installing update 9.9.9 automatically")

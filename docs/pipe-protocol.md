@@ -18,6 +18,11 @@ How `kaltstellen switch`, `recover` and `status` talk to a running
   same user before it sends anything, and connects at identification level.
 - One request per connection. The client sends one request; the tray sends
   zero or more `accepted` replies, then exactly one final reply, and closes.
+- Time limits: the request must arrive within 10 s of connecting, and each
+  reply (and the final wait until the client has read everything) must be
+  taken within 10 s; otherwise the tray drops the connection. A client that
+  waits for a long switch is not affected: the limit applies to reading and
+  writing, not to the time between replies.
 
 ## Requests
 

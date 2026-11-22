@@ -31,10 +31,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     LR_DEFAULTCOLOR, LoadIconW, LoadImageW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
     PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SM_CXSMICON,
     SM_CYSMICON, SM_MENUDROPALIGNMENT, SetForegroundWindow, SetTimer, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage,
-    WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_ENDSESSION,
-    WM_HOTKEY, WM_NULL, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+    TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenuEx,
+    TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
+    WM_ENDSESSION, WM_HOTKEY, WM_NULL, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER,
+    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
 use windows::core::PCWSTR;
 
@@ -72,7 +72,11 @@ fn resource_id(icon: Icon) -> u16 {
 pub trait Handler {
     /// The user opens the menu; returns what it shows.
     fn menu(&mut self) -> Vec<Item>;
-    /// A menu item was chosen (or `WM_COMMAND` arrived from elsewhere).
+    /// An item of the menu that [`Handler::menu`] returned last was chosen.
+    /// The menu may have been rebuilt while it was open; the ID belongs to
+    /// the one that was shown.
+    fn chosen(&mut self, id: u16);
+    /// `WM_COMMAND` arrived from elsewhere (tests, other programs).
     fn command(&mut self, id: u16);
     /// A [`Waker`] fired.
     fn wake(&mut self);
@@ -418,11 +422,12 @@ fn show_menu(hwnd: HWND, x: i32, y: i32) {
         } else {
             TPM_LEFTALIGN
         };
-        // The chosen item arrives as WM_COMMAND after the menu closed, so
-        // the handler is free again by then.
-        let _ = TrackPopupMenuEx(
+        // The chosen ID is returned instead of posted, so it is resolved
+        // against the items that were shown, even if a switch that ended
+        // while the menu was open rebuilt the menu.
+        let chosen = TrackPopupMenuEx(
             menu,
-            (align | TPM_BOTTOMALIGN | TPM_RIGHTBUTTON).0,
+            (align | TPM_BOTTOMALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY).0,
             x,
             y,
             hwnd,
@@ -430,6 +435,11 @@ fn show_menu(hwnd: HWND, x: i32, y: i32) {
         );
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
         let _ = DestroyMenu(menu);
+        if let Ok(id) = u16::try_from(chosen.0)
+            && id != 0
+        {
+            with_handler(|h| h.chosen(id));
+        }
     }
 }
 

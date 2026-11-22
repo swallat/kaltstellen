@@ -46,10 +46,13 @@ reasoning is. Implementation choices made without the owner are marked
     version while it waits; a saved `on` (earlier name) reads as `auto`.
     The condition is checked again right before the tray quits
     (`quit_if_idle`); a busy tray stays and the install starts again the
-    next time the tray is idle in `neutral`. A version that did not start
-    (`KS806`) is recorded in `update.json` and never installed automatically
-    again; on request it still can be. Only the last such version is
-    remembered.
+    next time the tray is idle in `neutral`. A version that could not be
+    installed after it was verified (`KS806` did not start, `KS805` not
+    swapped; not a start check that only timed out) is recorded in
+    `update.json` and never installed automatically again; on request it
+    still can be. Only the last such version is remembered. Failures before
+    the tray is touched are retried after the next check (daily). No
+    automatic install while the session ends; one install at a time.
 
 11. **UP1 in the main window** `[assumed]`: a section `Updates` at the bottom
     of the sidebar; the window checks by running `kaltstellen update --check

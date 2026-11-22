@@ -26,6 +26,14 @@ fn tray(dir: &Path) -> Command {
         .env("KALTSTELLEN_AUTOSTART_PROMPT", "skip")
         .env("KALTSTELLEN_CONFIG_DIR", dir.join("config"))
         .env("KALTSTELLEN_DATA_DIR", dir.join("data"))
+        // Only read by the tray; a key of this test, never the real one.
+        .env(
+            "KALTSTELLEN_RUN_KEY",
+            format!(
+                "Software\\kaltstellen-test-{}\\Run",
+                dir.file_name().unwrap().to_string_lossy()
+            ),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());

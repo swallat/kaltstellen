@@ -545,6 +545,14 @@ fn update_install(force: bool, unattended: bool) -> u8 {
             format!("this copy cannot update itself: {how}"),
         ));
     }
+    let mut session = match update::session::System::current(unattended) {
+        Ok(session) => session,
+        Err(err) => return refused(err),
+    };
+    let _exclusive = match session.exclusive() {
+        Ok(lock) => lock,
+        Err(err) => return refused(err),
+    };
     let release = match update::check(&update::WinHttp, &source, paths::data_dir().as_deref()) {
         Ok(release) => release,
         Err(err) => return refused(err),
@@ -566,10 +574,6 @@ fn update_install(force: bool, unattended: bool) -> u8 {
             ),
         ));
     }
-    let mut session = match update::session::System::current(unattended) {
-        Ok(session) => session,
-        Err(err) => return refused(err),
-    };
     info!(
         "update: installing {} over {} ({})",
         release.version,

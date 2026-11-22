@@ -43,7 +43,16 @@ control characters; paths must be absolute.
 | `install_update` | | Opens a console window with `kaltstellen update`, as the tray's `Install update…`. Refused when no newer version is known or this copy cannot update itself. |
 
 Every change is validated with `config::parse` and saved atomically at once;
-a refused change leaves the file as it was.
+a refused change leaves the file as it was. A change that the configuration
+rules would only warn about and then ignore (a hotkey that takes AltGr) is
+refused too. A change that cannot be written (the file is read-only or held
+open) is taken back, so `state` shows the file as it is. While a deleted
+active profile waits for the switch to `neutral`, profile and entry edits
+are refused; `delete_profile` is refused while a switch started by `apply`
+runs. Edits keep the comments and the layout of the keys they do not
+change, the line endings and a byte order mark of the file; entries written
+inline (`app = [{ exe = "a.exe" }]`) are turned into `[[profile.app]]`
+tables by the first edit of that profile.
 
 ## Replies (host to page)
 

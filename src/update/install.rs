@@ -31,11 +31,21 @@ pub trait Session {
     /// does not answer in time is ended before this returns an error.
     fn start_tray(&mut self, exe: &Path) -> std::result::Result<(), String>;
     /// The first line `exe --version` prints.
-    fn version_of(&self, exe: &Path) -> std::result::Result<String, String>;
-    /// `version` did not start here (KS806): it is never installed
-    /// automatically again. Called before the previous tray starts again,
-    /// so that tray already knows.
-    fn did_not_start(&mut self, version: &str);
+    fn version_of(&self, exe: &Path) -> std::result::Result<String, Probe>;
+    /// Installing `version` failed after it was downloaded and verified: it
+    /// did not start here (KS806), or it could not be put in place
+    /// (KS805). It is never installed automatically again. Called before
+    /// the previous tray starts again, so that tray already knows.
+    fn install_failed(&mut self, version: &str);
+}
+
+/// Why the `--version` probe of the staged file gave no answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Probe {
+    /// It could not be started or ended without the expected output.
+    Failed(String),
+    /// It did not end in time.
+    TimedOut(String),
 }
 
 /// The files of one install, all next to the running executable.
@@ -206,11 +216,16 @@ pub fn install(
         Ok(line) if line.trim().split('+').next() == Some(expected.as_str()) => {}
         outcome => {
             let _ = fs::remove_file(&files.new);
+            let timed_out = matches!(outcome, Err(Probe::TimedOut(_)));
             let what = match outcome {
                 Ok(line) => format!("it reports \"{}\" instead of \"{expected}\"", line.trim()),
-                Err(err) => err,
+                Err(Probe::Failed(err) | Probe::TimedOut(err)) => err,
             };
-            session.did_not_start(&release.version);
+            // A probe that only took too long (a virus scan of the new
+            // file) says nothing about the version; it may be tried again.
+            if !timed_out {
+                session.install_failed(&release.version);
+            }
             return Err(Error::new(
                 Code::UpdateStart,
                 format!("the new version does not start: {what}; nothing was changed"),
@@ -233,6 +248,9 @@ pub fn install(
     }
 
     if let Err(err) = swap(&files) {
+        // The tray was quit already: without the record, the tray that
+        // starts again would try the same install at once, and again.
+        session.install_failed(&release.version);
         if tray {
             restart_old(session, &files.exe, say);
         }
@@ -244,7 +262,7 @@ pub fn install(
         say("starting the new tray …".to_owned());
         if let Err(why) = session.start_tray(&files.exe) {
             roll_back(&files);
-            session.did_not_start(&release.version);
+            session.install_failed(&release.version);
             restart_old(session, &files.exe, say);
             return Err(Error::new(
                 Code::UpdateStart,
@@ -338,6 +356,8 @@ mod tests {
         calls: Vec<String>,
         /// What the staged file says to `--version`, by content.
         versions: HashMap<Vec<u8>, String>,
+        /// The probe does not answer in time.
+        slow_probe: bool,
     }
 
     impl Session for Recorder {
@@ -367,14 +387,17 @@ mod tests {
             self.tray = true;
             Ok(())
         }
-        fn version_of(&self, exe: &Path) -> std::result::Result<String, String> {
-            let content = fs::read(exe).map_err(|e| e.to_string())?;
+        fn version_of(&self, exe: &Path) -> std::result::Result<String, Probe> {
+            if self.slow_probe {
+                return Err(Probe::TimedOut("no answer within 10 s".into()));
+            }
+            let content = fs::read(exe).map_err(|e| Probe::Failed(e.to_string()))?;
             self.versions
                 .get(&content)
                 .cloned()
-                .ok_or_else(|| "not a program".into())
+                .ok_or_else(|| Probe::Failed("not a program".into()))
         }
-        fn did_not_start(&mut self, version: &str) {
+        fn install_failed(&mut self, version: &str) {
             self.calls.push(format!("failed {version}"));
         }
     }
@@ -517,6 +540,34 @@ mod tests {
         // The tray was not touched; the version is remembered as failed.
         assert_eq!(session.calls, ["failed 2.0.0", "failed 2.0.0"]);
         assert_eq!(names(w.dir.path()), ["k.exe"]);
+        // A probe that only took too long is not held against the version.
+        session.calls.clear();
+        session.slow_probe = true;
+        assert_eq!(run(&w, &mut session).unwrap_err().code, Code::UpdateStart);
+        assert!(session.calls.is_empty(), "{:?}", session.calls);
+        assert_eq!(names(w.dir.path()), ["k.exe"]);
+    }
+
+    #[test]
+    fn up1_a_failed_swap_after_the_tray_quit_is_remembered() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let w = world(NEW, NEW);
+        let mut session = recorder(true);
+        // Another program holds the executable without FILE_SHARE_DELETE,
+        // so it cannot be renamed.
+        let _held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1) // FILE_SHARE_READ
+            .open(&w.exe)
+            .unwrap();
+        let err = run(&w, &mut session).unwrap_err();
+        assert_eq!(err.code, Code::UpdateReplace, "{err}");
+        // Recorded before the old tray starts again, so it does not retry.
+        assert_eq!(
+            session.calls,
+            ["stop", "failed 2.0.0", "start old executable"]
+        );
+        assert_eq!(fs::read(&w.exe).unwrap(), OLD);
     }
 
     #[test]

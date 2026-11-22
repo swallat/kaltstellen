@@ -84,25 +84,25 @@ pub fn spawn(
     }
 }
 
+/// Writes one reply; a client that stops reading gets [`IDLE_CLIENT`].
 fn send(conn: &mut File, body: Body) -> bool {
-    conn.write_all(protocol::encode(&protocol::reply(body)).as_bytes())
-        .is_ok()
+    let line = protocol::encode(&protocol::reply(body));
+    pipe::with_deadline(IDLE_CLIENT, || conn.write_all(line.as_bytes())).is_ok()
 }
 
 /// Waits until the client has read everything, then the connection closes;
 /// a client that stops reading gets [`IDLE_CLIENT`].
 fn finish(conn: &File) {
-    let _deadline = pipe::Deadline::new(IDLE_CLIENT);
-    let _ = conn.sync_all();
+    let _ = pipe::with_deadline(IDLE_CLIENT, || conn.sync_all());
 }
 
 fn serve(mut conn: File, inbox: &Sender<Incoming>, wake: impl Fn()) {
     let mut line = String::new();
     // A client that connects and never sends (or never ends its line) must
     // not hold this thread for ever.
-    let deadline = pipe::Deadline::new(IDLE_CLIENT);
-    let read = BufReader::new((&conn).take(protocol::MAX_LINE as u64)).read_line(&mut line);
-    drop(deadline);
+    let read = pipe::with_deadline(IDLE_CLIENT, || {
+        BufReader::new((&conn).take(protocol::MAX_LINE as u64)).read_line(&mut line)
+    });
     if let Err(err) = &read {
         info!("tray: pipe client sent no request: {err}");
     }

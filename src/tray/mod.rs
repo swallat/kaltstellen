@@ -237,6 +237,8 @@ pub fn main() -> u8 {
             update_started: None,
             update_waiting: None,
             update_deferred: false,
+            shown_menu: None,
+            session_ending: false,
         };
         app.refresh_autostart();
         app.ask_autostart_once();
@@ -303,6 +305,11 @@ struct App {
     /// UP1: this tray refused `quit_if_idle` to the running automatic
     /// install, which therefore gives up; it is started again later.
     update_deferred: bool,
+    /// The menu as it was shown last; a chosen ID is resolved against it.
+    shown_menu: Option<Menu>,
+    /// Windows asked to end the session and has not cancelled it: no
+    /// automatic install starts and `quit_if_idle` is refused.
+    session_ending: bool,
     /// L8: the answer to the start-at-sign-in question, while it is open.
     autostart_answer: Option<Receiver<bool>>,
 }
@@ -552,11 +559,12 @@ impl App {
         }
     }
 
-    /// UP1: `neutral` is active, no switch runs or waits, and the tray is
-    /// not quitting. Asked on this window thread, so the answer holds for
-    /// the request that is being handled.
+    /// UP1: `neutral` is active, no switch runs or waits, the tray is not
+    /// quitting and the session is not ending. Asked on this window thread,
+    /// so the answer holds for the request that is being handled.
     fn idle_in_neutral(&self) -> bool {
-        self.status.is_neutral()
+        !self.session_ending
+            && self.status.is_neutral()
             && self.controller.running().is_none()
             && self.controller.pending().is_none()
             && !self.controller.is_quitting()
@@ -603,6 +611,31 @@ impl App {
                 offer.version
             );
             self.update_waiting = Some(offer.version.clone());
+        }
+    }
+
+    /// Carries out the menu command of item `id`.
+    fn run(&mut self, id: u16, command: Option<MenuCommand>) {
+        match command {
+            Some(MenuCommand::Switch(target)) => {
+                if self.controller.is_quitting() {
+                    return;
+                }
+                info!("tray: menu asks for \"{target}\"");
+                self.submit(Job::switch(&target), None);
+            }
+            Some(MenuCommand::ToggleAutostart) => self.toggle_autostart(),
+            Some(MenuCommand::OpenWindow) => open_window(),
+            Some(MenuCommand::UpdateMode(mode)) => self.set_update_mode(mode),
+            Some(MenuCommand::InstallUpdate) => {
+                if self.updates.installing() {
+                    info!("tray: an update is being installed already");
+                } else {
+                    update::open_install();
+                }
+            }
+            Some(MenuCommand::Quit) => self.quit(),
+            None => info!("tray: command {id} has no meaning; ignored"),
         }
     }
 
@@ -737,7 +770,7 @@ impl App {
             self.maybe_install_update();
         }
         // Items that depend on the result (acknowledge, offer) get their IDs.
-        // Profile IDs stay stable: they follow the order in the file.
+        // A menu that is open keeps its own commands (`chosen`).
         self.menu = Menu::build(&self.profile_names(), &self.status);
     }
 
@@ -865,25 +898,23 @@ impl window::Handler for App {
         self.sync_hotkeys();
         self.redraw();
         self.menu = Menu::build(&names, &self.status);
+        self.shown_menu = Some(self.menu.clone());
         self.menu.items.clone()
     }
 
+    fn chosen(&mut self, id: u16) {
+        // The menu that was shown: `finished` may have rebuilt `self.menu`
+        // while it was open (a profile added to the file, the offer taken).
+        let command = self
+            .shown_menu
+            .take()
+            .and_then(|menu| menu.command(id).cloned());
+        self.run(id, command);
+    }
+
     fn command(&mut self, id: u16) {
-        match self.menu.command(id).cloned() {
-            Some(MenuCommand::Switch(target)) => {
-                if self.controller.is_quitting() {
-                    return;
-                }
-                info!("tray: menu asks for \"{target}\"");
-                self.submit(Job::switch(&target), None);
-            }
-            Some(MenuCommand::ToggleAutostart) => self.toggle_autostart(),
-            Some(MenuCommand::OpenWindow) => open_window(),
-            Some(MenuCommand::UpdateMode(mode)) => self.set_update_mode(mode),
-            Some(MenuCommand::InstallUpdate) => update::open_install(),
-            Some(MenuCommand::Quit) => self.quit(),
-            None => info!("tray: command {id} has no meaning; ignored"),
-        }
+        let command = self.menu.command(id).cloned();
+        self.run(id, command);
     }
 
     fn wake(&mut self) {
@@ -901,6 +932,11 @@ impl window::Handler for App {
         if self.updates.check_ended() {
             self.refresh_update();
             update::log_result(self.status.update.as_ref());
+            // A version whose earlier attempt ended in an error before the
+            // tray was touched (offline, checksum) is tried again after a
+            // later check, at most once a day. Failures after the tray quit
+            // are recorded in `update.json` and never retried by themselves.
+            self.update_started = None;
             self.maybe_install_update();
             self.schedule_update();
         }
@@ -938,6 +974,7 @@ impl window::Handler for App {
 
     fn query_end_session(&mut self) -> bool {
         info!("tray: session is ending; resuming everything");
+        self.session_ending = true;
         // The profile to offer next time: the active one, or the offer that
         // was not taken up yet.
         if !self.status.is_neutral() {
@@ -971,6 +1008,7 @@ impl window::Handler for App {
     }
 
     fn end_session(&mut self, ending: bool) {
+        self.session_ending = ending;
         if !ending {
             // The profile is off now; offer it again (S5).
             match &self.status.offer {
