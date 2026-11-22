@@ -4,13 +4,20 @@ Status: **Entwurf abgeschlossen.** Logo, Farben, Tray-Symbole, Wortmarke, Progra
 
 ## Stand
 
-- **Logo:** [08b · K abgesetzt](logos/08b-k-abgesetzt.svg)
-- **Farbschema:** A · Gletscher, Akzent `#B54300` hell und `#FF8A1F` dunkel
-- **Tray-Zustände:** Ansatz 2, die Kachel, pixelgenau als `.ico` in `tray/ico/`
-- **Vorstellung der Lösung:** [aktueller-stand.html](aktueller-stand.html), mit
-  den Tray-Symbolen in Originalgröße
+- **Logo:** [09 · Eiswürfel mit warmer Seite](logos/09-eiswuerfel-warm.svg)
+  (Variante A2 der fünften Runde, siehe unten). Das K-Logo 08b ist abgelöst.
+- **Farben:** kalter Würfel `#1593AF`, warme Seite `#E8780C` hell und `#FF8A1F`
+  dunkel, Pause-Balken `#0E1620`. Die Farbschemata (Gletscher) unten gelten
+  weiter für Oberflächen und Text.
+- **Tray-Zustände:** der Würfel selbst, ohne Kachel, pixelgenau als `.ico` in
+  `tray/ico/`: kalt mit Pause-Balken = neutral, rechte Seite warm = Profil
+  aktiv, roter Würfel mit Ausrufezeichen = Fehler.
+- **Programm-Symbol:** der Würfel hell auf der dunklen Kachel `#12324B`.
+- Die Abschnitte ab »Akzent im Dunkelmodus« und alles darunter beschreiben den
+  Weg bis 08b und gehören zur Geschichte; `aktueller-stand.html` zeigt noch
+  das K-Logo.
 
-![08b](vorschau/08b-k-abgesetzt.svg)
+![09](logos/09-eiswuerfel-warm.svg)
 
 ### Wortmarke
 
@@ -54,6 +61,8 @@ Social preview. Quelle ist `social/social-preview.svg`; beide schreibt
 ### Tray-Symbole, reingezeichnet
 
 ![Tray-Symbole vergrößert und in Originalgröße](vorschau/tray-pixel.png)
+
+Gezeichnet mit dem Würfel (Stand fünfte Runde). Die Tabelle unten beschreibt noch die K-Kacheln der vierten Runde.
 
 Je Zustand: 16 px zehnfach vergrößert, darunter 24 px vierfach, daneben 16, 20,
 24, 32 und 48 px in Originalgröße. Oben helle, unten dunkle Taskleiste.
@@ -315,6 +324,22 @@ unterscheidet sich auch in der Form (er liest sich als schräges
 Ausrufezeichen); »aktiv« und »alles kalt« unterscheiden sich nur in der Farbe
 eines Arms.
 
+## Fünfte Runde: weg vom K
+
+Rückmeldung zu 08b: sieht zu sehr nach KDE aus. Gründe: ein einzelnes großes K
+(bei KDE das Markenzeichen), das Blau `#2A8FD6` nah am Plasma-Blau von Breeze,
+dicke abgerundete Striche und eine abgerundete Kachel im Tray.
+
+Fünf Entwürfe ohne K, ohne Kachel und ohne Breeze-Blau: Eiswürfel mit Pause,
+Eisberg, Frostflocke, Thermometer, Kristallraute. Gewählt wurde der Eiswürfel.
+Weil ihm eine Kontrastfarbe fehlte, entstanden drei Varianten, gewählt ist
+**A2**: die rechte Würfelseite ist warm, die Pause-Balken bleiben dunkel. Der
+Gegensatz kalt/warm trägt die Zustände: im Tray kippt nur die rechte Seite von
+kalt auf warm.
+
+Anmerkung: Die zwei dunklen Balken können bei sehr kleinen Größen wie Augen
+wirken; das Zeichen bleibt dadurch aber auch bei 16 px eindeutig.
+
 ## Farbschemata
 
 Jedes Blatt zeigt links die helle, rechts die dunkle Variante: eine
@@ -468,6 +493,7 @@ jedes Schema umfärben.
 
 | Pfad | Inhalt |
 | --- | --- |
+| `logos/09-eiswuerfel-warm*.svg` | gewähltes Logo und Avatar |
 | `logos/NN-name.svg` | Marke, transparenter Grund, 32er-Raster |
 | `logos/NN-name-avatar.svg` | Marke auf dunkler Kachel, für Avatar und README |
 | `vorschau/NN-name.svg` | Vergleichsblatt: groß, 32 px, 16 px, hell und dunkel |

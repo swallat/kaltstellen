@@ -14,57 +14,45 @@ HERE = pathlib.Path(__file__).resolve().parent
 SIZES = (16, 20, 24, 32, 48, 256)
 SS = 4  # supersampling per axis, for the diagonals and round corners
 
+COLD = (0x15, 0x93, 0xAF)       # the ice cube
+WARM = (0xE8, 0x78, 0x0C)       # the warm side: a profile is active
+WARM_BRIGHT = (0xFF, 0x8A, 0x1F)
+ERROR = (0xC8, 0x1E, 0x4A)
 WHITE = (255, 255, 255)
 DARK = (0x0E, 0x16, 0x20)
-RAY_STRENGTH = 0.65  # how far the crystal rays go from tile colour towards glyph colour
-# Per state: tile colour, glyph colour. "aktiv" and "fehler" differ in hue
-# (orange against crimson), in brightness (2.4 : 1) and in glyph colour and shape.
-STATES = {
-    "neutral": ((0x2A, 0x8F, 0xD6), WHITE),  # nothing on ice
-    "aktiv": ((0xFF, 0x8A, 0x1F), DARK),     # a profile is active
-    "fehler": ((0xC8, 0x1E, 0x4A), WHITE),   # error
-}
-# Per size: tile margin, tile corner radius, stroke width, top of the K.
+
+# The logo (A2, "Eiswuerfel") on its 32 grid. Points of the hexagon; the right
+# face is the warm one.
+HEX = [(16, 3.5), (26.8, 9.75), (26.8, 22.25), (16, 28.5), (5.2, 22.25), (5.2, 9.75)]
+RIGHT = [(16, 16), (26.8, 9.75), (26.8, 22.25), (16, 28.5)]
+EDGES = [((5.2, 9.75), (16, 16)), ((16, 16), (26.8, 9.75)), ((16, 16), (16, 28.5))]
+BARS = ((12.2, 12.5, 21.0), (19.8, 12.5, 21.0))  # x, top, bottom of a pause bar's centre line
+
+# Tray: the cube without a tile. States differ in colour and shape:
+# neutral = cold cube with pause bars, aktiv = the right face turns warm,
+# fehler = red cube with an exclamation mark instead of the bars.
+STATES = ("neutral", "aktiv", "fehler")
+# Per size: scale of the logo grid (1.0 = as drawn on 32) and bar width in px.
 HINTS = {
-    16: dict(margin=0, radius=3, stroke=2, top=3),
-    20: dict(margin=0, radius=4, stroke=2, top=4),
-    24: dict(margin=1, radius=5, stroke=3, top=5),
-    32: dict(margin=1, radius=7, stroke=4, top=7),
-    48: dict(margin=2, radius=10, stroke=6, top=10),
-    256: dict(margin=8, radius=56, stroke=32, top=56),
+    16: dict(scale=0.62, bar=2.0),
+    20: dict(scale=0.78, bar=2.4),
+    24: dict(scale=0.93, bar=2.8),
+    32: dict(scale=1.2, bar=3.6),
+    48: dict(scale=1.8, bar=5.2),
+    256: dict(scale=9.6, bar=30.0),
     # only used by the program icon
-    40: dict(margin=2, radius=9, stroke=5, top=9),
-    64: dict(margin=3, radius=14, stroke=8, top=14),
+    40: dict(scale=0.9, bar=3.2),
+    64: dict(scale=1.45, bar=4.6),
 }
-# Program icon (for the .exe, shortcuts, the window): the logo on a dark tile.
 APP_SIZES = (16, 20, 24, 32, 40, 48, 64, 256)
-# From 32 px up the program icon has room for a slimmer, taller K than the tray tiles.
-APP_HINTS = {
-    32: dict(stroke=3, top=6), 40: dict(stroke=4, top=8), 48: dict(stroke=5, top=9),
-    64: dict(stroke=6, top=12), 256: dict(stroke=24, top=46),
-}
-APP_TILE, APP_K, APP_WARM = (0x12, 0x32, 0x4B), (0xEA, 0xF4, 0xFB), (0xFF, 0x8A, 0x1F)
+APP_TILE, APP_COLD = (0x12, 0x32, 0x4B), (0x2B, 0xB3, 0xD1)
+APP_SCALE = {16: .5, 20: .62, 24: .74, 32: .95, 40: 1.2, 48: 1.4, 64: 1.85, 256: 7.4}
+APP_RADIUS = {16: 3, 20: 4, 24: 5, 32: 7, 40: 9, 48: 10, 64: 14, 256: 56}
+APP_MARGIN = {16: 0, 20: 0, 24: 1, 32: 1, 40: 2, 48: 2, 64: 3, 256: 8}
 
 
-def app_shapes(n):
-    """The program icon: light K with a warm upper arm and pale crystal rays on a dark tile."""
-    h = dict(HINTS[n], **APP_HINTS.get(n, {}))
-    m, w, top = h["margin"], h["stroke"], h["top"]
-    out = [(rrect(m, m, n - m, n - m, h["radius"]), APP_TILE)]
-    mid, bottom = n / 2, n - top
-    reach = mid - top - w / 2
-    ray, ray_r = round(reach * 0.7), max(0.6, w * 0.3)
-    x0 = round((n - (ray + ray_r + reach + w / 2)) / 2 + ray + ray_r - w / 2)
-    sx = x0 + w / 2
-    pale = tuple(round(t + (g - t) * 0.5) for t, g in zip(APP_TILE, (0x2A, 0x8F, 0xD6)))
-    out.append((capsule(sx, mid, sx - ray, mid - ray, ray_r), pale))
-    out.append((capsule(sx, mid, sx - ray, mid + ray, ray_r), pale))
-    # Below 40 px the warm arm stays attached; a gap would leave only a dot.
-    gap = w + max(1.0, w * 0.35) if n >= 40 else 0.0
-    out.append((capsule(sx + gap, mid - gap, sx + reach, mid - reach, w / 2), APP_WARM))
-    out.append((capsule(sx, mid, sx + reach, mid + reach, w / 2), APP_K))
-    out.append((rrect(x0, top, x0 + w, bottom, w * 0.3), APP_K))
-    return out
+def mix(a, b, t):
+    return tuple(round(x + (y - x) * t) for x, y in zip(a, b))
 
 
 def rrect(x0, y0, x1, y1, r):
@@ -90,36 +78,58 @@ def capsule(ax, ay, bx, by, r):
     return inside
 
 
+def polygon(pts):
+    """Convex polygon (clockwise on screen) as an inside test."""
+    def inside(x, y):
+        for (ax, ay), (bx, by) in zip(pts, pts[1:] + pts[:1]):
+            if (bx - ax) * (y - ay) - (by - ay) * (x - ax) < 0:
+                return False
+        return True
+    return inside
+
+
+def cube(n, scale, bar, cold, warm, bars_col, edges, error=False, ox=0.0, oy=0.0):
+    """The logo as shapes for an n px canvas: grid point (16, 16) lands on the centre.
+    warm=None draws the cube all cold; error=True swaps the pause bars for an exclamation mark."""
+    c = n / 2
+
+    def T(p):
+        return (c + ox + (p[0] - 16) * scale, c + oy + (p[1] - 16.25) * scale)
+    out = [(polygon([T(p) for p in HEX]), cold)]
+    if warm:
+        out.append((polygon([T(p) for p in RIGHT]), warm))
+    if edges:
+        pale = mix(cold, WHITE, 0.4)
+        for a, b in EDGES:
+            (ax, ay), (bx, by) = T(a), T(b)
+            out.append((capsule(ax, ay, bx, by, max(0.5, 0.6 * scale)), pale))
+    r = bar / 2
+    if error:
+        x, y0 = T((16, 0))[0], T((0, 10.5))[1]
+        y1, yd = T((0, 18.0))[1], T((0, 23.0))[1]
+        out.append((capsule(x, y0 + r, x, y1 - r, r), bars_col))
+        out.append((capsule(x, yd, x, yd, r * 1.05), bars_col))
+    else:
+        for bx, top, bot in BARS:
+            x, y0 = T((bx, top))
+            y1 = T((bx, bot))[1]
+            out.append((capsule(x, y0 + r, x, y1 - r, r), bars_col))
+    return out
+
+
 def shapes(state, n):
-    """The shapes of one icon, back to front, as (inside test, colour)."""
+    """The shapes of one tray icon, back to front, as (inside test, colour)."""
     h = HINTS[n]
-    m, w, top = h["margin"], h["stroke"], h["top"]
-    tile, WHITE = STATES[state]  # WHITE: this state's glyph colour
-    out = [(rrect(m, m, n - m, n - m, h["radius"]), tile)]
-    mid, bottom = n / 2, n - top
     if state == "fehler":
-        # Exclamation mark instead of the K: a shape of its own, not only a colour.
-        bw = w + (w % 2)
-        x0 = mid - bw / 2
-        split = bottom - bw - max(1, round(n / 12))
-        out.append((rrect(x0, top, x0 + bw, split, bw * 0.3), WHITE))
-        out.append((rrect(x0, bottom - bw, x0 + bw, bottom, bw / 2 if n >= 32 else bw * 0.3), WHITE))
-        return out
-    reach = mid - top - w / 2           # how far the arms run, at 45 degrees
-    # The other half of the ice crystal: two short, thin, paler rays left of the stem.
-    ray, ray_r = round(reach * 0.7), max(0.6, w * 0.3)
-    width = ray + ray_r + reach + w / 2
-    x0 = round((n - width) / 2 + ray + ray_r - w / 2)   # centre crystal and K in the tile
-    sx = x0 + w / 2
-    pale = tuple(round(t + (g - t) * RAY_STRENGTH) for t, g in zip(tile, WHITE))
-    out.append((capsule(sx, mid, sx - ray, mid - ray, ray_r), pale))
-    out.append((capsule(sx, mid, sx - ray, mid + ray, ray_r), pale))
-    out.append((rrect(x0, top, x0 + w, bottom, w * 0.3), WHITE))
-    out.append((capsule(sx, mid, sx + reach, mid + reach, w / 2), WHITE))
-    # Active: the warm arm is set off from the stem by a gap. Below 32 px the
-    # gap would leave only a dot, so there the colour alone carries the state.
-    gap = w * 0.5 + max(1.0, n / 16) + w / 2 if state.startswith("aktiv") and n >= 32 else 0.0
-    out.append((capsule(sx + gap, mid - gap, sx + reach, mid - reach, w / 2), WHITE))
+        return cube(n, h["scale"], h["bar"], ERROR, None, WHITE, n >= 32, error=True)
+    return cube(n, h["scale"], h["bar"], COLD, WARM_BRIGHT if state == "aktiv" else None, DARK, n >= 32)
+
+
+def app_shapes(n):
+    """The program icon: the logo on a dark tile."""
+    m = APP_MARGIN[n]
+    out = [(rrect(m, m, n - m, n - m, APP_RADIUS[n]), APP_TILE)]
+    out += cube(n, APP_SCALE[n], max(2.0, 3.6 * APP_SCALE[n]), APP_COLD, WARM_BRIGHT, DARK, n >= 40)
     return out
 
 

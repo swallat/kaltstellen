@@ -104,9 +104,9 @@ The tray app does not exist yet, but its icon does. One tile, three states:
 
 | | State | Meaning |
 | :-: | --- | --- |
-| <img src="branding/tray/png/kaltstellen-neutral-32.png" width="32" height="32" alt="Blue tile with a white K"> | Neutral | No profile active, nothing on ice |
-| <img src="branding/tray/png/kaltstellen-aktiv-32.png" width="32" height="32" alt="Orange tile with a dark K"> | Profile active | Apps outside the profile are frozen or closed |
-| <img src="branding/tray/png/kaltstellen-fehler-32.png" width="32" height="32" alt="Red tile with a white exclamation mark"> | Error | Something could not be frozen, resumed or started |
+| <img src="branding/tray/png/kaltstellen-neutral-32.png" width="32" height="32" alt="Cold ice cube with two pause bars"> | Neutral | No profile active, nothing on ice |
+| <img src="branding/tray/png/kaltstellen-aktiv-32.png" width="32" height="32" alt="Ice cube with a warm right side"> | Profile active | Apps outside the profile are frozen or closed |
+| <img src="branding/tray/png/kaltstellen-fehler-32.png" width="32" height="32" alt="Red cube with an exclamation mark"> | Error | Something could not be frozen, resumed or started |
 
 Logo, wordmark, colours and icons live in [branding/](branding/), together
 with the scripts that generate them. The notes there are in German.
