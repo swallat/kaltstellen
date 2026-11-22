@@ -44,6 +44,7 @@ kaltstellen recover [--no-wait]   resume everything frozen, e.g. after a crash
 kaltstellen tray                  notification-area icon with the profile menu
 kaltstellen autostart [on|off]    start the tray at sign-in (per-user Run key)
 kaltstellen gui                   window to edit profiles and their programs
+                                  (needs the WebView2 runtime of Windows 11)
 
 kaltstellen list [FILTER]         list running processes
 kaltstellen suspend NAME [--trim] freeze a program by hand: all processes with
@@ -105,6 +106,10 @@ Requires Windows and a stable Rust toolchain.
 ```powershell
 cargo build --release
 ```
+
+The main window is a web page in `ui/` shown with WebView2 and embedded
+into the executable; [ui/README.md](ui/README.md) explains how to work on its
+design in a normal browser without building Rust.
 
 The binary is `target\release\kaltstellen.exe`. Freezing processes that run
 elevated or under another user requires an elevated terminal.

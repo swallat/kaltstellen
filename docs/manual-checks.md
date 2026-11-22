@@ -42,35 +42,50 @@ Afterwards remove `%TEMP%\ks-manual` and `HKCU\Software\kaltstellen-manual`.
 2. Start a second program that takes the same hotkey first (for example a second test tray with another data folder and the same hotkey), then the first tray: the menu lists `Hotkey not available: …`; the profile still works from the menu.
 3. With a German layout and `hotkey = "Ctrl+Alt+7"` in a profile, type AltGr+7 in an editor while the tray runs: `{` must still appear.
 
-## Main window (WP10)
+## Main window (WP10, WebView2)
 
 Start with the test configuration from above (copy `config.example.toml`).
+Screenshots from the automated review are in `local/screenshots/` when the
+main session made them; they show the views below in light and dark.
 
-1. `kaltstellen gui`: a window titled `kaltstellen` opens within a second,
-   sharp at 100 %, 150 % and 200 % scaling; text is not cut off in buttons,
-   labels and column headers. Move it to a monitor with another scaling:
-   it stays sharp and laid out.
-2. Tab moves between controls; Alt plus the underlined letter presses a
-   button.
-3. Select a profile: its entries appear with action and options. Type a
-   name and press `New`, `Copy`, `Rename`: the list follows and the file
-   keeps its comments (open it in an editor).
-4. Select an entry, choose another action, `Set action`: the row changes.
-   Choose `start` for an entry without a path: the status line refuses it.
-5. `Add executable…`: the file dialog opens on `.exe` files; the chosen one
-   appears with its path.
-6. In the running programs, select `explorer.exe`, `Add to profile`: the
-   status line refuses it. Select a remote-access tool if one runs (or add
-   `anydesk.exe` by executable): the window asks; `No` adds nothing, `Yes`
-   adds it with `confirmed`.
-7. `Apply profile`: the status line reports the result; with the tray
-   running its icon changes too.
-8. Make the selected profile the active one, then `Delete`: after the
-   question the window switches to neutral first and then deletes it.
-9. Edit the file in an editor while the window is open, then make a change
-   in the window: the status line says the file was changed and reloads it.
-10. Tray menu `Open kaltstellen…` opens the window without a console
-    window; closing the window ends its process.
+1. `kaltstellen gui`: a window titled `kaltstellen` with the program icon
+   opens within about a second. Check it at 100 %, 150 % and 200 % scaling
+   and after moving it to a monitor with another scaling: sharp, nothing
+   cut off, no horizontal scroll bar.
+2. Switch Windows between light and dark mode (Settings, Personalisation,
+   Colours): the window follows.
+3. Keyboard only: Tab reaches every button, field and table command in a
+   sensible order, the focus ring is visible everywhere, Enter and Space
+   press buttons, Escape closes a dialog, and focus returns to the window
+   afterwards.
+4. Profiles: `New`, `Rename`, `Copy`, `Delete` change the list; the
+   configuration file keeps its comments (open it in an editor). An invalid
+   name shows the reason in the dialog.
+5. Hotkey: type `Ctrl+Alt+Banana`, `Set`: the field is marked and the status
+   line explains; a valid one is saved.
+6. `Edit` on an entry: the options change with the action (start: arguments
+   and folder; stop: timeout and restart, with arguments when restart is
+   ticked; suspend: trim). `Start` without a path is refused with a message.
+7. `Add program…`: running programs with memory and protection; protected
+   ones cannot be added; for a warn-list program (for example `anydesk.exe`
+   via `Choose executable…`) a question appears; `Add anyway` adds it with
+   `confirmed`.
+8. `Apply profile`: the button shows `Applying…`, then the status line the
+   result; with the tray running its icon changes too.
+9. Make the selected profile active, then `Delete`: the question says it
+   switches to Neutral first; afterwards the profile is gone.
+10. Unassigned programs: start a program with a tray icon that has no entry;
+    `Refresh`: it is listed as `new`; `Dismiss` removes it.
+11. `Start at sign-in` in the header follows the tray's menu item (use the
+    test Run key from above).
+12. Edit the file in an editor while the window is open, then make a change
+    in the window: the status line says the file was changed and reloads it.
+13. Right click in the page: no browser context menu (release build). Ctrl+P,
+    F5, Ctrl+F do nothing (release build).
+14. Tray menu `Open kaltstellen…` opens the window without a console window;
+    closing it ends its process and the `msedgewebview2.exe` processes it
+    started (Task Manager, Details, column "Command line" shows the data
+    folder `kaltstellen\webview2`).
 
 ## Unassigned programs (T22)
 

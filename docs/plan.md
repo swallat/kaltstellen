@@ -122,4 +122,12 @@ name. Purpose: find out which real apps tolerate being frozen.
   only read.
 - M4 design notes (2026-11-22): `docs/design-elevated-helper.md` (A5, P8) and
   `docs/design-automatic-triggers.md` (U4), for the owner to decide; no code.
-
+- Main window on WebView2 (2026-11-23, owner decision; branch `gui-webview`):
+  the native window is replaced by a WebView2 page (`ui/`, embedded; host in
+  `src/win32/webview.rs`, bridge in `src/gui/bridge.rs`, documented in
+  `docs/gui-bridge.md`). Document editing and validation stay in Rust.
+  Tests drive the real page through its bridge (`--drive`) and capture it
+  (`--screenshot`); screenshots of all views in light and dark were reviewed.
+  Indicative: page ready after about 0.54 s, about 74 to 78 MB private
+  working set for the window and its WebView2 processes, executable 2.97 MB
+  (was 2.54 MB), tray idle unchanged at about 1.6 MB.

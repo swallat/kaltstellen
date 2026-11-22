@@ -29,14 +29,22 @@ owner says so.
 
 ## Main window (M3)
 
-7. **M6 toolkit**: native Win32 instead of egui (measured: 16 MB versus 67
-   to 229 MB working set). Overrule if a richer look matters more than the
-   30 MB budget.
+7. **M6 toolkit**: closed. The owner decided on 2026-11-23: WebView2
+   directly, plain HTML/CSS/JS without build step, native window removed,
+   runtime missing means a clear message and `KS702`.
 8. **M6 behaviour**: every accepted edit is saved at once (no Save button,
    no undo); a file changed on disk wins and the edit is repeated; a second
    `kaltstellen gui` only reports instead of bringing the window to the
-   front; fixed window size; deleting asks for confirmation; copying a
-   profile drops its hotkey.
+   front; deleting asks for confirmation; copying a profile drops its
+   hotkey. The WebView window can be resized (the native one could not).
+12. **M6 WebView details**: origin `https://ui.kaltstellen.invalid/` with a
+    403 for everything else; dev tools only in debug builds; user data
+    folder `webview2` in the data directory (cache of the page, a few MB);
+    window 1040 x 760 at 100 %; review options `--screenshot`, `--view`,
+    `--theme`, `--drive` stay in the release executable, hidden from help.
+13. **M6 bridge**: the message set of `docs/gui-bridge.md`; every edit is
+    one request and one save; the page gets the whole state with every
+    reply (simple, a few KB).
 
 ## Unassigned programs (N1)
 
