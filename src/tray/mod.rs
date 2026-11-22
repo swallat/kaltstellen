@@ -7,6 +7,7 @@
 //! [`crate::win32`]; this module decides what it shows.
 
 pub mod client;
+pub mod hotkeys;
 pub mod model;
 pub mod protocol;
 pub mod server;
@@ -206,8 +207,10 @@ pub fn main() -> u8 {
             config_dir: config_dir.clone(),
             waiting: Vec::new(),
             menu: Menu::default(),
+            hotkeys: hotkeys::Registrar::default(),
         };
         app.refresh_autostart();
+        app.sync_hotkeys();
         app.menu = Menu::build(&names, &app.status);
         Box::new(app)
     });
@@ -256,6 +259,7 @@ struct App {
     waiting: Vec<Waiter>,
     /// Where `settings.json` lives.
     config_dir: Option<PathBuf>,
+    hotkeys: hotkeys::Registrar,
 }
 
 /// How long `WM_QUERYENDSESSION` waits for everything to be resumed. Windows
@@ -292,6 +296,24 @@ impl App {
     }
 
     /// A request from the menu (`waiter` is `None`) or the pipe.
+    /// WP9: registers what the configuration asks for now (C4 re-read),
+    /// releases what it no longer does.
+    fn sync_hotkeys(&mut self) {
+        let wanted = hotkeys::wanted(&lock(&self.source).config().profiles);
+        self.hotkeys.sync(
+            &wanted,
+            &mut |b| {
+                window::register_hotkey(
+                    b.id,
+                    hotkeys::modifier_flags(&b.hotkey),
+                    b.hotkey.virtual_key(),
+                )
+            },
+            &mut window::unregister_hotkey,
+        );
+        self.status.hotkeys_unavailable = self.hotkeys.unavailable.clone();
+    }
+
     /// Reads start at sign-in for the menu.
     fn refresh_autostart(&mut self) {
         let at = autostart::Location::current();
@@ -418,6 +440,7 @@ impl App {
                 warn!("tray: on quit: {error}");
             }
             self.exit_code.set(exit::of(true, &done.outcome.errors));
+            self.hotkeys.clear(&mut window::unregister_hotkey);
             window::exit();
             return;
         }
@@ -427,6 +450,7 @@ impl App {
             self.status.switching = Some(next.leads_to().to_owned());
             self.running = std::mem::take(&mut self.waiting);
         }
+        self.sync_hotkeys();
         // Items that depend on the result (acknowledge, offer) get their IDs.
         // Profile IDs stay stable: they follow the order in the file.
         self.menu = Menu::build(&self.profile_names(), &self.status);
@@ -507,6 +531,7 @@ impl window::Handler for App {
             self.status.active = state.active_profile;
         }
         self.refresh_autostart();
+        self.sync_hotkeys();
         self.redraw();
         self.menu = Menu::build(&names, &self.status);
         self.menu.items.clone()
@@ -607,6 +632,19 @@ impl window::Handler for App {
             Ok(count) => info!("tray: session ends; {count} stopped record(s) cleared"),
             Err(err) => warn!("tray: session ends; {err}"),
         }
+    }
+
+    fn hotkey(&mut self, id: i32) {
+        let Some(profile) = self.hotkeys.profile(id).map(str::to_owned) else {
+            info!("tray: hotkey {id} has no profile; ignored");
+            return;
+        };
+        if self.controller.is_quitting() {
+            return;
+        }
+        // The same queue as a menu click (W3).
+        info!("tray: hotkey asks for \"{profile}\"");
+        self.submit(Job::switch(&profile), None);
     }
 
     fn power(&mut self, event: u32) {

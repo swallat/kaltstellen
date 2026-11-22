@@ -140,6 +140,8 @@ pub struct Status {
     pub offer: Option<String>,
     /// Start at sign-in: `None` if the Run key cannot be read.
     pub autostart: Option<bool>,
+    /// Hotkeys another program holds (C5), as `hotkey (profile)`.
+    pub hotkeys_unavailable: Vec<String>,
 }
 
 impl Default for Status {
@@ -152,6 +154,7 @@ impl Default for Status {
             pipe_error: None,
             offer: None,
             autostart: None,
+            hotkeys_unavailable: Vec::new(),
         }
     }
 }
@@ -349,6 +352,9 @@ impl Menu {
                 );
             }
             menu.items.push(Item::Separator);
+        }
+        for hotkey in &status.hotkeys_unavailable {
+            menu.disabled(format!("Hotkey not available: {}", escape(hotkey)));
         }
         if let Some(on) = status.autostart {
             menu.entry(

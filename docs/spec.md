@@ -114,6 +114,13 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
   - The menu shows `Clear error state` while the last switch reported errors. It clears those errors without a switch; the icon then shows the active profile again. An invalid configuration file or a missing pipe keeps the error state, because the cause is still there; they clear when it is gone.
   - The executable embeds a manifest (`kaltstellen.manifest`): per-monitor DPI awareness v2, common controls version 6 for the main window, `asInvoker`. The console subcommands print exactly the same output with the same exit codes as without it (compared for `--help`, `status`, `check-config`, `list`, `switch`, `autostart`). The tray logs its DPI awareness at start.
 
+- **L10 Hotkeys** **[assumed]** (WP9; U3, C5, C7):
+  - The tray registers the `hotkey` of each profile on its window with `MOD_NOREPEAT`. The `WM_HOTKEY` ID is the position of the profile in the file plus one. A pressed hotkey is queued like a menu click (W3).
+  - `Ctrl+Alt+<letter or digit>` is never registered (C7); `check-config` warns about it.
+  - The hotkeys are brought in line with the configuration at start, whenever the menu opens and after every finished job (each of which re-reads the file, C4). Only changed hotkeys are released and registered again.
+  - A hotkey another program holds is logged once per hotkey and profile, listed in the menu as `Hotkey not available: <hotkey> (<profile>)`, and tried again at every later sync; it does not set the error state. The profile stays usable from the menu and the command line.
+  - All hotkeys are released at Quit; Windows also releases them when the tray process ends.
+
 ## 5. Configuration (TOML)
 
 Location `%APPDATA%\kaltstellen\config.toml`. The repository ships only `config.example.toml` with generic names.

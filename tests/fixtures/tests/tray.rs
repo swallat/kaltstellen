@@ -27,9 +27,13 @@ use std::os::windows::process::CommandExt;
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey,
+    UnregisterHotKey,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetWindowThreadProcessId, PostMessageW, WM_COMMAND, WM_ENDSESSION,
-    WM_POWERBROADCAST, WM_QUERYENDSESSION,
+    WM_HOTKEY, WM_POWERBROADCAST, WM_QUERYENDSESSION,
 };
 use windows::core::BOOL;
 
@@ -735,4 +739,102 @@ fn w2_error_state_can_be_acknowledged_without_a_switch() {
         "no switch"
     );
     assert_eq!(t.quit(), Some(0));
+}
+
+/// A hotkey this test thread holds, like another program would; released
+/// on drop. Only Ctrl+Shift+Alt with F22 to F24, which keyboards rarely have.
+struct HeldHotkey(i32);
+
+const VK_F22: u32 = 0x85;
+const VK_F23: u32 = 0x86;
+const VK_F24: u32 = 0x87;
+
+impl HeldHotkey {
+    fn take(id: i32, vk: u32) -> Option<HeldHotkey> {
+        let mods = HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_SHIFT.0 | MOD_ALT.0 | MOD_NOREPEAT.0);
+        // SAFETY: registers for this thread; released in Drop on the same
+        // thread.
+        unsafe { RegisterHotKey(None, id, mods, vk) }
+            .ok()
+            .map(|()| HeldHotkey(id))
+    }
+}
+
+impl Drop for HeldHotkey {
+    fn drop(&mut self) {
+        // SAFETY: registered by this thread with this ID.
+        let _ = unsafe { UnregisterHotKey(None, self.0) };
+    }
+}
+
+#[test]
+fn t17_wp9_hotkeys_register_report_taken_ones_once_and_switch() {
+    let Some(blocker) = HeldHotkey::take(0x7101, VK_F23) else {
+        eprintln!("skipped: Ctrl+Shift+Alt+F23 is held by another program");
+        return;
+    };
+    let mut t = Tray::new();
+    let _x = t.program("ks-hk-x.exe");
+    let _y = t.program("ks-hk-y.exe");
+    let config = |b_key: &str| {
+        format!(
+            "[[profile]]\nname = \"a\"\nhotkey = \"Ctrl+Shift+Alt+F23\"\n\n  [[profile.app]]\n  exe = \"ks-hk-x.exe\"\n\n\
+             [[profile]]\nname = \"b\"\nhotkey = \"{b_key}\"\n\n  [[profile.app]]\n  exe = \"ks-hk-y.exe\"\n\n\
+             [[profile]]\nname = \"c\"\nhotkey = \"Ctrl+Alt+7\"\n"
+        )
+    };
+    t.config(&config("Ctrl+Shift+Alt+F24"));
+    t.start(1);
+    t.wait_log(
+        "tray: hotkey Ctrl+Shift+Alt+F24 registered for \"b\" (id 2)",
+        1,
+    );
+    t.wait_log(
+        "tray: hotkey Ctrl+Shift+Alt+F23 for \"a\" is not available",
+        1,
+    );
+    assert!(
+        !t.log().contains("Ctrl+Alt+7 registered"),
+        "C7: AltGr key left out"
+    );
+
+    // A pressed hotkey goes through the queue like a menu click. The press
+    // is posted to the test tray; no real keyboard input is synthesised.
+    t.post(WM_HOTKEY, 2);
+    t.wait_log("tray: hotkey asks for \"b\"", 1);
+    t.wait_log("tray: switch to \"b\" finished", 1);
+    assert!(t.is_frozen("ks-hk-y.exe"));
+
+    // The profile with the taken hotkey still works from the menu, and the
+    // failure is not reported again.
+    t.click(ID_PROFILE_BASE);
+    t.wait_log("tray: switch to \"a\" finished", 1);
+    assert!(t.is_frozen("ks-hk-x.exe"));
+    assert_eq!(t.logged("Ctrl+Shift+Alt+F23 for \"a\" is not available"), 1);
+
+    // Once the other program lets go, the next sync takes the hotkey.
+    drop(blocker);
+    t.click(ID_NEUTRAL);
+    t.wait_log(
+        "tray: hotkey Ctrl+Shift+Alt+F23 registered for \"a\" (id 1)",
+        1,
+    );
+
+    // Changed configuration: the old hotkey is released, the new one held.
+    t.config(&config("Ctrl+Shift+Alt+F22"));
+    t.click(ID_NEUTRAL);
+    t.wait_log("tray: hotkey Ctrl+Shift+Alt+F24 for \"b\" released", 1);
+    t.wait_log(
+        "tray: hotkey Ctrl+Shift+Alt+F22 registered for \"b\" (id 2)",
+        1,
+    );
+    assert!(
+        HeldHotkey::take(0x7102, VK_F24).is_some(),
+        "F24 is free again"
+    );
+
+    assert_eq!(t.quit(), Some(0));
+    // Nothing stays registered after the tray ends.
+    assert!(HeldHotkey::take(0x7103, VK_F22).is_some());
+    assert!(HeldHotkey::take(0x7104, VK_F23).is_some());
 }

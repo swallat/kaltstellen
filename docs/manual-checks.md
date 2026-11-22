@@ -35,3 +35,10 @@ Afterwards remove `%TEMP%\ks-manual` and `HKCU\Software\kaltstellen-manual`.
 8. Start `kaltstellen tray` by double-clicking the executable in Explorer: a
    console window may flash and must close by itself; the icon appears.
 9. `Quit`: the icon disappears, the process ends.
+
+## Hotkeys (T17)
+
+1. Give a test profile `hotkey = "Ctrl+Shift+Alt+F9"`, start the tray, press the keys: the profile is applied (icon orange), once per press even when held down.
+2. Start a second program that takes the same hotkey first (for example a second test tray with another data folder and the same hotkey), then the first tray: the menu lists `Hotkey not available: …`; the profile still works from the menu.
+3. With a German layout and `hotkey = "Ctrl+Alt+7"` in a profile, type AltGr+7 in an editor while the tray runs: `{` must still appear.
+

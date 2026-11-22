@@ -18,6 +18,9 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_PER_MONITOR_AWARE, DPI_AWARENESS_SYSTEM_AWARE, DPI_AWARENESS_UNAWARE,
     GetAwarenessFromDpiAwarenessContext, GetThreadDpiAwarenessContext,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    HOT_KEY_MODIFIERS, RegisterHotKey, UnregisterHotKey,
+};
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
     NIN_SELECT, NINF_KEY, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
@@ -29,8 +32,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SM_CXSMICON,
     SM_CYSMICON, SM_MENUDROPALIGNMENT, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
     TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
-    WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_ENDSESSION, WM_NULL, WM_POWERBROADCAST,
-    WM_QUERYENDSESSION, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+    WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_ENDSESSION, WM_HOTKEY, WM_NULL,
+    WM_POWERBROADCAST, WM_QUERYENDSESSION, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
 use windows::core::PCWSTR;
 
@@ -78,6 +81,29 @@ pub trait Handler {
     fn end_session(&mut self, ending: bool);
     /// `WM_POWERBROADCAST` with its event (a `PBT_` constant).
     fn power(&mut self, event: u32);
+    /// `WM_HOTKEY` with the ID given to [`register_hotkey`].
+    fn hotkey(&mut self, id: i32);
+}
+
+/// Registers a global hotkey on the tray window. Window thread only. The
+/// error text says why (usually: another program holds it).
+pub fn register_hotkey(id: i32, modifiers: u32, virtual_key: u32) -> Result<(), String> {
+    let hwnd = WINDOW.with_borrow(|w| w.as_ref().map(|w| w.hwnd));
+    let Some(hwnd) = hwnd else {
+        return Err("no tray window".to_owned());
+    };
+    // SAFETY: the window belongs to this thread.
+    unsafe { RegisterHotKey(Some(hwnd), id, HOT_KEY_MODIFIERS(modifiers), virtual_key) }
+        .map_err(|e| e.message())
+}
+
+/// Releases a hotkey registered with [`register_hotkey`].
+pub fn unregister_hotkey(id: i32) {
+    let hwnd = WINDOW.with_borrow(|w| w.as_ref().map(|w| w.hwnd));
+    if let Some(hwnd) = hwnd {
+        // SAFETY: the window belongs to this thread.
+        let _ = unsafe { UnregisterHotKey(Some(hwnd), id) };
+    }
 }
 
 /// Wakes the window thread from any thread.
@@ -400,6 +426,10 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         }
         WM_ENDSESSION => {
             with_handler(|h| h.end_session(wparam.0 != 0));
+            LRESULT(0)
+        }
+        WM_HOTKEY => {
+            with_handler(|h| h.hotkey(wparam.0 as i32));
             LRESULT(0)
         }
         WM_POWERBROADCAST => {

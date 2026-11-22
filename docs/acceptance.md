@@ -21,7 +21,7 @@ real machine. Results: `pass`, `fail`, `open` (not run yet), `n/a`.
 | T14 | Shell responsive with windowed programs frozen | WP2/7 | open | open |
 | T15 | Unmatched programs never opened | WP2 | open | open |
 | T16 | Self and ancestor protection | WP2 | open | open (unit-tested) |
-| T17 | Hotkey taken or `Ctrl+Alt+<printable>` | WP9 | open | open |
+| T17 | Hotkey taken or `Ctrl+Alt+<printable>` | WP9 | open | open (logic passes: taken hotkey held by the test process, press posted as `WM_HOTKEY`; no real key press, see manual-checks.md) |
 | T18 | Elevated target reported, switch continues | WP2 | open | open |
 | T19 | Trim measured as available memory | WP2 | open | open |
 | T20 | Shutdown not blocked by frozen programs | WP8 | open | open (needs a real shutdown on the VM) |

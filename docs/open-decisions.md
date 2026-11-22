@@ -25,3 +25,5 @@ owner says so.
    the last switch, not an invalid configuration or a missing pipe; the
    executable carries a manifest with per-monitor DPI awareness v2 and
    common controls v6.
+6. **L10 hotkeys**: hotkey IDs follow the profile order; a taken hotkey is listed in the menu but does not turn the icon red; it is retried at every sync.
+
