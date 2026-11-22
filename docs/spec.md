@@ -96,6 +96,14 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
   - `CTRL_LOGOFF_EVENT` and `CTRL_SHUTDOWN_EVENT` are handled the same way, but Windows does not send them to processes that use `user32.dll`, which kaltstellen does; sign-out during a command-line switch is covered only as far as the console's close event arrives.
   - A command handed to the tray (L5) is not interrupted: Ctrl+C ends the waiting command line, the tray finishes the request.
 
+- **L7 Session end details fixed while implementing** **[assumed]** (WP8):
+  - At `WM_QUERYENDSESSION` the tray drops a waiting request (its command line gets exit code 3), queues a resume of everything suspended to run right after the running job (or at once), and answers only when it is done, at most after 4 s; then it allows the session to end. A switch still running after 4 s (long stop timeouts) is not waited for. The resume is the same as Quit (L2) but the tray keeps running. A second `WM_QUERYENDSESSION` while one is pending adds nothing.
+  - The last profile is written to `settings.json` (configuration directory, key `last_profile`) at `WM_QUERYENDSESSION`: the active profile, or, while `neutral` is active, the profile still on offer. Stopped records are cleared only at `WM_ENDSESSION` with "ending", so a cancelled shutdown keeps them; `WM_ENDSESSION` "cancelled" keeps the profile off and the offer in the menu.
+  - Offer: while `neutral` is active and the profile still exists, the menu starts with `Apply last profile: <name>`. Any switch from the menu or the command line uses the offer up and removes it from `settings.json`; start-up recovery and the session-end resume do not.
+  - Shutdown priority `SetProcessShutdownParameters(0x3FF, 0)`, the highest level for applications, so the tray is asked before the programs it froze.
+  - `WM_POWERBROADCAST`: suspend, resume and power events are logged (`tray: power event …`); nothing is resumed or frozen.
+  - Tested by posting these messages to the tray window of a test instance; a real sign-out or shutdown (T7, T20) is still to be run on the VM.
+
 ## 5. Configuration (TOML)
 
 Location `%APPDATA%\kaltstellen\config.toml`. The repository ships only `config.example.toml` with generic names.

@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use log::{info, warn};
 
@@ -25,6 +26,7 @@ use crate::config::{self, NEUTRAL};
 use crate::error::{Code, Error};
 use crate::exit;
 use crate::paths;
+use crate::settings::{self, Settings};
 use crate::state::Store;
 use crate::win32::{console, instance::Instance, pipe, tray as window};
 use model::{Command as MenuCommand, Decision, Icon, Menu, Status};
@@ -124,6 +126,7 @@ pub fn main() -> u8 {
 
     let store = Store::new(&data);
     let config_file = paths::config_file();
+    let config_dir = paths::config_dir();
     let source = Arc::new(Mutex::new(Source::new(config_file.clone())));
     let mut status = Status {
         // What a crashed instance left; recovery below makes it neutral.
@@ -133,6 +136,17 @@ pub fn main() -> u8 {
         switching: Some(NEUTRAL.to_owned()),
         ..Status::default()
     };
+    // S5: the profile of the last session is offered, not applied.
+    if let Some(dir) = &config_dir {
+        let (saved, problem) = settings::load(dir);
+        if let Some(problem) = problem {
+            warn!("tray: {problem}");
+        }
+        if let Some(last) = saved.last_profile {
+            info!("tray: offering last profile \"{last}\"");
+            status.offer = Some(last);
+        }
+    }
     let listener = match pipe::Listener::bind(&endpoints.pipe) {
         Ok(listener) => {
             info!("tray: pipe ready");
@@ -186,6 +200,7 @@ pub fn main() -> u8 {
             exit_code: Rc::clone(&exit_code),
             shown: Some(initial_icon),
             running: Vec::new(),
+            config_dir: config_dir.clone(),
             waiting: Vec::new(),
         })
     });
@@ -232,7 +247,13 @@ struct App {
     /// Clients of the running job, and of the waiting one (W3).
     running: Vec<Waiter>,
     waiting: Vec<Waiter>,
+    /// Where `settings.json` lives.
+    config_dir: Option<PathBuf>,
 }
+
+/// How long `WM_QUERYENDSESSION` waits for everything to be resumed. Windows
+/// treats a window that takes about 5 s as not responding.
+const END_SESSION_WAIT: Duration = Duration::from_secs(4);
 
 fn icon_name(icon: Icon) -> &'static str {
     match icon {
@@ -264,7 +285,24 @@ impl App {
     }
 
     /// A request from the menu (`waiter` is `None`) or the pipe.
+    /// Writes the offered last profile to `settings.json` (S5).
+    fn save_offer(&self) {
+        let Some(dir) = &self.config_dir else {
+            return;
+        };
+        let saved = Settings {
+            last_profile: self.status.offer.clone(),
+        };
+        if let Err(err) = settings::save(dir, &saved) {
+            warn!("tray: {err}");
+        }
+    }
+
     fn submit(&mut self, job: Job, waiter: Option<Waiter>) {
+        // A deliberate switch replaces the offer of the last session.
+        if matches!(job, Job::Switch { .. }) && self.status.offer.take().is_some() {
+            self.save_offer();
+        }
         let by = job.leads_to().to_owned();
         match self.controller.request(job) {
             Decision::Start(job) => {
@@ -462,6 +500,77 @@ impl window::Handler for App {
     fn close(&mut self) {
         info!("tray: WM_CLOSE received");
         self.quit();
+    }
+
+    fn query_end_session(&mut self) -> bool {
+        info!("tray: session is ending; resuming everything");
+        // The profile to offer next time: the active one, or the offer that
+        // was not taken up yet.
+        if !self.status.is_neutral() {
+            self.status.offer = Some(self.status.active.clone());
+        }
+        if self.status.offer.is_some() {
+            self.save_offer();
+        }
+        let superseded = self.controller.end_session();
+        self.supersede(superseded, "end of session");
+        // Answer only once frozen programs run again: Windows asks them next.
+        let deadline = Instant::now() + END_SESSION_WAIT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.done.recv_timeout(left) {
+                Ok(done) => {
+                    let last = matches!(done.job, Job::EndSession | Job::Quit);
+                    self.finished(done);
+                    if last {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    warn!("tray: resuming did not finish in time; letting the session end");
+                    break;
+                }
+            }
+        }
+        self.redraw();
+        true
+    }
+
+    fn end_session(&mut self, ending: bool) {
+        if !ending {
+            // The profile is off now; offer it again (S5).
+            match &self.status.offer {
+                Some(last) => info!("tray: end of session cancelled; offering \"{last}\" again"),
+                None => info!("tray: end of session cancelled"),
+            }
+            self.redraw();
+            return;
+        }
+        // Stopped records are cleared at sign-out and shutdown, kept on Quit
+        // and after a crash (S5).
+        let cleared = self.store.lock().and_then(|_lock| {
+            let (mut state, _) = self.store.load();
+            let count = state.stopped.len();
+            state.stopped.clear();
+            self.store.save(&state).map(|()| count)
+        });
+        match cleared {
+            Ok(count) => info!("tray: session ends; {count} stopped record(s) cleared"),
+            Err(err) => warn!("tray: session ends; {err}"),
+        }
+    }
+
+    fn power(&mut self, event: u32) {
+        // Standby is left alone (S5): frozen programs stay frozen.
+        let name = match event {
+            0x4 => "suspend",
+            0x7 => "resume after suspend",
+            0x12 => "automatic resume",
+            0xA => "power status change",
+            0x8013 => "power setting change",
+            _ => "other",
+        };
+        info!("tray: power event {name} (0x{event:x})");
     }
 }
 

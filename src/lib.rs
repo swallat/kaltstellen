@@ -31,6 +31,7 @@ pub mod paths;
 #[allow(unsafe_code)]
 pub mod process;
 pub mod protection;
+pub mod settings;
 pub mod state;
 pub mod tray;
 #[allow(unsafe_code)]

@@ -136,6 +136,8 @@ pub struct Status {
     pub config_error: Option<String>,
     /// The pipe for the command line could not be set up (L1).
     pub pipe_error: Option<String>,
+    /// S5: the profile of the last session, offered for one click.
+    pub offer: Option<String>,
 }
 
 impl Default for Status {
@@ -146,6 +148,7 @@ impl Default for Status {
             switch_errors: Vec::new(),
             config_error: None,
             pipe_error: None,
+            offer: None,
         }
     }
 }
@@ -255,6 +258,8 @@ pub enum Item {
 
 pub const ID_NEUTRAL: u16 = 1;
 pub const ID_QUIT: u16 = 2;
+/// Applies the profile of the last session (S5).
+pub const ID_LAST: u16 = 3;
 /// Profile `n` of the configuration has ID `ID_PROFILE_BASE + n`.
 pub const ID_PROFILE_BASE: u16 = 100;
 
@@ -271,6 +276,20 @@ impl Menu {
     /// belongs to the GUI (M3) and is shown disabled.
     pub fn build(profiles: &[String], status: &Status) -> Self {
         let mut menu = Menu::default();
+        // S5: offered after sign-in or a cancelled shutdown, never applied
+        // by itself; only while nothing else is active.
+        if let Some(last) = &status.offer
+            && status.is_neutral()
+            && let Some(name) = profiles.iter().find(|p| same_profile(p, last))
+        {
+            menu.entry(
+                ID_LAST,
+                format!("Apply last profile: {}", escape(name)),
+                false,
+                Command::Switch(name.clone()),
+            );
+            menu.items.push(Item::Separator);
+        }
         let mut active_listed = status.is_neutral();
         for (n, name) in profiles.iter().enumerate() {
             let Some(id) = u16::try_from(n)
@@ -515,6 +534,31 @@ mod tests {
         );
         assert_eq!(menu.command(ID_QUIT), Some(&Command::Quit));
         assert_eq!(menu.command(0), None);
+    }
+
+    #[test]
+    fn s5_menu_offers_the_last_profile_while_neutral() {
+        let profiles = vec!["focus".to_owned()];
+        let status = Status {
+            offer: Some("FOCUS".into()),
+            ..Status::default()
+        };
+        let menu = Menu::build(&profiles, &status);
+        assert_eq!(
+            labels(&menu)[..2],
+            ["Apply last profile: focus".to_owned(), "-".to_owned()]
+        );
+        assert_eq!(
+            menu.command(ID_LAST),
+            Some(&Command::Switch("focus".into()))
+        );
+        // Not while a profile is active, nor for a profile that is gone.
+        let active = Status {
+            active: "focus".into(),
+            ..status.clone()
+        };
+        assert_eq!(Menu::build(&profiles, &active).command(ID_LAST), None);
+        assert_eq!(Menu::build(&[], &status).command(ID_LAST), None);
     }
 
     #[test]

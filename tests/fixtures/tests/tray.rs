@@ -17,14 +17,15 @@ use std::time::Duration;
 
 use common::*;
 use kaltstellen::state::Store;
-use kaltstellen::tray::model::{ID_NEUTRAL, ID_PROFILE_BASE, ID_QUIT};
+use kaltstellen::tray::model::{ID_LAST, ID_NEUTRAL, ID_PROFILE_BASE, ID_QUIT};
 use kaltstellen::win32::tray::CLASS;
 use std::os::windows::process::CommandExt;
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetWindowThreadProcessId, PostMessageW, WM_COMMAND,
+    EnumWindows, GetClassNameW, GetWindowThreadProcessId, PostMessageW, WM_COMMAND, WM_ENDSESSION,
+    WM_POWERBROADCAST, WM_QUERYENDSESSION,
 };
 use windows::core::BOOL;
 
@@ -177,6 +178,18 @@ impl Tray {
         // makes the call fail.
         unsafe { PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(usize::from(id)), LPARAM(0)) }
             .expect("post WM_COMMAND");
+    }
+
+    /// Posts a window message as Windows would send it.
+    fn post(&self, message: u32, wparam: usize) {
+        let hwnd = tray_window(self.pid()).expect("tray window");
+        // SAFETY: as in `click`.
+        unsafe { PostMessageW(Some(hwnd), message, WPARAM(wparam), LPARAM(0)) }
+            .expect("post message");
+    }
+
+    fn settings(&self) -> String {
+        fs::read_to_string(self.dir.path().join("config").join("settings.json")).unwrap_or_default()
     }
 
     /// Quit from the menu; returns the exit code.
@@ -585,4 +598,56 @@ fn s5_ctrl_break_during_an_in_process_switch_leaves_nothing_frozen() {
     let state = t.store().peek().unwrap();
     assert!(state.suspended.is_empty());
     assert_eq!(state.active_profile, "neutral");
+}
+
+#[test]
+fn s5_t7_end_of_session_resumes_keeps_the_profile_for_next_time() {
+    let mut t = Tray::new();
+    let _a = t.program("ks-wp8-a.exe");
+    let mut b = t.program("ks-wp8-b.exe");
+    t.config(&profile(
+        "play",
+        &[("ks-wp8-a.exe", "suspend"), ("ks-wp8-b.exe", "stop")],
+    ));
+    t.start(1);
+    t.click(ID_PROFILE_BASE);
+    t.wait_log("tray: switch to \"play\" finished", 1);
+    assert!(t.is_frozen("ks-wp8-a.exe"));
+    assert!(wait_for(Duration::from_secs(5), || !b.alive()));
+
+    // WM_QUERYENDSESSION: everything resumed before the answer.
+    t.post(WM_QUERYENDSESSION, 0);
+    t.wait_log("tray: end of session finished", 1);
+    assert!(t.is_beating("ks-wp8-a.exe"));
+    assert!(t.settings().contains("\"play\""), "{}", t.settings());
+    assert_eq!(t.store().peek().unwrap().stopped.len(), 1);
+
+    // Cancelled: the profile stays off and is offered again; records stay.
+    t.post(WM_ENDSESSION, 0);
+    t.wait_log("tray: end of session cancelled; offering \"play\" again", 1);
+    assert_eq!(t.store().peek().unwrap().stopped.len(), 1);
+    assert!(t.is_beating("ks-wp8-a.exe"));
+
+    // Now for real: stopped records go (S5).
+    t.post(WM_QUERYENDSESSION, 0);
+    t.wait_log("tray: end of session finished", 2);
+    t.post(WM_ENDSESSION, 1);
+    t.wait_log("tray: session ends; 1 stopped record(s) cleared", 1);
+    assert!(t.store().peek().unwrap().stopped.is_empty());
+
+    // Standby is only logged.
+    t.post(WM_POWERBROADCAST, 0x4);
+    t.wait_log("tray: power event suspend (0x4)", 1);
+    assert_eq!(t.quit(), Some(0));
+
+    // Next sign-in: offered, not applied.
+    t.start(2);
+    assert_eq!(t.logged("tray: offering last profile \"play\""), 1);
+    assert!(t.is_beating("ks-wp8-a.exe"), "not applied by itself");
+    t.click(ID_LAST);
+    t.wait_log("tray: switch to \"play\" finished", 2);
+    assert!(t.is_frozen("ks-wp8-a.exe"));
+    assert!(!t.settings().contains("\"play\""), "the offer is used up");
+    assert_eq!(t.quit(), Some(0));
+    assert!(t.is_beating("ks-wp8-a.exe"));
 }

@@ -12,6 +12,7 @@ use std::cell::{Cell, RefCell};
 use log::warn;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::SetProcessShutdownParameters;
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
     NIN_SELECT, NINF_KEY, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
@@ -23,8 +24,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SM_CXSMICON,
     SM_CYSMICON, SM_MENUDROPALIGNMENT, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
     TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
-    WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_NULL, WNDCLASSEXW, WS_EX_TOOLWINDOW,
-    WS_OVERLAPPED,
+    WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_ENDSESSION, WM_NULL, WM_POWERBROADCAST,
+    WM_QUERYENDSESSION, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
 use windows::core::PCWSTR;
 
@@ -40,6 +41,7 @@ const WM_TRAY: u32 = WM_APP + 1;
 /// Posted by [`Waker::wake`] from other threads.
 const WM_WAKE: u32 = WM_APP + 2;
 const ICON_ID: u32 = 1;
+const SHUTDOWN_LEVEL: u32 = 0x3FF;
 /// `szTip` has 128 units; the last one stays NUL.
 const TIP_UNITS: usize = 127;
 
@@ -63,6 +65,14 @@ pub trait Handler {
     fn wake(&mut self);
     /// `WM_CLOSE`: someone asks the program to end.
     fn close(&mut self);
+    /// `WM_QUERYENDSESSION` (S5): the session is about to end. Returns
+    /// whether it may end; called on the window thread, so it should return
+    /// within a few seconds.
+    fn query_end_session(&mut self) -> bool;
+    /// `WM_ENDSESSION`: `ending` is false if the end was cancelled.
+    fn end_session(&mut self, ending: bool);
+    /// `WM_POWERBROADCAST` with its event (a `PBT_` constant).
+    fn power(&mut self, event: u32);
 }
 
 /// Wakes the window thread from any thread.
@@ -233,6 +243,13 @@ pub fn run(icon: Icon, tip: &str, make: impl FnOnce(Waker) -> Box<dyn Handler>) 
     }
     WINDOW.set(Some(window));
     HANDLER.set(Some(make(Waker(hwnd.0 as usize))));
+    // S5: be asked early at shutdown, before the programs it froze, so they
+    // are running again when Windows asks them. 0x3FF is the highest level
+    // for applications.
+    // SAFETY: plain call.
+    if let Err(err) = unsafe { SetProcessShutdownParameters(SHUTDOWN_LEVEL, 0) } {
+        warn!("cannot raise the shutdown priority: {err}");
+    }
 
     let mut msg = MSG::default();
     // SAFETY: standard message loop on this thread's queue.
@@ -351,6 +368,18 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             let id = loword(wparam.0) as u16;
             with_handler(|h| h.command(id));
             LRESULT(0)
+        }
+        WM_QUERYENDSESSION => {
+            let allow = with_handler(|h| h.query_end_session()).unwrap_or(true);
+            LRESULT(isize::from(allow))
+        }
+        WM_ENDSESSION => {
+            with_handler(|h| h.end_session(wparam.0 != 0));
+            LRESULT(0)
+        }
+        WM_POWERBROADCAST => {
+            with_handler(|h| h.power(wparam.0 as u32));
+            LRESULT(1)
         }
         WM_CLOSE => {
             if !QUITTING.get() {
