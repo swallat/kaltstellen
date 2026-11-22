@@ -93,6 +93,9 @@ pub struct ProcessInfo {
     /// Creation time in 100 ns units since 1601 (`FILETIME`). Together with
     /// the PID it identifies a process for good (S6).
     pub created: u64,
+    /// Private working set in bytes, from the same system query (no
+    /// handle needed); shown when programs are picked in the main window.
+    pub private_bytes: u64,
 }
 
 /// All processes at one moment. Taking it opens no process.
@@ -309,6 +312,7 @@ fn query_processes() -> Result<Vec<ProcessInfo>> {
             name,
             session_id: raw.session_id,
             created: raw.create_time as u64,
+            private_bytes: raw.working_set_private_size.max(0) as u64,
         });
         if raw.next_entry_offset == 0 {
             break;
@@ -791,6 +795,7 @@ mod tests {
             name: name.to_owned(),
             session_id: session,
             created,
+            private_bytes: 0,
         }
     }
 

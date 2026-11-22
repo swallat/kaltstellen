@@ -19,7 +19,7 @@ use common::*;
 use kaltstellen::autostart::{self, RUN_KEY, VALUE};
 use kaltstellen::state::Store;
 use kaltstellen::tray::model::{
-    ID_ACKNOWLEDGE, ID_AUTOSTART, ID_LAST, ID_NEUTRAL, ID_PROFILE_BASE, ID_QUIT,
+    ID_ACKNOWLEDGE, ID_AUTOSTART, ID_LAST, ID_NEUTRAL, ID_OPEN, ID_PROFILE_BASE, ID_QUIT,
 };
 use kaltstellen::win32::registry;
 use kaltstellen::win32::tray::CLASS;
@@ -32,8 +32,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     UnregisterHotKey,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetWindowThreadProcessId, PostMessageW, WM_COMMAND, WM_ENDSESSION,
-    WM_HOTKEY, WM_POWERBROADCAST, WM_QUERYENDSESSION,
+    EnumWindows, GetClassNameW, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
+    WM_COMMAND, WM_ENDSESSION, WM_HOTKEY, WM_POWERBROADCAST, WM_QUERYENDSESSION,
 };
 use windows::core::BOOL;
 
@@ -51,8 +51,14 @@ fn kaltstellen_exe() -> PathBuf {
 
 /// The tray window of process `pid`.
 fn tray_window(pid: u32) -> Option<HWND> {
-    struct Search {
+    window_of(pid, CLASS)
+}
+
+/// The top-level window of class `class` of process `pid`.
+fn window_of(pid: u32, class: &str) -> Option<HWND> {
+    struct Search<'a> {
         pid: u32,
+        class: &'a str,
         found: Option<HWND>,
     }
     unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> BOOL {
@@ -64,13 +70,17 @@ fn tray_window(pid: u32) -> Option<HWND> {
         let mut class = [0u16; 64];
         // SAFETY: valid buffer.
         let len = unsafe { GetClassNameW(hwnd, &mut class) } as usize;
-        if pid == search.pid && String::from_utf16_lossy(&class[..len]) == CLASS {
+        if pid == search.pid && String::from_utf16_lossy(&class[..len]) == search.class {
             search.found = Some(hwnd);
             return false.into();
         }
         true.into()
     }
-    let mut search = Search { pid, found: None };
+    let mut search = Search {
+        pid,
+        class,
+        found: None,
+    };
     // SAFETY: the callback only uses `search`, which outlives the call.
     let _ = unsafe { EnumWindows(Some(visit), LPARAM(&raw mut search as isize)) };
     search.found
@@ -837,4 +847,33 @@ fn t17_wp9_hotkeys_register_report_taken_ones_once_and_switch() {
     // Nothing stays registered after the tray ends.
     assert!(HeldHotkey::take(0x7103, VK_F22).is_some());
     assert!(HeldHotkey::take(0x7104, VK_F23).is_some());
+}
+
+#[test]
+fn wp10_open_kaltstellen_starts_the_main_window_as_its_own_process() {
+    let mut t = Tray::new();
+    t.config("[[profile]]\nname = \"focus\"\n");
+    t.start(1);
+    t.click(ID_OPEN);
+    t.wait_log("tray: main window started (pid ", 1);
+    let log = t.log();
+    let pid: u32 = log
+        .split("tray: main window started (pid ")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .and_then(|n| n.parse().ok())
+        .expect("pid in the log");
+    let _cleanup = KillPid(pid);
+    let mut window = None;
+    assert!(wait_for(LONG, || {
+        window = window_of(pid, kaltstellen::win32::gui::CLASS);
+        // Shown once its controls exist.
+        window.is_some_and(|w| unsafe { IsWindowVisible(w) }.as_bool())
+    }));
+    // SAFETY: posting to a window of another process.
+    unsafe { PostMessageW(window, WM_CLOSE, WPARAM(0), LPARAM(0)) }.unwrap();
+    assert!(wait_for(LONG, || pids_of("kaltstellen.exe")
+        .iter()
+        .all(|p| *p != pid)));
+    assert_eq!(t.quit(), Some(0));
 }

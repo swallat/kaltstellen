@@ -71,6 +71,8 @@ enum Command {
     },
     /// Run the notification-area icon with the profile menu
     Tray,
+    /// Open the main window: profiles, programs and their actions
+    Gui,
     /// Start the tray at sign-in: show, or switch on or off
     Autostart {
         #[arg(value_enum)]
@@ -97,6 +99,7 @@ pub fn main() -> ExitCode {
         Command::Status => status(),
         Command::Recover { no_wait } => recover(!no_wait),
         Command::Tray => crate::tray::main(),
+        Command::Gui => crate::gui::main(),
         Command::Autostart { switch } => autostart(switch),
         command => match run(command) {
             Ok(true) => 0,
@@ -497,6 +500,7 @@ fn run(command: Command) -> Result<bool> {
         | Command::Status
         | Command::Recover { .. }
         | Command::Tray
+        | Command::Gui
         | Command::Autostart { .. } => unreachable!("handled in main"),
     }
 }

@@ -104,3 +104,13 @@ name. Purpose: find out which real apps tolerate being frozen.
   and shutdown; connecting to the pipe as another user (only the DACL is
   checked); visual check of icon and menu; acknowledging the error state; a
   per-monitor DPI manifest; the manual 30-minute run of M2.
+- M2 leftovers, WP9, WP10 (2026-11-22): `Clear error state` in the tray menu
+  and a manifest with per-monitor DPI awareness (spec L9). Hotkeys registered
+  on the tray window (spec L10). Main window `kaltstellen gui` (spec M6):
+  toolkit spike measured native Win32 against egui, native chosen; edits
+  through `toml_edit` with validation and atomic saves (`src/gui/document.rs`),
+  view model in `src/gui/model.rs`, window in `src/win32/gui.rs`; tray item
+  `Open kaltstellen…` starts it. Tested without eyes: controls exist, posted
+  clicks change the file as expected, invalid edits change nothing, apply
+  runs the switch, the process ends on close. Visual checks are listed in
+  `docs/manual-checks.md`, decisions in `docs/open-decisions.md`.

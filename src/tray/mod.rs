@@ -92,6 +92,27 @@ impl Endpoints {
     }
 }
 
+/// Starts `kaltstellen gui` as a process of its own, without a console
+/// window (spec section 8). It inherits the environment, so a test tray
+/// opens a test window.
+fn open_window() {
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    let started = std::env::current_exe().and_then(|exe| {
+        std::process::Command::new(exe)
+            .arg("gui")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(DETACHED_PROCESS)
+            .spawn()
+    });
+    match started {
+        Ok(child) => info!("tray: main window started (pid {})", child.id()),
+        Err(err) => warn!("tray: cannot start the main window: {err}"),
+    }
+}
+
 fn lock(source: &Mutex<Source>) -> MutexGuard<'_, Source> {
     source.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -547,6 +568,7 @@ impl window::Handler for App {
                 self.submit(Job::switch(&target), None);
             }
             Some(MenuCommand::ToggleAutostart) => self.toggle_autostart(),
+            Some(MenuCommand::OpenWindow) => open_window(),
             Some(MenuCommand::Acknowledge) => {
                 info!("tray: error state acknowledged");
                 self.status.acknowledge();

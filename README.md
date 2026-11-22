@@ -41,6 +41,7 @@ kaltstellen status                show the active profile and what is on ice
 kaltstellen recover [--no-wait]   resume everything frozen, e.g. after a crash
 kaltstellen tray                  notification-area icon with the profile menu
 kaltstellen autostart [on|off]    start the tray at sign-in (per-user Run key)
+kaltstellen gui                   window to edit profiles and their programs
 
 kaltstellen list [FILTER]         list running processes
 kaltstellen suspend NAME [--trim] freeze a program by hand: all processes with

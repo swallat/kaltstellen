@@ -121,6 +121,21 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
   - A hotkey another program holds is logged once per hotkey and profile, listed in the menu as `Hotkey not available: <hotkey> (<profile>)`, and tried again at every later sync; it does not set the error state. The profile stays usable from the menu and the command line.
   - All hotkeys are released at Quit; Windows also releases them when the tray process ends.
 
+- **M6 Main window details fixed while implementing** **[assumed]** (WP10; section 8 "Main window", "Toolkit"):
+  - Toolkit: native Win32 controls (buttons, list box, list views, edit, combo box) through the existing `windows` crate, no new GUI dependency. Spike on this desktop, release builds, a window with a list, a table of 20 rows, a text field and buttons, measured from start until the window is visible and 3 s later:
+    - native (this window): executable 2.4 MB in total (the whole tool), private working set 1.7 MB, working set 16 MB, visible after 0.42 to 0.50 s;
+    - egui/eframe 0.37 with its default `wgpu` backend: executable 14.5 MB, private working set 155 MB, working set 229 MB, visible after 0.03 to 0.35 s;
+    - egui/eframe 0.37 with the `glow` backend: executable 6.1 MB, private working set 36 MB, working set 67 MB, visible after 0.04 to 0.23 s.
+    Only native meets the budget of 30 MB working set; egui would also add 4 to 12 MB to the single executable. Native also follows the system's look, scaling and keyboard navigation by itself. An embedded web view was not considered (spec: native preferred).
+  - `kaltstellen gui` runs as its own process, one per session (mutex like the tray's, with `gui` in the name); a second start prints `the kaltstellen window is already open in this session` and exits with code 0 (it does not bring the open window to the front yet). The tray's `Open kaltstellen…` starts it without a console window.
+  - Layout at 96 DPI, scaled to the monitor (per-monitor DPI, L9): profiles with a name field and `New`, `Copy`, `Rename`, `Delete`, `Apply profile` on the left; the entries of the selected profile (program, action, options) with an action list, `Set action`, `Remove`, `Add executable…` on the right; below them the running programs of the session (name, private memory, protection) with `Add to profile` and `Refresh`; the unassigned programs (N1) with `Add to profile` and `Dismiss`; the status line at the bottom. The window has a fixed size.
+  - The configuration file stays the source of truth. The window opens only a valid file (an invalid one: the problems of `check-config` on stderr, exit code 2). Edits go through a format-preserving TOML editor (`toml_edit`), so comments and layout stay; every edit is validated with `config::parse` before it is accepted, an invalid result is refused with `KS205` and changes nothing. Each accepted edit is saved at once, atomically (temporary file, then rename). If the file changed on disk since it was read, the save is refused (`KS205`), the window re-reads the file and the edit has to be repeated.
+  - Copying a profile copies its entries but not its hotkey (C5). New entries take the action selected in the action list, or `settings.default_action` when none is selected. A program added from the running list gets only `exe`; one added as an executable also gets `path`.
+  - Changing an entry's action removes the options the new action does not take (C6); a `start` entry without `path` is refused.
+  - Hard-protected programs cannot be added (refused in the status line). For a warn-list program the window asks; yes adds it with `confirmed = true`, no adds nothing. Setting a warn-list entry to `stop` or `suspend` asks the same.
+  - Deleting a profile asks first. If it is the active profile, the window switches to `neutral` first and deletes only if that worked (M1).
+  - `Apply profile` runs `kaltstellen switch <profile>` as a child process without a console window, so it goes through the tray's pipe when a tray runs and works in-process otherwise; the status line shows the result. Memory shown for running programs is the private working set from the same system query as the process snapshot, so no process is opened for it (A7).
+
 ## 5. Configuration (TOML)
 
 Location `%APPDATA%\kaltstellen\config.toml`. The repository ships only `config.example.toml` with generic names.

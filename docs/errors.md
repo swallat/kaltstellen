@@ -25,6 +25,7 @@ when they apply. Codes are never renumbered or reused. The source of truth is
 | `KS202` | Configuration file is not valid TOML or has unknown keys (C3). |
 | `KS203` | Configuration violates a rule C1 to C7. |
 | `KS204` | `settings.json` could not be read or written. |
+| `KS205` | The main window could not write the configuration: the result would be invalid, the file changed on disk meanwhile, or a file error. |
 | `KS301` | State file could not be read or written. |
 | `KS302` | State file was corrupt and has been renamed (S9). |
 | `KS303` | Another switch holds the state lock (exit code 5). |
@@ -37,4 +38,5 @@ when they apply. Codes are never renumbered or reused. The source of truth is
 | `KS504` | The tray's named pipe could not be created or served (L1). |
 | `KS505` | Malformed pipe message, or another protocol version (exit code 5). |
 | `KS601` | The Run key for start at sign-in could not be read or written. |
+| `KS701` | The main window could not be set up. |
 | `KS901` | Logging could not be set up. |

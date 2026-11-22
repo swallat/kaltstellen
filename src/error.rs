@@ -51,6 +51,9 @@ pub enum Code {
     ConfigInvalid = 203,
     /// `settings.json` could not be read or written.
     SettingsIo = 204,
+    /// The main window could not write the configuration (invalid result,
+    /// changed on disk, or a file error).
+    ConfigWrite = 205,
 
     // 3xx: state file
     /// The state file could not be read or written.
@@ -85,6 +88,10 @@ pub enum Code {
     /// The Run key for start at sign-in could not be read or written.
     AutostartIo = 601,
 
+    // 7xx: main window
+    /// The main window could not be set up.
+    GuiWindow = 701,
+
     // 9xx: internal
     /// Logging could not be set up.
     LogSetup = 901,
@@ -111,6 +118,7 @@ impl Code {
         Code::ConfigSyntax,
         Code::ConfigInvalid,
         Code::SettingsIo,
+        Code::ConfigWrite,
         Code::StateIo,
         Code::StateCorrupt,
         Code::StateLocked,
@@ -123,6 +131,7 @@ impl Code {
         Code::TrayPipe,
         Code::TrayProtocol,
         Code::AutostartIo,
+        Code::GuiWindow,
         Code::LogSetup,
     ];
 

@@ -12,7 +12,7 @@ real machine. Results: `pass`, `fail`, `open` (not run yet), `n/a`.
 | T5 | Kill while frozen, restart: nothing frozen | WP6 | open | pass (CLI `recover`, tray restart, Ctrl+Break during an in-process switch) |
 | T6 | Stale PID ignored, corrupt state renamed | WP6 | open | pass |
 | T7 | Sign-out/shutdown resume, last profile offered | WP8 | open | open (logic passes with posted `WM_QUERYENDSESSION`/`WM_ENDSESSION`; no real sign-out run) |
-| T8 | Invalid config keeps old one, file and line | WP3 | open | pass (CLI; tray reload by log, icon not looked at) |
+| T8 | Invalid config keeps old one, file and line | WP3 | open | pass (CLI; tray reload by log, icon not looked at; window refuses invalid edits and invalid files, file unchanged) |
 | T9 | Hard-protected refused in config and CLI | WP2 | open | pass |
 | T10 | `restart_on_neutral` only on neutral | WP4 | open | pass |
 | T11 | `on_timeout = "keep"` with open dialog | WP2 | open | pass (engine) |

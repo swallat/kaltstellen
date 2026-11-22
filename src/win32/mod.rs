@@ -7,6 +7,7 @@
 //! [`crate::tray`].
 
 pub mod console;
+pub mod gui;
 pub mod instance;
 pub mod pipe;
 pub mod registry;

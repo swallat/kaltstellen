@@ -255,6 +255,8 @@ pub enum Command {
     ToggleAutostart,
     /// Clears the error state of the last switch without a new switch.
     Acknowledge,
+    /// Starts the main window (`kaltstellen gui`).
+    OpenWindow,
     Quit,
 }
 
@@ -279,6 +281,7 @@ pub const ID_LAST: u16 = 3;
 pub const ID_AUTOSTART: u16 = 4;
 /// Clears the error state (spec section 8, "when acknowledged").
 pub const ID_ACKNOWLEDGE: u16 = 5;
+pub const ID_OPEN: u16 = 6;
 /// Profile `n` of the configuration has ID `ID_PROFILE_BASE + n`.
 pub const ID_PROFILE_BASE: u16 = 100;
 
@@ -364,7 +367,12 @@ impl Menu {
                 Command::ToggleAutostart,
             );
         }
-        menu.disabled("Open kaltstellen…".to_owned());
+        menu.entry(
+            ID_OPEN,
+            "&Open kaltstellen…".to_owned(),
+            false,
+            Command::OpenWindow,
+        );
         menu.entry(ID_QUIT, "&Quit".to_owned(), false, Command::Quit);
         menu
     }
@@ -558,7 +566,7 @@ mod tests {
                 "R&&D",
                 "&Neutral",
                 "-",
-                "Open kaltstellen… (disabled)",
+                "&Open kaltstellen…",
                 "&Quit"
             ]
         );
@@ -643,7 +651,7 @@ mod tests {
                 "Last switch: KS110 [start] tool.exe: missing (disabled)",
                 "&Clear error state",
                 "-",
-                "Open kaltstellen… (disabled)",
+                "&Open kaltstellen…",
                 "&Quit"
             ]
         );

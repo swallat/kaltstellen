@@ -27,3 +27,13 @@ owner says so.
    common controls v6.
 6. **L10 hotkeys**: hotkey IDs follow the profile order; a taken hotkey is listed in the menu but does not turn the icon red; it is retried at every sync.
 
+## Main window (M3)
+
+7. **M6 toolkit**: native Win32 instead of egui (measured: 16 MB versus 67
+   to 229 MB working set). Overrule if a richer look matters more than the
+   30 MB budget.
+8. **M6 behaviour**: every accepted edit is saved at once (no Save button,
+   no undo); a file changed on disk wins and the edit is repeated; a second
+   `kaltstellen gui` only reports instead of bringing the window to the
+   front; fixed window size; deleting asks for confirmation; copying a
+   profile drops its hotkey.
