@@ -25,6 +25,13 @@ reasoning is. Implementation choices made without the owner are marked
    [gui-bridge.md](gui-bridge.md); every edit is one request and one save;
    the page gets the whole state with every reply.
 
+6. **L11 callers joining a running switch** `[assumed]`: a caller whose
+   request equals the running switch is protected from that switch's next
+   snapshot on; what was frozen before stays frozen.
+7. **L11 `--no-wait` callers** `[assumed]`: protected only while they still
+   run; after they exit, their ancestors are ordinary processes for the rest
+   of that switch.
+
 ## Decided by the owner on 2026-11-23
 
 - **L5 pipe**: as built, including no fallback when a running tray does not

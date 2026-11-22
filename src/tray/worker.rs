@@ -211,7 +211,11 @@ impl Runner for EngineRunner {
         let mut persist = |s: &crate::state::State| store.save(s);
         let result = match job {
             Job::Recover | Job::Quit | Job::EndSession => engine::recover(&mut state, &mut persist),
-            Job::Switch { target, force } => {
+            Job::Switch {
+                target,
+                force,
+                guests,
+            } => {
                 // C4: the switch uses the configuration as it is now and
                 // keeps it to the end, whatever happens to the file meanwhile.
                 let config = {
@@ -220,7 +224,15 @@ impl Runner for EngineRunner {
                     source.config().clone()
                 };
                 let options = Options { force: *force };
-                engine::switch(&config, target, &mut state, options, &mut persist)
+                engine::switch_guarded(
+                    &config,
+                    target,
+                    &mut state,
+                    options,
+                    &mut persist,
+                    &|| false,
+                    &|| guests.list(),
+                )
             }
         };
         let mut events = Vec::new();

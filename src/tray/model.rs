@@ -2,7 +2,10 @@
 //! (W2), and the menu built from the configuration. No Win32 here; the
 //! window code in `win32::tray` only draws what this module decides.
 
+use std::sync::{Arc, Mutex};
+
 use crate::config::NEUTRAL;
+use crate::process::Guest;
 
 /// Profile names compare like `Config::profile` does: trimmed, any case.
 fn same_profile(a: &str, b: &str) -> bool {
@@ -16,7 +19,13 @@ pub enum Job {
     /// frozen; `neutral`.
     Recover,
     /// `force` confirms warn-list programs for this request only (P6).
-    Switch { target: String, force: bool },
+    /// `guests`: the command lines that asked for it, protected like
+    /// kaltstellen itself (T16).
+    Switch {
+        target: String,
+        force: bool,
+        guests: Guests,
+    },
     /// L2: resume everything suspended, keep stopped records, then exit.
     Quit,
     /// S5 at `WM_QUERYENDSESSION`: resume everything suspended, stay.
@@ -28,6 +37,7 @@ impl Job {
         Job::Switch {
             target: target.trim().to_owned(),
             force: false,
+            guests: Guests::default(),
         }
     }
 
@@ -50,6 +60,42 @@ impl std::fmt::Display for Job {
         }
     }
 }
+
+/// The callers a switch protects (T16), shared between the window thread,
+/// which adds a caller that joins a running switch, and the worker, which
+/// reads the list for every snapshot. Not part of a job's identity: two
+/// jobs are equal whatever their guests are.
+#[derive(Debug, Clone, Default)]
+pub struct Guests(Arc<Mutex<Vec<Guest>>>);
+
+impl Guests {
+    pub fn of(guest: Option<Guest>) -> Self {
+        let guests = Self::default();
+        if let Some(guest) = guest {
+            guests.add(guest);
+        }
+        guests
+    }
+
+    pub fn add(&self, guest: Guest) {
+        let mut list = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if !list.contains(&guest) {
+            list.push(guest);
+        }
+    }
+
+    pub fn list(&self) -> Vec<Guest> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+impl PartialEq for Guests {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Guests {}
 
 /// What the queue decided about a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -557,6 +603,7 @@ mod tests {
         let forced = Job::Switch {
             target: "b".into(),
             force: true,
+            guests: Guests::default(),
         };
         q.request(forced.clone());
         assert_eq!(q.finish(), Some(forced));

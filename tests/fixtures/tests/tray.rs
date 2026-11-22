@@ -925,3 +925,55 @@ fn t22_n1_unassigned_programs_status_and_tray_menu() {
     assert!(count >= 1);
     assert_eq!(t.quit(), Some(0));
 }
+
+#[test]
+fn t16_a_switch_over_the_pipe_protects_its_caller_and_its_ancestors() {
+    let mut t = Tray::new();
+    t.cleanup.push(KillProgram("ks-t16-root.exe".to_owned()));
+    t.cleanup.push(KillProgram("ks-t16-sib.exe".to_owned()));
+    let root = copy_fixture(HEARTBEAT, t.dir.path(), "ks-t16-root.exe");
+    let sibling = copy_fixture(HEARTBEAT, t.dir.path(), "ks-t16-sib.exe");
+    let root_beat = t.dir.path().join("root.beat");
+    let sibling_beat = t.dir.path().join("sib.beat");
+    let exit = t.dir.path().join("client.exit");
+    t.config(&profile("play", &[("ks-t16-root.exe", "suspend")]));
+    t.start(1);
+
+    // The program marked `suspend` runs `kaltstellen switch play` itself, so
+    // the client and its parent are part of the program being frozen.
+    let child = Command::new(&root)
+        .args([
+            str_of(&root_beat),
+            "--sibling",
+            str_of(&sibling),
+            "--sibling-beat",
+            str_of(&sibling_beat),
+            "--run",
+            str_of(&kaltstellen_exe()),
+            "--run-args",
+            "switch;play",
+            "--run-exit",
+            str_of(&exit),
+        ])
+        .env("KALTSTELLEN_CONFIG_DIR", t.dir.path().join("config"))
+        .env("KALTSTELLEN_DATA_DIR", t.data())
+        .env("KALTSTELLEN_RUN_KEY", t.run_key())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let _root = Fixture(child);
+    assert!(
+        wait_for(LONG, || exit.exists()),
+        "the client never returned; log:\n{}",
+        t.log()
+    );
+    assert_eq!(fs::read_to_string(&exit).unwrap(), "0");
+    t.wait_log("tray: command line asks for switch to \"play\"", 1);
+    assert!(t.is_beating("root"), "the caller's ancestor keeps running");
+    assert!(frozen(&sibling_beat), "the rest of the program freezes");
+    assert_eq!(t.run(&["switch", "neutral"]).0, 0);
+    assert!(beating(&sibling_beat));
+    assert_eq!(t.quit(), Some(0));
+}

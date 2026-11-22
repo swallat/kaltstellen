@@ -32,7 +32,7 @@ use crate::paths;
 use crate::settings;
 use crate::state::Store;
 use crate::win32::{console, instance::Instance, pipe, tray as window};
-use model::{Command as MenuCommand, Decision, Icon, Menu, Status};
+use model::{Command as MenuCommand, Decision, Guests, Icon, Menu, Status};
 use protocol::{Body, Command, Finished, TrayStatus};
 use server::Incoming;
 use source::Source;
@@ -441,6 +441,10 @@ impl App {
     }
 
     fn submit(&mut self, job: Job, waiter: Option<Waiter>) {
+        let joining = match &job {
+            Job::Switch { guests, .. } => guests.list(),
+            _ => Vec::new(),
+        };
         // A deliberate switch replaces the offer of the last session.
         if matches!(job, Job::Switch { .. }) && self.status.offer.take().is_some() {
             self.save_offer();
@@ -464,6 +468,17 @@ impl App {
             Decision::Dropped { superseded } => {
                 self.supersede(superseded, &by);
                 // The running job leads there: its result is this one's too.
+                // Its caller is protected by it from its next snapshot on
+                // (T16); what the job froze before stays frozen.
+                if let Some(Job::Switch { guests, .. }) = self.controller.running() {
+                    for guest in &joining {
+                        info!(
+                            "tray: caller {} joins the running switch and is protected from its next step",
+                            guest.pid
+                        );
+                        guests.add(*guest);
+                    }
+                }
                 if let Some(waiter) = waiter {
                     waiter.send(Body::Accepted { waiting: true });
                     self.running.push(waiter);
@@ -542,7 +557,11 @@ impl App {
 
     /// A request from the command line.
     fn incoming(&mut self, incoming: Incoming) {
-        let Incoming { command, reply } = incoming;
+        let Incoming {
+            command,
+            reply,
+            caller,
+        } = incoming;
         if command == Command::Quit {
             // UP1: the updater quits the tray like the menu does (L2) and
             // gets the result once everything is resumed.
@@ -608,7 +627,14 @@ impl App {
                     respond(Body::Done(result));
                     return;
                 }
-                (Job::Switch { target, force }, notes)
+                (
+                    Job::Switch {
+                        target,
+                        force,
+                        guests: Guests::of(caller),
+                    },
+                    notes,
+                )
             }
             Command::Recover { .. } => (Job::Recover, Vec::new()),
             Command::Status | Command::Quit => unreachable!("answered above"),

@@ -13,12 +13,25 @@ use log::{info, warn};
 use super::protocol::{self, Body, Command};
 use crate::error::Code;
 use crate::exit;
-use crate::win32::pipe::Listener;
+use crate::process::{Guest, Snapshot};
+use crate::win32::pipe::{self, Listener};
 
 /// A request for the window thread and where its replies go.
 pub struct Incoming {
     pub command: Command,
     pub reply: Sender<Body>,
+    /// The client process, from the pipe itself (not from the message),
+    /// with its creation time from the snapshot (T16).
+    pub caller: Option<Guest>,
+}
+
+/// The process at the other end of `conn`, identified by PID and creation
+/// time so that a reused PID cannot pose as it.
+fn caller_of(conn: &File) -> Option<Guest> {
+    let pid = pipe::client_pid(conn)?;
+    let snapshot = Snapshot::take().ok()?;
+    let created = snapshot.get(pid)?.created;
+    Some(Guest { pid, created })
 }
 
 fn rejected(exit_code: u8, line: String) -> Body {
@@ -94,7 +107,15 @@ fn serve(mut conn: File, inbox: &Sender<Incoming>, wake: impl Fn()) {
     info!("tray: pipe request {command:?}");
     let waits = command.waits();
     let (reply, replies) = channel();
-    if inbox.send(Incoming { command, reply }).is_err() {
+    let caller = caller_of(&conn);
+    if inbox
+        .send(Incoming {
+            command,
+            reply,
+            caller,
+        })
+        .is_err()
+    {
         send(
             &mut conn,
             rejected(

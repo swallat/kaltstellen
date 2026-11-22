@@ -33,9 +33,9 @@ use windows::Win32::Storage::FileSystem::{
     SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
 };
 use windows::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE,
-    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
-    WaitNamedPipeW,
+    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId,
+    PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
+    PIPE_WAIT, WaitNamedPipeW,
 };
 use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows::Win32::System::Threading::{
@@ -291,6 +291,14 @@ fn server_user(file: &File) -> Result<String> {
         let _ = CloseHandle(process);
         sid
     }
+}
+
+/// The PID of the client at the other end of a server connection (T16).
+pub fn client_pid(file: &File) -> Option<u32> {
+    let mut pid = 0u32;
+    // SAFETY: valid pipe handle and out pointer.
+    unsafe { GetNamedPipeClientProcessId(HANDLE(file.as_raw_handle()), &mut pid) }.ok()?;
+    Some(pid)
 }
 
 /// The DACL of the pipe behind `file` in SDDL form, for tests and checks.

@@ -14,7 +14,7 @@ use log::{info, warn};
 
 use crate::config::{App, AppAction, Config, NEUTRAL, Settings};
 use crate::error::{Code, Error, Result, Step};
-use crate::process::{self, Access, ProcessInfo, Snapshot, StopOutcome, Target};
+use crate::process::{self, Access, Guest, ProcessInfo, Snapshot, StopOutcome, Target};
 use crate::protection::{self, Protection};
 use crate::state::{State, Stopped, Suspended};
 
@@ -121,6 +121,30 @@ pub fn switch_with(
     persist: &mut dyn FnMut(&State) -> Result<()>,
     interrupted: &dyn Fn() -> bool,
 ) -> Result<Report> {
+    switch_guarded(
+        config,
+        target,
+        state,
+        options,
+        persist,
+        interrupted,
+        &Vec::new,
+    )
+}
+
+/// [`switch_with`] that also protects `guests()` and their ancestors like
+/// kaltstellen itself (T16): the command line that asked the tray for this
+/// switch. `guests` is asked again for every snapshot, so a caller added
+/// while the switch runs is protected from the next step on.
+pub fn switch_guarded(
+    config: &Config,
+    target: &str,
+    state: &mut State,
+    options: Options,
+    persist: &mut dyn FnMut(&State) -> Result<()>,
+    interrupted: &dyn Fn() -> bool,
+    guests: &dyn Fn() -> Vec<Guest>,
+) -> Result<Report> {
     let (name, apps): (String, &[App]) = if target.trim().eq_ignore_ascii_case(NEUTRAL) {
         (NEUTRAL.to_owned(), &[])
     } else {
@@ -143,8 +167,9 @@ pub fn switch_with(
         report: Report::default(),
         interrupted,
         halted: false,
+        guests,
     };
-    let snapshot = Snapshot::take()?;
+    let snapshot = run.snapshot()?;
     run.drop_records_of_previous_boot(&snapshot);
 
     run.resume(&snapshot, apps);
@@ -177,6 +202,7 @@ pub fn recover(state: &mut State, persist: &mut dyn FnMut(&State) -> Result<()>)
         report: Report::default(),
         interrupted: &|| false,
         halted: false,
+        guests: &Vec::new,
     };
     let snapshot = Snapshot::take()?;
     run.drop_records_of_previous_boot(&snapshot);
@@ -197,11 +223,18 @@ struct Run<'a> {
     persist: &'a mut dyn FnMut(&State) -> Result<()>,
     report: Report,
     interrupted: &'a dyn Fn() -> bool,
+    /// Protected like kaltstellen itself in every snapshot (T16).
+    guests: &'a dyn Fn() -> Vec<Guest>,
     /// Set once `interrupted` returned true; everything after is skipped.
     halted: bool,
 }
 
 impl Run<'_> {
+    /// A snapshot that protects the guests of this run.
+    fn snapshot(&self) -> Result<Snapshot> {
+        Ok(Snapshot::take()?.with_guests((self.guests)()))
+    }
+
     /// Whether to stop here because of an interrupt.
     fn halt(&mut self) -> bool {
         if !self.halted && (self.interrupted)() {
@@ -300,7 +333,7 @@ impl Run<'_> {
         if self.halt() {
             return Ok(());
         }
-        let snapshot = Snapshot::take()?;
+        let snapshot = self.snapshot()?;
         for app in stops {
             if self.halt() {
                 break;
@@ -359,7 +392,7 @@ impl Run<'_> {
             if self.halt() {
                 return Ok(());
             }
-            let snapshot = Snapshot::take()?;
+            let snapshot = self.snapshot()?;
             for app in &suspends {
                 if self.halt() {
                     return Ok(());
@@ -457,7 +490,7 @@ impl Run<'_> {
         if starts.is_empty() && restarts.is_empty() {
             return Ok(());
         }
-        let snapshot = Snapshot::take()?;
+        let snapshot = self.snapshot()?;
         for app in starts {
             if self.halt() {
                 return Ok(());

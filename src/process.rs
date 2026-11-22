@@ -98,11 +98,22 @@ pub struct ProcessInfo {
     pub private_bytes: u64,
 }
 
+/// A process protected like kaltstellen itself for one job (T16): the
+/// command line that asked the tray for a switch. PID and creation time
+/// together identify it, so a reused PID protects nothing (S6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Guest {
+    pub pid: u32,
+    pub created: u64,
+}
+
 /// All processes at one moment. Taking it opens no process.
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     processes: Vec<ProcessInfo>,
     own_pid: u32,
+    /// Further processes protected with their ancestors, like `own_pid`.
+    guests: Vec<Guest>,
 }
 
 impl Snapshot {
@@ -110,12 +121,37 @@ impl Snapshot {
         Ok(Self {
             processes: query_processes()?,
             own_pid: std::process::id(),
+            guests: Vec::new(),
         })
     }
 
     /// Builds a snapshot from known data, as if `own_pid` were kaltstellen.
     pub fn from_parts(processes: Vec<ProcessInfo>, own_pid: u32) -> Self {
-        Self { processes, own_pid }
+        Self {
+            processes,
+            own_pid,
+            guests: Vec::new(),
+        }
+    }
+
+    /// Protects `guests` and their ancestors the way kaltstellen itself is
+    /// protected (A7, T16). A guest that is gone, or whose PID now belongs
+    /// to another process, protects nothing.
+    pub fn with_guests(mut self, guests: Vec<Guest>) -> Self {
+        self.guests = guests;
+        self
+    }
+
+    /// kaltstellen and the guests that still run, as PIDs.
+    fn protected_roots(&self) -> Vec<u32> {
+        let mut roots = vec![self.own_pid];
+        roots.extend(
+            self.guests
+                .iter()
+                .filter(|g| self.find(g.pid, g.created).is_some())
+                .map(|g| g.pid),
+        );
+        roots
     }
 
     pub fn processes(&self) -> &[ProcessInfo] {
@@ -190,33 +226,38 @@ impl Snapshot {
         })
     }
 
-    /// kaltstellen's ancestors: parent, grandparent, ... A parent only counts
-    /// if it was created before its child, otherwise the PID was reused.
-    fn ancestors(&self) -> HashSet<u32> {
+    /// The ancestors of kaltstellen and of the guests: parent,
+    /// grandparent, ... A parent only counts if it was created before its
+    /// child, otherwise the PID was reused.
+    fn ancestors(&self, roots: &[u32]) -> HashSet<u32> {
         let mut found = HashSet::new();
-        let mut current = self.get(self.own_pid);
-        while let Some(child) = current {
-            let parent = self
-                .get(child.parent_pid)
-                .filter(|p| p.pid != child.pid && p.pid != 0 && p.created <= child.created);
-            match parent {
-                Some(parent) if found.insert(parent.pid) => current = Some(parent),
-                _ => break,
+        for root in roots {
+            let mut current = self.get(*root);
+            while let Some(child) = current {
+                let parent = self
+                    .get(child.parent_pid)
+                    .filter(|p| p.pid != child.pid && p.pid != 0 && p.created <= child.created);
+                match parent {
+                    Some(parent) if found.insert(parent.pid) => current = Some(parent),
+                    _ => break,
+                }
             }
         }
         found
     }
 
     fn tree(&self, is_root: impl Fn(&ProcessInfo) -> bool) -> Vec<ProcessInfo> {
-        let ancestors = self.ancestors();
+        let roots = self.protected_roots();
+        let ancestors = self.ancestors(&roots);
         let session = self.own_session();
         let mut pending: Vec<&ProcessInfo> = self.candidates(is_root).collect();
         pending.reverse();
         let mut visited = HashSet::new();
         let mut result = Vec::new();
         while let Some(node) = pending.pop() {
-            // Self-protection: kaltstellen and everything it started stay out.
-            if node.pid == self.own_pid || !visited.insert(node.pid) {
+            // Self-protection: kaltstellen, the guests and everything they
+            // started stay out.
+            if roots.contains(&node.pid) || !visited.insert(node.pid) {
                 continue;
             }
             // An ancestor is skipped itself, but its other children belong
@@ -896,6 +937,38 @@ mod tests {
         ]);
         assert_eq!(pids(&s.program("shell.exe")), vec![801]);
         assert!(s.program("kaltstellen.exe").is_empty());
+    }
+
+    #[test]
+    fn t16_a_guest_and_its_ancestors_are_protected_like_kaltstellen() {
+        // A program marked suspend runs a command line (502) that asked the
+        // tray for the switch: 500 and 501 are its ancestors, 503 is not.
+        let processes = vec![
+            p(500, 700, "suspended.exe", 1, 50),
+            p(501, 500, "worker.exe", 1, 51),
+            p(502, 501, "kaltstellen.exe", 1, 52),
+            p(504, 502, "started-by-client.exe", 1, 54),
+            p(503, 500, "sibling.exe", 1, 53),
+        ];
+        let plain = snapshot(processes.clone());
+        assert_eq!(
+            pids(&plain.program("suspended.exe")),
+            vec![500, 501, 502, 503, 504]
+        );
+        let guarded = snapshot(processes.clone()).with_guests(vec![Guest {
+            pid: 502,
+            created: 52,
+        }]);
+        assert_eq!(pids(&guarded.program("suspended.exe")), vec![503]);
+        // A reused PID (other creation time) protects nothing.
+        let stale = snapshot(processes).with_guests(vec![Guest {
+            pid: 502,
+            created: 99,
+        }]);
+        assert_eq!(
+            pids(&stale.program("suspended.exe")),
+            vec![500, 501, 502, 503, 504]
+        );
     }
 
     #[test]
