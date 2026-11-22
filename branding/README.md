@@ -1,21 +1,24 @@
 # Branding: Logo- und Farbvorschläge
 
-Status: **Entwurf abgeschlossen.** Logo, Farben, Tray-Symbole, Wortmarke, Programm-Symbol und Social-Preview liegen vor.
+Status: **Entwurf abgeschlossen.** Logo (Eiswürfel), Farben, Tray-Symbole, Wortmarke, Programm-Symbol und Social-Preview liegen vor.
 
 ## Stand
 
 - **Logo:** [09 · Eiswürfel mit warmer Seite](logos/09-eiswuerfel-warm.svg)
   (Variante A2 der fünften Runde, siehe unten). Das K-Logo 08b ist abgelöst.
-- **Farben:** kalter Würfel `#1593AF`, warme Seite `#E8780C` hell und `#FF8A1F`
-  dunkel, Pause-Balken `#0E1620`. Die Farbschemata (Gletscher) unten gelten
-  weiter für Oberflächen und Text.
+- **Farben:** Schema A · Gletscher, angepasst an das Logo: Primär `#0A7288` hell
+  (5,2 : 1 auf `#F5F8FB`) und `#4CCBE3` dunkel (9,5 : 1 auf `#0E1620`),
+  Akzent `#B54300` hell und `#FF8A1F` dunkel. Logo: kalter Würfel `#1593AF`,
+  warme Seite `#E8780C` (hell) und `#FF8A1F` (dunkel), Balken `#0E1620`.
+  Alle übrigen Rollenfarben des Schemas bleiben.
 - **Tray-Zustände:** der Würfel selbst, ohne Kachel, pixelgenau als `.ico` in
   `tray/ico/`: kalt mit Pause-Balken = neutral, rechte Seite warm = Profil
   aktiv, roter Würfel mit Ausrufezeichen = Fehler.
 - **Programm-Symbol:** der Würfel hell auf der dunklen Kachel `#12324B`.
-- Die Abschnitte ab »Akzent im Dunkelmodus« und alles darunter beschreiben den
-  Weg bis 08b und gehören zur Geschichte; `aktueller-stand.html` zeigt noch
-  das K-Logo.
+- Alles ab »Akzent im Dunkelmodus« beschreibt den Weg bis zum Würfel und gehört
+  zur Geschichte; die Farbtabellen der Schemata dort zeigen noch das alte
+  Primär `#0B69A8` / `#5BB8F0`. `aktueller-stand.html` zeigt die aktuelle
+  Lösung.
 
 ![09](logos/09-eiswuerfel-warm.svg)
 
@@ -28,8 +31,7 @@ ohne Schrift und damit ohne Lizenzfrage. Zwei Fassungen, jeweils für hellen und
 dunklen Hintergrund:
 
 - `wortmarke/logo-wortmarke-hell.svg`, `-dunkel.svg`: Logo und Name.
-- `wortmarke/wortmarke-hell.svg`, `-dunkel.svg`: nur der Name; das erste k
-  trägt dann den warmen, abgesetzten Arm.
+- `wortmarke/wortmarke-hell.svg`, `-dunkel.svg`: nur der Name.
 
 Für eine GitHub-README, die dem Design des Lesers folgt:
 
@@ -45,10 +47,10 @@ Für eine GitHub-README, die dem Design des Lesers folgt:
 ![Programm-Symbol vergrößert und in Originalgröße](vorschau/app-pixel.png)
 
 `app/kaltstellen.ico` mit 16, 20, 24, 32, 40, 48, 64 und 256 px, für die `.exe`,
-Verknüpfungen und das Fenster: das Logo hell auf dunkler Kachel `#12324B`, der
-warme Arm in `#FF8A1F`. Unter 40 px bleibt der Arm am Stamm, weil die Lücke
-sonst nur einen Punkt übrig ließe. Auf dunklem Grund hebt sich die Kachel kaum
-ab, das K bleibt stehen.
+Verknüpfungen und das Fenster: der Würfel auf der dunklen Kachel `#12324B`, der
+kalte Teil etwas heller (`#2BB3D1`) als im Tray, die warme Seite in `#FF8A1F`.
+Die Kantenlinien im Würfel gibt es ab 40 px. Auf dunklem Grund hebt sich die
+Kachel kaum ab, der Würfel bleibt stehen.
 
 ### Social-Preview für GitHub
 
@@ -62,66 +64,31 @@ Social preview. Quelle ist `social/social-preview.svg`; beide schreibt
 
 ![Tray-Symbole vergrößert und in Originalgröße](vorschau/tray-pixel.png)
 
-Gezeichnet mit dem Würfel (Stand fünfte Runde). Die Tabelle unten beschreibt noch die K-Kacheln der vierten Runde.
-
 Je Zustand: 16 px zehnfach vergrößert, darunter 24 px vierfach, daneben 16, 20,
 24, 32 und 48 px in Originalgröße. Oben helle, unten dunkle Taskleiste.
 
-| Zustand | Datei | Kachel | Zeichen | Kachel zur Taskleiste |
+Der Würfel selbst ist das Tray-Symbol, ohne Kachel. Die Zustände unterscheiden
+sich in Farbe **und** Form, damit sie auch bei Farbfehlsichtigkeit lesbar bleiben:
+
+| Zustand | Datei | Würfel | Zeichen | Würfel zur Taskleiste |
 | --- | --- | --- | --- | --- |
-| neutral | `tray/ico/kaltstellen-neutral.ico` | `#2A8FD6` | weißes K | 3,2 hell, 4,9 dunkel |
-| Profil aktiv | `tray/ico/kaltstellen-aktiv.ico` | `#FF8A1F` | dunkles K `#0E1620` | 2,1 hell, 7,2 dunkel |
-| Fehler | `tray/ico/kaltstellen-fehler.ico` | `#C81E4A` | weißes Ausrufezeichen | 5,1 hell, 3,0 dunkel |
+| neutral | `tray/ico/kaltstellen-neutral.ico` | kalt `#1593AF` | zwei dunkle Pause-Balken | 3,2 hell, 4,7 dunkel |
+| Profil aktiv | `tray/ico/kaltstellen-aktiv.ico` | kalt, rechte Seite warm `#FF8A1F` | zwei dunkle Pause-Balken | 3,2 hell, 4,7 dunkel (kalter Teil) |
+| Fehler | `tray/ico/kaltstellen-fehler.ico` | karminrot `#C81E4A` | weißes Ausrufezeichen | 5,1 hell, 3,0 dunkel |
 
-- »Profil aktiv« und »Fehler« lagen als Orange und Rot zu nah beieinander
-  (1,2 bis 1,8 : 1 zwischen den Kacheln). Jetzt unterscheiden sie sich im
-  Farbton (Orange gegen Karminrot), in der Helligkeit (2,4 : 1) und im Zeichen
-  (dunkles K gegen weißes Ausrufezeichen).
-- Weil das K auf Orange dunkel ist, reicht eine Fassung für helle und dunkle
-  Taskleiste. Auf der hellen hebt sich die orange Kachel selbst nur mit 2,1 : 1
-  ab, das dunkle K darin aber mit 7,7 : 1.
-- Jede `.ico` enthält 16, 20, 24, 32, 48 und 256 px. Jede Größe ist aus eigener
-  Pixelgeometrie gezeichnet, nicht aus einem großen Bild verkleinert; die
-  Einzelbilder liegen als PNG in `tray/png/`.
+- Im Tray kippt nur die rechte Würfelseite von kalt auf warm: das ist der
+  Umschalter aus dem Logo. Der Fehler unterscheidet sich zusätzlich in der Form
+  (Ausrufezeichen statt Balken).
+- Jede Größe ist aus eigener Geometrie gezeichnet, nicht aus einem großen Bild
+  verkleinert. Die Kantenlinien im Würfel gibt es ab 32 px, darunter würden sie
+  nur Matsch ergeben.
+- Jede `.ico` enthält 16, 20, 24, 32, 48 und 256 px; die Einzelbilder liegen als
+  PNG in `tray/png/`. Die Einträge sind PNG-komprimiert, das lesen Windows Vista
+  und neuer.
 - Erzeugt werden sie von `tray/make_icons.py` (nur Python-Standardbibliothek):
-  `python branding/tray/make_icons.py`. Farben und Maße je Größe stehen oben im
-  Skript.
-- Unter 32 px entfällt die Lücke am Arm, weil dort nur ein Punkt übrig bliebe;
-  die Kachelfarbe trägt den Zustand.
-- Links vom Stamm stehen zwei kurze, dünne, blassere Strahlen: die angedeutete
-  zweite Kristallhälfte aus dem Logo. Bei 16 px sind sie gut einen Pixel breit.
-- Die Einträge sind PNG-komprimiert. Das lesen Windows Vista und neuer. Geprüft:
-  Windows lädt aus allen `.ico`-Dateien die 16-, 32- und 256-px-Fassung.
-
-### Tray-Zustände: die beiden Ansätze
-
-Im Tray fällt die blasse Kristallhälfte weg und die Striche werden dicker; das
-volle Logo bleibt für README, Avatar und Fenster. Jeder Zustand ist in 32, 24
-und 16 px gezeichnet, links auf heller, rechts auf dunkler Taskleiste. Das sind
-die Skizzen, aus denen die Reinzeichnung oben entstanden ist.
-
-**Ansatz 1: das K trägt den Zustand** (`tray/k-*.svg`), nicht gewählt
-
-![Ansatz 1](vorschau/tray-k.svg)
-
-Neutral ist das ganze K blau. Ist ein Profil aktiv, legt sich der Arm um und
-bekommt einen großen orangen Knopf; bei einem Fehler wird das ganze K rot und
-der Arm zum Ausrufezeichen. Bleibt nah am Logo; der Unterschied zwischen
-neutral und aktiv ist bei 16 px ein oranger Punkt von etwa 5 Pixeln.
-
-**Ansatz 2: eine Kachel trägt den Zustand** (`tray/kachel-*.svg`), gewählt
-
-![Ansatz 2](vorschau/tray-kachel.svg)
-
-Das K steht weiß auf einer Kachel, und die ganze Kachel wechselt die Farbe:
-blau = neutral, orange = Profil aktiv, rot mit Ausrufezeichen = Fehler. Bei
-16 px am deutlichsten, weil die ganze Fläche den Zustand zeigt; dafür sieht das
-Tray-Symbol dem zweifarbigen Logo weniger ähnlich.
-
-Gewählt ist **Ansatz 2.** Nur eine ganze Farbfläche ist bei 16 px nicht zu
-übersehen. Blau und Orange lassen sich auch bei Rot-Grün-Schwäche
-unterscheiden, und der Fehler hat zusätzlich eine eigene Form. Ansatz 1 ist die
-Wahl, wenn das Tray-Symbol wie das Logo aussehen soll.
+  `python branding/tray/make_icons.py`.
+- Die K-Kachel-Symbole der vierten Runde (Ansatz 1 und 2) sind unter »Vierte
+  Runde« und in `tray/k-*.svg`, `tray/kachel-*.svg` noch als Skizzen zu sehen.
 
 ### Akzent im Dunkelmodus
 
@@ -438,7 +405,7 @@ kippt dabei ins Ocker; das leuchtende Sonnengelb gibt es nur im dunklen Modus.
 
 ## Empfehlungen der einzelnen Runden
 
-Gewählt wurde am Ende 08b mit Schema A, siehe [Stand](#stand). Zur
+Bis zur vierten Runde war 08b mit Schema A gewählt, abgelöst durch den Eiswürfel, siehe [Stand](#stand). Zur
 Nachvollziehbarkeit die Empfehlungen, die es unterwegs gab.
 
 Nach der vierten Runde: **08a · K klar für Tray und Wortmarke, 08c · K auf
