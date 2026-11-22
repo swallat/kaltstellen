@@ -7,11 +7,12 @@
 //! [`crate::tray`].
 
 pub mod console;
-pub mod gui;
+pub mod dialog;
 pub mod instance;
 pub mod pipe;
 pub mod registry;
 pub mod tray;
+pub mod webview;
 
 /// UTF-16, NUL-terminated, for `PCWSTR` arguments.
 fn wide(text: &str) -> Vec<u16> {

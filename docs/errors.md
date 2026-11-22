@@ -40,4 +40,5 @@ when they apply. Codes are never renumbered or reused. The source of truth is
 | `KS505` | Malformed pipe message, or another protocol version (exit code 5). |
 | `KS601` | The Run key for start at sign-in could not be read or written. |
 | `KS701` | The main window could not be set up. |
+| `KS702` | The Microsoft Edge WebView2 Runtime is not installed; the main window cannot open (exit code 1). |
 | `KS901` | Logging could not be set up. |

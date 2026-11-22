@@ -868,7 +868,7 @@ fn wp10_open_kaltstellen_starts_the_main_window_as_its_own_process() {
     let _cleanup = KillPid(pid);
     let mut window = None;
     assert!(wait_for(LONG, || {
-        window = window_of(pid, kaltstellen::win32::gui::CLASS);
+        window = window_of(pid, kaltstellen::win32::webview::CLASS);
         // Shown once its controls exist.
         window.is_some_and(|w| unsafe { IsWindowVisible(w) }.as_bool())
     }));
@@ -878,6 +878,8 @@ fn wp10_open_kaltstellen_starts_the_main_window_as_its_own_process() {
         .iter()
         .all(|p| *p != pid)));
     assert_eq!(t.quit(), Some(0));
+    // The WebView2 user data in the test folder is released a little later.
+    remove_dir_retry(t.dir.path());
 }
 
 #[test]

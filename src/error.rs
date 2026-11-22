@@ -93,6 +93,8 @@ pub enum Code {
     // 7xx: main window
     /// The main window could not be set up.
     GuiWindow = 701,
+    /// The WebView2 runtime the main window needs is not installed.
+    WebViewMissing = 702,
 
     // 9xx: internal
     /// Logging could not be set up.
@@ -135,6 +137,7 @@ impl Code {
         Code::TrayProtocol,
         Code::AutostartIo,
         Code::GuiWindow,
+        Code::WebViewMissing,
         Code::LogSetup,
     ];
 

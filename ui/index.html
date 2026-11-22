@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kaltstellen</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="brand"><span class="brand-mark" aria-hidden="true">K</span>kaltstellen</h1>
+    <p class="active-badge" id="active-badge" aria-live="polite"></p>
+    <label class="autostart" id="autostart-wrap">
+      <input type="checkbox" id="autostart"> Start at sign-in
+    </label>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" aria-labelledby="profiles-title">
+      <div class="sidebar-head">
+        <h2 id="profiles-title">Profiles</h2>
+        <button type="button" class="button small" id="new-profile">New</button>
+      </div>
+      <ul class="profile-list" id="profile-list"></ul>
+      <p class="hint" id="config-file"></p>
+    </nav>
+
+    <main class="detail" id="detail" tabindex="-1">
+      <section class="empty" id="empty" hidden>
+        <h2>No profile yet</h2>
+        <p>Create a profile, then add the programs it should start, stop or freeze.</p>
+      </section>
+
+      <section id="profile" hidden aria-labelledby="profile-name">
+        <div class="profile-head">
+          <div>
+            <h2 id="profile-name"></h2>
+            <p class="hint" id="profile-meta"></p>
+          </div>
+          <div class="actions">
+            <button type="button" class="button primary" id="apply">Apply profile</button>
+            <button type="button" class="button" id="rename">Rename</button>
+            <button type="button" class="button" id="copy">Copy</button>
+            <button type="button" class="button danger" id="delete">Delete</button>
+          </div>
+        </div>
+
+        <form class="hotkey" id="hotkey-form">
+          <label for="hotkey">Hotkey</label>
+          <input id="hotkey" name="hotkey" placeholder="for example Ctrl+Shift+Alt+F1" autocomplete="off" spellcheck="false" aria-describedby="hotkey-help">
+          <button type="submit" class="button small">Set</button>
+          <p class="hint" id="hotkey-help">Modifiers plus one key. Leave empty for none.</p>
+        </form>
+
+        <div class="section-head">
+          <h3>Programs</h3>
+          <button type="button" class="button" id="add-program">Add program…</button>
+        </div>
+        <table class="table" id="entries">
+          <caption class="visually-hidden">Programs of the profile</caption>
+          <thead><tr><th scope="col">Program</th><th scope="col">Action</th><th scope="col">Options</th><th scope="col"><span class="visually-hidden">Commands</span></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="hint" id="entries-empty" hidden>No programs yet. Programs without an entry are left as they are.</p>
+
+        <div class="section-head">
+          <h3>Unassigned programs</h3>
+          <button type="button" class="button small" id="refresh-unassigned">Refresh</button>
+        </div>
+        <p class="hint">Running programs without an entry in this profile.</p>
+        <table class="table" id="unassigned">
+          <caption class="visually-hidden">Unassigned programs</caption>
+          <thead><tr><th scope="col">Program</th><th scope="col">Seen</th><th scope="col"><span class="visually-hidden">Commands</span></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="hint" id="unassigned-empty" hidden>Nothing unassigned.</p>
+      </section>
+    </main>
+  </div>
+
+  <footer class="statusbar">
+    <p id="status" role="status" aria-live="polite"></p>
+  </footer>
+
+  <dialog id="name-dialog" aria-labelledby="name-title">
+    <form method="dialog" id="name-form">
+      <h2 id="name-title">Profile name</h2>
+      <label for="name-input">Name</label>
+      <input id="name-input" required autocomplete="off" maxlength="200">
+      <p class="error" id="name-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button type="button" class="button" data-close>Cancel</button>
+        <button type="submit" class="button primary" id="name-ok">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+    <form method="dialog">
+      <h2 id="confirm-title">Please confirm</h2>
+      <p id="confirm-text"></p>
+      <div class="dialog-actions">
+        <button type="button" class="button" data-close>Cancel</button>
+        <button type="button" class="button primary" id="confirm-ok">Yes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="entry-dialog" class="wide" aria-labelledby="entry-title">
+    <form method="dialog" id="entry-form">
+      <h2 id="entry-title">Program</h2>
+      <div class="grid">
+        <label for="e-exe">Program</label>
+        <input id="e-exe" required autocomplete="off" spellcheck="false">
+        <label for="e-path">Path</label>
+        <input id="e-path" autocomplete="off" spellcheck="false" placeholder="optional, full path">
+        <label for="e-action">Action</label>
+        <select id="e-action">
+          <option value="start">Start</option>
+          <option value="stop">Stop</option>
+          <option value="suspend">Suspend</option>
+          <option value="ignore">Ignore</option>
+        </select>
+      </div>
+      <fieldset class="options" data-for="stop">
+        <legend>When stopping</legend>
+        <label for="e-timeout">If it does not close in time</label>
+        <select id="e-timeout">
+          <option value="kill">End it</option>
+          <option value="keep">Leave it running and report</option>
+        </select>
+        <label class="check"><input type="checkbox" id="e-restart"> Start it again on Neutral</label>
+      </fieldset>
+      <fieldset class="options" data-for="launch">
+        <legend>Starting</legend>
+        <label for="e-args">Arguments, one per line</label>
+        <textarea id="e-args" rows="3" spellcheck="false"></textarea>
+        <label for="e-cwd">Working folder</label>
+        <input id="e-cwd" autocomplete="off" spellcheck="false" placeholder="optional, full path">
+      </fieldset>
+      <fieldset class="options" data-for="suspend">
+        <legend>When freezing</legend>
+        <label class="check"><input type="checkbox" id="e-trim"> Move its memory out of RAM (trim)</label>
+      </fieldset>
+      <fieldset class="options warn" data-for="confirm">
+        <legend>Warn list</legend>
+        <p id="e-warn"></p>
+        <label class="check"><input type="checkbox" id="e-confirmed"> I confirm that kaltstellen may touch it</label>
+      </fieldset>
+      <p class="error" id="entry-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button type="button" class="button" data-close>Cancel</button>
+        <button type="submit" class="button primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="add-dialog" class="wide" aria-labelledby="add-title">
+    <form method="dialog">
+      <h2 id="add-title">Add a program</h2>
+      <p class="hint">Choose a running program, or an executable file.</p>
+      <div class="scroll">
+        <table class="table" id="running">
+          <caption class="visually-hidden">Running programs</caption>
+          <thead><tr><th scope="col">Program</th><th scope="col" class="num">Memory</th><th scope="col">Protection</th><th scope="col"><span class="visually-hidden">Commands</span></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="error" id="add-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button type="button" class="button" id="pick-file">Choose executable…</button>
+        <span class="spacer"></span>
+        <button type="button" class="button" data-close>Close</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>
