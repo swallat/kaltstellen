@@ -145,8 +145,8 @@ from there with the test variables above.
    `scoop\apps`, and `Install update 9.9.9…` for a release build.
 2a. With `{ "latest": "9.9.9", "failed": "9.9.9" }` in that file and a
    release build (or `KALTSTELLEN_UPDATE_URL` set): the menu item reads
-   `Install update 9.9.9… (did not start last time)`, and the `Updates`
-   section of the main window says that version 9.9.9 did not start here
+   `Install update 9.9.9… (failed last time)`, and the `Updates`
+   section of the main window says that version 9.9.9 could not be installed here
    last time and is installed only on request; its `Install` button is
    still there.
 3. Clicking `Install update…` opens a console window that runs the update;

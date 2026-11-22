@@ -302,11 +302,22 @@ fn wp10_missing_runtime_invalid_file_and_second_window() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("KS202"));
 
     // A second window while one is open only reports.
-    let first = world.command(&["gui"]).spawn().unwrap();
+    let mut first = world.command(&["gui"]).spawn().unwrap();
     let pid = first.id();
     // Ends the window if an assertion below fails.
     let _guard = KillProcess(info_of(pid));
-    assert!(wait_for(LONG, || !descendants(pid).is_empty()));
+    let started = wait_for(LONG, || {
+        !descendants(pid).is_empty() || first.try_wait().ok().flatten().is_some()
+    });
+    if first.try_wait().ok().flatten().is_some() || !started {
+        let _ = first.kill();
+        let out = first.wait_with_output().unwrap();
+        panic!(
+            "the window started no WebView2 (exit {:?}): {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
     let webview = descendants(pid);
     // M6: a second start brings the open window back, also when minimised.
     assert!(wait_for(LONG, || main_window(pid).is_some()));

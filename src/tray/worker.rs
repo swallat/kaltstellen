@@ -79,7 +79,7 @@ impl Controller {
     pub fn request(&mut self, job: Job) -> Decision {
         if self.quitting {
             info!("tray: quitting, {job} ignored");
-            return Decision::Dropped { superseded: None };
+            return Decision::Refused;
         }
         let label = job.to_string();
         let decision = self.queue.request(job);
@@ -97,6 +97,7 @@ impl Controller {
                     info!("tray: {old} superseded");
                 }
             }
+            Decision::Refused => info!("tray: {label} refused, the tray quits or the session ends"),
         }
         decision
     }
@@ -371,7 +372,7 @@ mod tests {
         assert!(r.controller.is_quitting());
         assert_eq!(
             r.controller.request(sw("c")),
-            Decision::Dropped { superseded: None },
+            Decision::Refused,
             "no new switches while quitting"
         );
         let (_, next) = r.complete();

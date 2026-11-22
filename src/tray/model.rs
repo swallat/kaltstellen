@@ -110,6 +110,8 @@ pub enum Decision {
     /// dropped and shares the running job's result; a request it replaced
     /// is returned as superseded.
     Dropped { superseded: Option<Job> },
+    /// Quit or the end of the session runs or waits: nothing new is taken.
+    Refused,
 }
 
 /// W3: while a job runs, at most one further request waits. The latest
@@ -130,7 +132,7 @@ impl Queue {
         // Quit and the end of the session resume everything; no later
         // request may replace them while they wait (as while quitting).
         if matches!(self.pending, Some(Job::Quit | Job::EndSession)) {
-            return Decision::Dropped { superseded: None };
+            return Decision::Refused;
         }
         let superseded = self.pending.take();
         if same_profile(running.leads_to(), job.leads_to()) {
@@ -281,7 +283,7 @@ pub struct UpdateOffer {
     /// Why this copy cannot install it (package manager, folder,
     /// development build); `None` if it can.
     pub blocked: Option<String>,
-    /// It did not start here before: offered, never installed by itself.
+    /// It could not be installed here before: offered, never installed by itself.
     pub failed: bool,
 }
 
@@ -541,10 +543,7 @@ impl Menu {
             }) => menu.entry(
                 ID_UPDATE_INSTALL,
                 if *failed {
-                    format!(
-                        "Install &update {}… (did not start last time)",
-                        escape(version)
-                    )
+                    format!("Install &update {}… (failed last time)", escape(version))
                 } else {
                     format!("Install &update {}…", escape(version))
                 },
@@ -685,10 +684,7 @@ mod tests {
             let mut q = Queue::default();
             q.request(sw("slow"));
             assert_eq!(q.jump(last.clone()), Err(None));
-            assert_eq!(
-                q.request(sw("other")),
-                Decision::Dropped { superseded: None }
-            );
+            assert_eq!(q.request(sw("other")), Decision::Refused);
             assert_eq!(q.pending(), Some(&last));
             assert_eq!(q.finish(), Some(last));
         }
@@ -856,12 +852,12 @@ mod tests {
             menu.command(ID_UPDATE_OFF),
             Some(&Command::UpdateMode(crate::update::Mode::Off))
         );
-        // It did not start last time: still offered on request, and says so.
+        // It failed last time: still offered on request, and says so.
         status.update.as_mut().unwrap().failed = true;
         let menu = Menu::build(&[], &status);
         assert_eq!(
             labels(&menu)[2],
-            "Install &update 1.2.0… (did not start last time)"
+            "Install &update 1.2.0… (failed last time)"
         );
         assert_eq!(
             menu.command(ID_UPDATE_INSTALL),

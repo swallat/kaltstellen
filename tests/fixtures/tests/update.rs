@@ -624,7 +624,10 @@ fn up1_a_version_that_did_not_start_is_never_installed_automatically_again() {
     ));
     s.start_tray_with(&fake);
     let pid = s.tray.as_ref().unwrap().id();
-    s.wait_log("tray: update 9.9.9 did not start here before", 1);
+    // Logged once by each tray after its start-up recovery: the one the
+    // update started again, and this one. This one's start-up schedule
+    // line is in the log by then.
+    s.wait_log("tray: update 9.9.9 could not be installed here before", 2);
     // The check that the click starts has run and been decided on: the
     // tray schedules the next one right after deciding.
     let scheduled = s.log().matches("tray: next update check in").count();
@@ -639,7 +642,7 @@ fn up1_a_version_that_did_not_start_is_never_installed_automatically_again() {
     // The automatic form refuses it too; on request it is still tried.
     let (code, _, err) = s.run(&["update", "--unattended"], &fake);
     assert_eq!(code, 1);
-    assert!(err.contains("did not start here before"), "{err}");
+    assert!(err.contains("could not be installed here before"), "{err}");
     let (code, out, err) = s.run(&["update", "--force"], &fake);
     assert_eq!(code, 1, "{out}{err}");
     assert!(out.contains("downloading version 9.9.9"), "{out}");

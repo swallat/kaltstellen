@@ -248,10 +248,12 @@ pub fn install(
     }
 
     if let Err(err) = swap(&files) {
-        // The tray was quit already: without the record, the tray that
-        // starts again would try the same install at once, and again.
-        session.install_failed(&release.version);
         if tray {
+            // The tray was quit already: without the record, the tray that
+            // starts again would try the same install at once, and again.
+            // Without a tray there is no such loop, and a file that was
+            // only locked for a moment may be swapped next time.
+            session.install_failed(&release.version);
             restart_old(session, &files.exe, say);
         }
         return Err(err);

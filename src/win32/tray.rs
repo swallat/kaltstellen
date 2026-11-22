@@ -74,7 +74,7 @@ pub trait Handler {
     fn menu(&mut self) -> Vec<Item>;
     /// An item of the menu that [`Handler::menu`] returned last was chosen.
     /// The menu may have been rebuilt while it was open; the ID belongs to
-    /// the one that was shown.
+    /// the one that was shown. `0`: the menu closed without a choice.
     fn chosen(&mut self, id: u16);
     /// `WM_COMMAND` arrived from elsewhere (tests, other programs).
     fn command(&mut self, id: u16);
@@ -435,11 +435,9 @@ fn show_menu(hwnd: HWND, x: i32, y: i32) {
         );
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
         let _ = DestroyMenu(menu);
-        if let Ok(id) = u16::try_from(chosen.0)
-            && id != 0
-        {
-            with_handler(|h| h.chosen(id));
-        }
+        // 0: closed without a choice.
+        let id = u16::try_from(chosen.0).unwrap_or(0);
+        with_handler(|h| h.chosen(id));
     }
 }
 

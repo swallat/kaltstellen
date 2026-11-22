@@ -37,7 +37,7 @@ pub struct Record {
 }
 
 impl Record {
-    /// Whether `version` did not start here before.
+    /// Whether `version` could not be installed here before.
     pub fn failed_before(&self, version: &str) -> bool {
         self.failed.as_deref() == Some(version)
     }
@@ -76,7 +76,7 @@ pub fn save(dir: &Path, record: &Record) -> Result<()> {
         .map_err(|e| io_error(&file, e))
 }
 
-/// Remembers that `version` did not start here (UP1): the automatic
+/// Remembers that `version` could not be installed here (UP1): the automatic
 /// install leaves it alone from now on.
 pub fn mark_failed(dir: &Path, version: &str) -> Result<()> {
     let (mut record, _) = load(dir);

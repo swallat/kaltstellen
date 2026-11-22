@@ -91,7 +91,9 @@ impl Document {
             config::parse(text).map_err(|rejected| config::rejected_lines(path, &rejected))?;
         let bom = text.starts_with('\u{feff}');
         let body = text.strip_prefix('\u{feff}').unwrap_or(text);
-        let crlf = body.contains("\r\n");
+        // CRLF only when every line ends so; a file with mixed endings is
+        // written with `\n`, the form toml_edit keeps.
+        let crlf = body.contains("\r\n") && !body.replace("\r\n", "").contains('\n');
         let doc = body
             .replace("\r\n", "\n")
             .parse::<DocumentMut>()

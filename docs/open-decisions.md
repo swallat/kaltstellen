@@ -48,7 +48,7 @@ reasoning is. Implementation choices made without the owner are marked
     (`quit_if_idle`); a busy tray stays and the install starts again the
     next time the tray is idle in `neutral`. A version that could not be
     installed after it was verified (`KS806` did not start, `KS805` not
-    swapped; not a start check that only timed out) is recorded in
+    swapped after the tray quit; not a start check that only timed out) is recorded in
     `update.json` and never installed automatically again; on request it
     still can be. Only the last such version is remembered. Failures before
     the tray is touched are retried after the next check (daily). No

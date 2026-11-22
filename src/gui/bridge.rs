@@ -62,7 +62,7 @@ pub struct UpdateInfo {
     pub available: Option<String>,
     /// Why this copy cannot install it here.
     pub blocked: Option<String>,
-    /// The available version did not start here before: it is not
+    /// The available version could not be installed here before: it is not
     /// installed automatically, only with `install_update`.
     pub failed: bool,
     /// Seconds since 1970 of the last check.
@@ -241,6 +241,21 @@ fn check_text(texts: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+/// Requests that change the configuration file.
+fn is_edit(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::CreateProfile { .. }
+            | Request::CopyProfile { .. }
+            | Request::RenameProfile { .. }
+            | Request::DeleteProfile { .. }
+            | Request::SetHotkey { .. }
+            | Request::AddEntry { .. }
+            | Request::UpdateEntry { .. }
+            | Request::RemoveEntry { .. }
+    )
+}
+
 fn check_path(path: Option<&str>) -> Result<(), String> {
     if let Some(path) = path.filter(|p| !p.trim().is_empty())
         && !Path::new(path.trim()).is_absolute()
@@ -313,7 +328,7 @@ impl<H: Host> Bridge<H> {
         let (id, result) = match self.parse(raw) {
             Ok((id, request)) => {
                 // An edit whose save fails is taken back (see `saved`).
-                self.snapshot = Some(self.document.clone());
+                self.snapshot = is_edit(&request).then(|| self.document.clone());
                 let result = self.dispatch(request);
                 self.snapshot = None;
                 (id, result)
@@ -395,17 +410,7 @@ impl<H: Host> Bridge<H> {
         // M1: while a profile waits to be deleted, no profile may be edited,
         // so the one that is deleted is the one that was meant.
         if let Some(name) = &self.pending_delete
-            && matches!(
-                request,
-                Request::CreateProfile { .. }
-                    | Request::CopyProfile { .. }
-                    | Request::RenameProfile { .. }
-                    | Request::DeleteProfile { .. }
-                    | Request::SetHotkey { .. }
-                    | Request::AddEntry { .. }
-                    | Request::UpdateEntry { .. }
-                    | Request::RemoveEntry { .. }
-            )
+            && is_edit(&request)
         {
             return Err(format!(
                 "\"{name}\" is being deleted; wait until the switch to neutral has ended"

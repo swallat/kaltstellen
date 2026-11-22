@@ -125,7 +125,7 @@ enum Command {
         #[arg(long, hide = true)]
         from_tray: bool,
         /// The tray's automatic install: quits the tray only if it is idle
-        /// in neutral, skips a version that did not start here before
+        /// in neutral, skips a version that could not be installed here before
         #[arg(long, hide = true, conflicts_with_all = ["check", "force", "from_tray"])]
         unattended: bool,
     },
@@ -569,7 +569,7 @@ fn update_install(force: bool, unattended: bool) -> u8 {
         return refused(Error::new(
             Code::UpdateStart,
             format!(
-                "version {} did not start here before; it is installed only on request",
+                "version {} could not be installed here before; it is installed only on request",
                 release.version
             ),
         ));

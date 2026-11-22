@@ -575,7 +575,7 @@ impl App {
     /// thawed or disturbed. Otherwise it waits: it is tried again when the
     /// tray returns to `neutral` and after every later check. The install
     /// itself asks again right before the tray quits (`quit_if_idle`).
-    /// A version that did not start here before is left alone.
+    /// A version that could not be installed here before is left alone.
     fn maybe_install_update(&mut self) {
         let Some(offer) = self.status.update.clone() else {
             return;
@@ -583,7 +583,7 @@ impl App {
         if offer.failed {
             if self.update_waiting.as_deref() != Some(offer.version.as_str()) {
                 info!(
-                    "tray: update {} did not start here before; it is not installed automatically",
+                    "tray: update {} could not be installed here before; it is not installed automatically",
                     offer.version
                 );
                 self.update_waiting = Some(offer.version.clone());
@@ -693,6 +693,17 @@ impl App {
                 if let Some(waiter) = waiter {
                     waiter.send(Body::Accepted { waiting: true });
                     self.running.push(waiter);
+                }
+            }
+            Decision::Refused => {
+                if let Some(waiter) = waiter {
+                    waiter.send(Body::Rejected {
+                        exit_code: exit::UNREACHABLE,
+                        lines: vec![format!(
+                            "error: {}: the tray is quitting or the session is ending",
+                            Code::TrayUnreachable
+                        )],
+                    });
                 }
             }
         }
@@ -905,10 +916,11 @@ impl window::Handler for App {
     fn chosen(&mut self, id: u16) {
         // The menu that was shown: `finished` may have rebuilt `self.menu`
         // while it was open (a profile added to the file, the offer taken).
-        let command = self
-            .shown_menu
-            .take()
-            .and_then(|menu| menu.command(id).cloned());
+        let shown = self.shown_menu.take();
+        if id == 0 {
+            return;
+        }
+        let command = shown.and_then(|menu| menu.command(id).cloned());
         self.run(id, command);
     }
 
