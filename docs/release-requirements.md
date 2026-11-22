@@ -1,6 +1,7 @@
 # What a release must contain for the updater
 
-Input for the later CI/CD work; nothing here exists yet. The client side is
+Implemented by `.github/workflows/release.yml` (see [releasing.md](releasing.md));
+signing and the ARM64 build are still open. The client side is
 described in [spec.md](spec.md) UP1 and implemented in `src/update/`. A
 release that follows this page is picked up by every client that has the
 updater, without changing the client.

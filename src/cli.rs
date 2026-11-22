@@ -23,8 +23,12 @@ use crate::win32::console::Interrupts;
 
 /// Put background apps on ice: suspend, resume and trim Windows processes.
 #[derive(Parser)]
-#[command(version, about)]
+#[command(version, about, disable_version_flag = true)]
 struct Cli {
+    /// Print the version (`kaltstellen <version>`); `-V` works too
+    #[arg(short = 'v', short_alias = 'V', long, action = clap::ArgAction::Version)]
+    version: (),
+
     #[command(subcommand)]
     command: Command,
 }
