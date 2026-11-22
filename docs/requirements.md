@@ -14,7 +14,9 @@ belong to it and puts the others on ice, so they stop costing CPU and RAM.
 - No general "game booster": no registry tweaks, no power-plan magic, no
   cleaning of temp files.
 - No launcher or library for games.
-- No account, no telemetry, no network access.
+- No account, no telemetry. No network access except the update check and
+  download (spec UP1, opt-out; added 2026-11-22 on the owner's request for
+  an update function, wording awaiting confirmation).
 - Windows only.
 
 ## Functional requirements

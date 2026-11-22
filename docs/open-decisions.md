@@ -53,3 +53,43 @@ owner says so.
 10. **Elevated helper for services**: see [design-elevated-helper.md](design-elevated-helper.md) (service with trigger start, pipe with identity checks, admin-only allow list) and its open questions.
 11. **Automatic triggers**: see [design-automatic-triggers.md](design-automatic-triggers.md); recommendation: no general automation, at most trigger programs per profile, opt-in, manual beats automatic.
 
+
+## Updates (UP1)
+
+12. **Non-goal "no network access"**: reworded in requirements.md to "no
+    network access except the update check and download, opt-out". Overrule
+    to keep the tool offline (then the default mode becomes `off`, or the
+    feature goes).
+13. **Opt-out, check only**: mode `on` by default (as foresprint); `on`
+    checks once a day and reports, it never installs by itself, because
+    installing quits the tray and resumes everything frozen. Alternatives:
+    opt-in (`off` by default), or an automatic install while `neutral` is
+    active.
+14. **Who checks**: only the tray, 5 minutes after start and then every
+    24 hours, through a child process `kaltstellen update --check --quiet`;
+    command-line commands never check by themselves (foresprint does after
+    every command). A failed check waits 24 hours, as in foresprint.
+15. **Integrity only, no signature**: SHA-256 from `checksums.txt` of the
+    same release over HTTPS. Signing needs a decision and something from the
+    owner: an Authenticode certificate (cost, also ends SmartScreen warnings)
+    or an own key pair (private key as an Actions secret, public key compiled
+    in). See spec UP1 "Integrity and authenticity".
+16. **Release file layout**: bare `kaltstellen-<version>-windows-<arch>.exe`
+    plus `checksums.txt` (no zip for the updater, so no zip code in the
+    client); tag `v<version>`; a tag with `-` is a pre-release. Details in
+    [release-requirements.md](release-requirements.md).
+17. **Development builds**: a build without `KALTSTELLEN_RELEASE=1` never
+    checks by itself and installs only from a source named in
+    `KALTSTELLEN_UPDATE_URL`.
+18. **Package managers and Program Files**: installing is refused below
+    `\scoop\apps\`, `\WinGet\`, `\chocolatey\` and Program Files, and in a
+    folder that is not writable; the check still reports. There is no
+    elevation for an update in Program Files.
+19. **Keeping `kaltstellen.old.exe`**: the previous executable stays next to
+    the new one until the next update, as a manual way back. Alternative:
+    remove it after the new tray answered (foresprint removes it at the next
+    start).
+20. **After an update**: the new tray offers the profile that was active
+    (`Apply last profile`) instead of applying it again by itself.
+21. **Main window**: shows nothing about updates yet; the tray menu and the
+    command line are the only places.
