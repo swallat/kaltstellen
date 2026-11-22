@@ -132,6 +132,45 @@ runs, the command line goes through it. One tile, three states:
 Logo, wordmark, colours and icons live in [branding/](branding/), together
 with the scripts that generate them. The notes there are in German.
 
+## Updates
+
+There are no releases yet; this describes how updates will work once there
+are. kaltstellen updates itself from the
+[GitHub releases](https://github.com/swallat/kaltstellen/releases) of this
+repository:
+
+```powershell
+kaltstellen update --check   # is there a newer version?
+kaltstellen update           # install it
+```
+
+Installing downloads the executable for your system and `checksums.txt` of
+the same release, refuses the file if its SHA-256 differs, and tries the new
+file (`--version`) before anything else changes. A running tray is quit
+first, which resumes every frozen program; then the executable is replaced
+and a new tray started. Its menu offers the profile that was active
+(`Apply last profile`); nothing is frozen again by itself. If the new tray
+does not start, the previous version is put back and started. The previous
+executable stays next to the new one as `kaltstellen.old.exe` until the next
+update, so you can go back by renaming it.
+
+The tray looks for a new version once a day (first five minutes after it
+starts) and shows `Install update <version>…` in its menu when there is one.
+It never installs by itself. This check is the only network access
+kaltstellen makes: one HTTPS request to the GitHub API, nothing about you or
+your configuration is sent. Turn it off with any of:
+
+- the tray menu item `Check for updates daily`,
+- `kaltstellen update --auto off`,
+- the environment variable `KALTSTELLEN_UPDATE=off`, which wins over the
+  other two.
+
+With the check off, nothing connects unless you run `kaltstellen update`.
+A copy installed by scoop, winget or Chocolatey, or placed below Program
+Files or in a folder you cannot write to, does not replace itself; it says
+how to update instead. Builds of your own (`cargo build`) do not update
+themselves either.
+
 ## License
 
 Licensed under either of

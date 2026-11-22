@@ -122,4 +122,19 @@ name. Purpose: find out which real apps tolerate being frozen.
   only read.
 - M4 design notes (2026-11-22): `docs/design-elevated-helper.md` (A5, P8) and
   `docs/design-automatic-triggers.md` (U4), for the owner to decide; no code.
-
+- Updates, UP1 (2026-11-22, on the owner's request before any release,
+  modelled on foresprint's `selfupdate`): `kaltstellen update [--check]
+  [--force] [--auto on|off]`, daily check by the tray through a child
+  process on a one-shot timer, menu items `Install update <version>…` and
+  `Check for updates daily`, pipe request `quit`. Safe logic in
+  `src/update/` (versions, metadata, checksums, schedule, placement, the
+  install sequence with rollback), WinHTTP and CNG SHA-256 in
+  `src/win32/{http,hash}.rs`; no new crate. Codes `KS801` to `KS808`.
+  Tests: unit tests with injected fetch and session, WinHTTP against a
+  loopback server, and process-level tests in
+  `tests/fixtures/tests/update.rs` (check, mode, full update with a tray
+  holding a frozen program, rollback of a tray that does not start, wrong
+  checksum, a file that is no program, the tray's check switched on from
+  the menu). The non-goal "no network access" is reworded (open decision
+  12). Still open: a real release (`docs/release-requirements.md`),
+  signing, the manual checks in `docs/manual-checks.md`.

@@ -81,3 +81,34 @@ Start with the test configuration from above (copy `config.example.toml`).
 3. In the main window, select the profile: the program is listed as `new`.
    `Add to profile` adds it and it leaves the list; for another program,
    `Dismiss` removes it from the list of this profile only.
+
+## Updates (UP1)
+
+Automated tests cover the check, the full update against a local server,
+the rollback and the menu item that switches the check on. Only a person
+can check what is on screen, and only a real release can show the real
+path. Until the first release exists, steps 1 to 3 work with a copy:
+copy `target\release\kaltstellen.exe` to a folder of its own and run it
+from there with the test variables above.
+
+1. Tray menu: `Check for updates daily` is shown and checked by default;
+   clicking it toggles the check mark and `settings.json` gets
+   `"update": "off"` or `"on"`. With `KALTSTELLEN_UPDATE=off` set, the line
+   reads `(set by KALTSTELLEN_UPDATE)` and is disabled.
+2. With an `update.json` in the test data folder that names a higher
+   version (`{ "latest": "9.9.9" }`), the menu shows a disabled line
+   `Update 9.9.9 available: …` for a development build or a copy below
+   `scoop\apps`, and `Install update 9.9.9…` for a release build.
+3. Clicking `Install update…` opens a console window that runs the update;
+   on a failure it stays open until Enter.
+4. After the first real release: put the previous release in a normal
+   folder, start its tray, apply a profile that freezes something, run
+   `kaltstellen update`. Expect: the frozen program runs again, the console
+   says `updated to version …`, one new tray icon appears (not two), its
+   menu offers `Apply last profile`, `kaltstellen --version` shows the new
+   version, `kaltstellen.old.exe` lies next to it. Then sign out and in:
+   autostart starts the new version.
+5. SmartScreen: the executable is not signed. Note whether Windows warns
+   when the new tray starts.
+6. Behind a proxy or a TLS-inspecting firewall, if available: the check
+   works with the system's proxy settings.
