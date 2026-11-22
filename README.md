@@ -40,6 +40,7 @@ kaltstellen switch PROFILE        switch to a profile; "neutral" brings
 kaltstellen status                show the active profile and what is on ice
 kaltstellen recover [--no-wait]   resume everything frozen, e.g. after a crash
 kaltstellen tray                  notification-area icon with the profile menu
+kaltstellen autostart [on|off]    start the tray at sign-in (per-user Run key)
 
 kaltstellen list [FILTER]         list running processes
 kaltstellen suspend NAME [--trim] freeze a program by hand: all processes with
@@ -111,7 +112,10 @@ elevated or under another user requires an elevated terminal.
 profiles of the configuration (the active one checked), `Neutral` and
 `Quit`; the tooltip names the active profile. It runs once per session, and
 on start it resumes anything a crashed instance left frozen. `Quit` resumes
-everything frozen and leaves closed programs closed. Started from a terminal
+everything frozen and leaves closed programs closed. When you sign out or
+shut down, it resumes everything first and offers the last profile again
+after the next sign-in (`Apply last profile` in the menu); it never applies
+it by itself. `Start at sign-in` in the menu adds it to the per-user Run key. Started from a terminal
 it keeps that terminal until `Quit`; started from a shortcut it lets go of
 its console window at once, which may still show for a moment. While it
 runs, the command line goes through it. One tile, three states:

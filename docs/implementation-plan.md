@@ -75,14 +75,14 @@ WP7 ─ WP10 GUI process ─ WP11 unassigned programs ─ M3 done
 ### WP7 Tray app
 - Covers: U1, L1 (mutex, named pipe with current-user ACL), L2, Q1, three icon states, error state clearing.
 - Depends on: M1.
-- Steps: hidden message window, notification icon with the three bundled icons, menu from the configuration, pipe server forwarding requests to the engine, single-instance mutex, start at sign-in (Run key, **[assumed]** opt-in), idle trim of the tray itself.
+- Steps: hidden message window, notification icon with the three bundled icons, menu from the configuration, pipe server forwarding requests to the engine, single-instance mutex, start at sign-in (Run key, **[assumed]** opt-in). Idle trim of the tray itself was dropped: the measured private working set is about 1.4 MB, far below Q1, and trimming would only move shared pages.
 - Acceptance: T12 (idle footprint, indicative on the VM), T3 (error state), T4 over the pipe.
 - VM steps: start two instances, confirm the second exits; call the CLI with the tray running (pipe path) and not running (in-process path); measure working set and CPU for 60 s; connect to the pipe as another user and confirm refusal.
 
 ### WP8 Session and power events
 - Covers: S5, S3 (runtime part), L2, standby behaviour, S4 via W7.
 - Depends on: WP7.
-- Steps: resume all on `WM_QUERYENDSESSION`; shutdown priority; stopped records cleared at sign-out, kept on Quit/crash; `settings.json` last profile offered after sign-in; console handler for CLI; `WM_POWERBROADCAST` logging only.
+- Steps: resume all on `WM_QUERYENDSESSION`; shutdown priority; stopped records cleared at sign-out, kept on Quit/crash; `settings.json` last profile offered after sign-in; console handler for CLI (done with M1, spec L6); `WM_POWERBROADCAST` logging only.
 - Acceptance: T7, T20, T5 (tray crash variant).
 - VM steps: freeze fixtures, sign out through RDP and sign in again; repeat with shutdown and with a cancelled shutdown; confirm no "app is preventing shutdown" dialog and that the tray offers the last profile; put the VM into standby if the hypervisor allows it (otherwise untested **[assumed]**).
 

@@ -88,3 +88,19 @@ name. Purpose: find out which real apps tolerate being frozen.
 - Owner decisions (2026-11-22): spec blocks A8, C8, L4 and the widened Q4
   confirmed. Added on request: `args`/`cwd` on stop entries for the restart on
   `neutral`, and `confirmed = true` for warn-list entries (works from the tray).
+- WP7 second increment and WP8 (2026-11-22): named pipe of the tray
+  (`src/win32/pipe.rs`, `src/tray/{protocol,server,client}.rs`, format in
+  `docs/pipe-protocol.md`, spec L5): `switch`, `recover` and `status` go
+  through a running tray with the same output and exit codes, `--no-wait`,
+  exit code 3 for a superseded request, in-process fallback without a tray.
+  Console control handler for in-process switches (spec L6, `KS403`).
+  Session end (spec L7): resume at `WM_QUERYENDSESSION`, shutdown priority,
+  stopped records cleared at `WM_ENDSESSION`, `settings.json` with the last
+  profile offered in the menu, power events logged. Start at sign-in via the
+  per-user Run key (`kaltstellen autostart`, menu item; spec L8). Idle trim of
+  the tray dropped (not needed for Q1). Tests at process level against the
+  fixtures; session-end messages are posted to a test tray, never a real
+  sign-out. Still open for M2: T7, T20 and T5 on the VM with a real sign-out
+  and shutdown; connecting to the pipe as another user (only the DACL is
+  checked); visual check of icon and menu; acknowledging the error state; a
+  per-monitor DPI manifest; the manual 30-minute run of M2.
