@@ -27,7 +27,11 @@ const state = {
   default_trim: true,
   autostart: false,
   applying: false,
-  status: 'Editing the sample configuration (mock backend, nothing is saved).',
+  status: 'Mock backend: nothing is saved.',
+  update: {
+    version: '1.0.0', mode: 'auto', mode_locked: false, available: null,
+    blocked: null, last_check: 1795000000, error: null, checking: false,
+  },
   profiles: [
     {
       name: 'Flight', hotkey: 'Ctrl+Shift+Alt+F1', active: true,
@@ -180,6 +184,22 @@ function handle(message) {
       }, 600);
       return { ok: true };
     }
+    case 'set_update_mode': {
+      if (!['auto', 'manual', 'off'].includes(m.mode)) return fail(`unknown update mode "${m.mode}"`);
+      state.update.mode = m.mode;
+      state.status = `Update mode ${m.mode}.`;
+      if (m.mode !== 'off' && !state.update.checking) check();
+      return { ok: true };
+    }
+    case 'check_updates':
+      if (state.update.checking) return fail('a check is still running');
+      state.status = 'Checking for updates…';
+      check();
+      return { ok: true };
+    case 'install_update':
+      if (!state.update.available) return fail('no newer version is known; check first');
+      state.status = `Installing ${state.update.available} in a separate window…`;
+      return { ok: true };
     case 'set_autostart':
       state.autostart = !!m.on;
       state.status = `Start at sign-in ${m.on ? 'on' : 'off'}.`;
@@ -191,6 +211,18 @@ function handle(message) {
     default:
       return fail(`malformed request: unknown type "${m.type}"`);
   }
+}
+
+/** A check that finds 1.1.0 after a moment. */
+function check() {
+  state.update.checking = true;
+  setTimeout(() => {
+    state.update.checking = false;
+    state.update.available = '1.1.0';
+    state.update.last_check = Math.floor(Date.now() / 1000);
+    state.status = 'Version 1.1.0 is available.';
+    emit({ v: 1, event: 'update_checked', state: view() });
+  }, 800);
 }
 
 function view() {

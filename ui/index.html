@@ -25,6 +25,22 @@
         <button type="button" class="button small" id="new-profile">New</button>
       </div>
       <ul class="profile-list" id="profile-list"></ul>
+      <section class="updates" aria-labelledby="updates-title">
+        <h2 id="updates-title">Updates</h2>
+        <p id="update-version"></p>
+        <p class="hint" id="update-state" aria-live="polite"></p>
+        <label for="update-mode">Mode</label>
+        <select id="update-mode" aria-describedby="update-locked">
+          <option value="auto">Install automatically</option>
+          <option value="manual">Check and ask</option>
+          <option value="off">Off</option>
+        </select>
+        <p class="hint" id="update-locked" hidden>Set by KALTSTELLEN_UPDATE.</p>
+        <div class="actions">
+          <button type="button" class="button small" id="check-updates">Check now</button>
+          <button type="button" class="button small primary" id="install-update" hidden>Install</button>
+        </div>
+      </section>
       <p class="hint" id="config-file"></p>
     </nav>
 

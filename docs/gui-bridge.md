@@ -38,6 +38,9 @@ control characters; paths must be absolute.
 | `dismiss` | `profile`, `exe` | Hide an unassigned program for this profile. |
 | `apply` | `profile` | Start `kaltstellen switch PROFILE`; the result arrives as the `applied` event. One switch at a time. |
 | `set_autostart` | `on` | Start at sign-in on or off (L8). |
+| `set_update_mode` | `mode`: `"auto"`, `"manual"` or `"off"` | Saves the update mode in `settings.json` (UP1). Refused while `KALTSTELLEN_UPDATE` decides. A mode that checks starts a check at once, as `check_updates`. |
+| `check_updates` | | Runs `kaltstellen update --check --quiet` in the background (the one network access, UP1); the end arrives as the `update_checked` event. One check at a time. |
+| `install_update` | | Opens a console window with `kaltstellen update`, as the tray's `Install update…`. Refused when no newer version is known or this copy cannot update itself. |
 
 Every change is validated with `config::parse` and saved atomically at once;
 a refused change leaves the file as it was.
@@ -60,11 +63,14 @@ a refused change leaves the file as it was.
 | `autostart` | `true`, `false`, or `null` when unknown. |
 | `applying` | A switch runs. |
 | `status` | The status line. |
+| `update` | `{version, mode, mode_locked, available, blocked, last_check, error, checking}`: the installed version; `auto`, `manual` or `off`; whether `KALTSTELLEN_UPDATE` decides; the newer version found by the last check or `null`; why this copy cannot install it (package manager, Program Files, development build) or `null`; seconds since 1970 of the last check or `null`; why the last check failed or `null`; whether a check started from the window runs. |
 
 ## Events and notices
 
 - Host to page: `{"v": 1, "event": "applied", "state": {}}` when a switch
-  started by `apply` (or by deleting the active profile) has ended.
+  started by `apply` (or by deleting the active profile) has ended;
+  `{"v": 1, "event": "update_checked", "state": {}}` when a check started by
+  `check_updates` or `set_update_mode` has ended.
 - Page to host, without `id`: `{"v": 1, "type": "ready"}` once the first
   render is done; `{"v": 1, "type": "log", "message"}` for page errors (they
   go to the log file); `{"v": 1, "type": "drive_done", "results"}` at the end

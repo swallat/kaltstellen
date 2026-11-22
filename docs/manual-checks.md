@@ -95,6 +95,12 @@ main session made them; they show the views below in light and dark.
     in the window: the status line says the file was changed and reloads it.
 13. Right click in the page: no browser context menu (release build). Ctrl+P,
     F5, Ctrl+F do nothing (release build).
+13a. Updates (sidebar): the installed version is shown; `Check now` shows
+    `Checking…`, then `Up to date` with the time or the newer version (with
+    network off: `Last check failed` and the reason). Changing the mode
+    writes `settings.json` like the tray items; with `KALTSTELLEN_UPDATE`
+    set the selector is disabled. With a newer version known, `Install
+    <version>` opens the console window of the update.
 14. With the window open and minimised, choose `Open kaltstellen…` again
     (or run `kaltstellen gui`): the same window comes back to the front, no
     second window opens.

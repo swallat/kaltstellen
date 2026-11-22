@@ -151,6 +151,7 @@ pub fn main(args: Args) -> u8 {
             thread::spawn(move || {
                 thread::sleep(REVIEW_TIMEOUT);
                 let _ = watchdog.send(Applied {
+                    kind: Kind::Watchdog,
                     target: String::new(),
                     code: exit::ERRORS,
                     stderr: String::new(),
@@ -186,7 +187,18 @@ pub fn main(args: Args) -> u8 {
 }
 
 /// Result of a `kaltstellen switch` run in the background.
+/// What a background job of the window reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Switch,
+    /// `kaltstellen update --check --quiet` ended.
+    Check,
+    /// The review watchdog: the page never got ready.
+    Watchdog,
+}
+
 struct Applied {
+    kind: Kind,
     target: String,
     code: u8,
     stderr: String,
@@ -243,6 +255,58 @@ impl Host for RealHost {
         dialog::pick_executable(self.waker.window())
     }
 
+    fn update_info(&self) -> bridge::UpdateInfo {
+        let config_dir = paths::config_dir();
+        let (mode, locked, offer) = crate::tray::update::menu_state(config_dir.as_deref());
+        let record = crate::update::record::load(&self.data).0;
+        bridge::UpdateInfo {
+            version: crate::update::CURRENT.to_owned(),
+            mode: mode.name(),
+            mode_locked: locked,
+            available: offer.as_ref().map(|o| o.version.clone()),
+            blocked: offer.and_then(|o| o.blocked),
+            last_check: record.last_check,
+            error: record.error,
+            checking: false,
+        }
+    }
+
+    fn set_update_mode(&self, mode: crate::update::Mode) -> Result<(), String> {
+        let dir = paths::config_dir().ok_or("no configuration directory")?;
+        crate::settings::edit(&dir, |s| s.update = Some(mode.name().to_owned()))
+            .map_err(|e| e.to_string())
+    }
+
+    fn check_updates(&self) {
+        let exe = std::env::current_exe();
+        let results = self.results.clone();
+        let waker = self.waker.clone();
+        thread::spawn(move || {
+            use std::os::windows::process::CommandExt;
+            let _ = exe.and_then(|exe| {
+                Command::new(exe)
+                    .args(["update", "--check", "--quiet"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .status()
+            });
+            let _ = results.send(Applied {
+                kind: Kind::Check,
+                target: String::new(),
+                code: 0,
+                stderr: String::new(),
+            });
+            waker.wake();
+        });
+    }
+
+    fn install_update(&self) -> Result<(), String> {
+        crate::tray::update::open_install();
+        Ok(())
+    }
+
     fn apply(&self, profile: &str) {
         let exe = std::env::current_exe();
         let results = self.results.clone();
@@ -265,6 +329,7 @@ impl Host for RealHost {
                 Err(err) => (exit::UNREACHABLE, format!("error: {err}")),
             };
             let _ = results.send(Applied {
+                kind: Kind::Switch,
                 target,
                 code,
                 stderr,
@@ -341,7 +406,11 @@ impl Page for GuiPage {
     fn wake(&mut self) -> Vec<Answer> {
         let mut answers = Vec::new();
         while let Ok(applied) = self.inbox.try_recv() {
-            if applied.target.is_empty() {
+            if applied.kind == Kind::Check {
+                answers.push(Answer::Reply(self.bridge.checked()));
+                continue;
+            }
+            if applied.kind == Kind::Watchdog {
                 // The review watchdog: the page never got ready.
                 warn!("gui: the page did not finish in time; closing");
                 answers.push(Answer::Close);

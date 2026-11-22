@@ -45,6 +45,13 @@ reasoning is. Implementation choices made without the owner are marked
     with `neutral` active and after every later check; logged once per
     version while it waits; a saved `on` (earlier name) reads as `auto`.
 
+11. **UP1 in the main window** `[assumed]`: a section `Updates` at the bottom
+    of the sidebar; the window checks by running `kaltstellen update --check
+    --quiet` (no network code in the window either); choosing a mode that
+    checks starts a check at once; `Install` opens the same console window as
+    the tray item rather than installing silently, so a window that the user
+    is looking at shows the steps.
+
 ## Decided by the owner on 2026-11-23
 
 - **L5 pipe**: as built, including no fallback when a running tray does not

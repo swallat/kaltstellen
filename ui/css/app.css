@@ -71,7 +71,14 @@ p { margin: 0; }
 }
 .tag.new { background: var(--color-primary); color: var(--color-on-primary); }
 .hint { color: var(--color-muted); font-size: 0.8125rem; }
-.sidebar .hint { margin-top: auto; overflow-wrap: anywhere; }
+.sidebar > .hint { overflow-wrap: anywhere; }
+.updates {
+  display: grid; gap: var(--space-2); margin-top: auto;
+  padding-top: var(--space-3); border-top: 1px solid var(--color-line);
+}
+.updates h2 { font-size: 0.8125rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-muted); }
+.updates label { font-size: 0.8125rem; font-weight: 600; }
+.updates .hint { overflow-wrap: anywhere; }
 
 .detail { padding: var(--space-6); overflow: auto; min-width: 0; }
 .detail:focus { outline: none; }

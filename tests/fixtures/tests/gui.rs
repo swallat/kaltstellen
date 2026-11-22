@@ -86,6 +86,7 @@ impl World {
             .args(args)
             .env("KALTSTELLEN_CONFIG_DIR", self.path("config"))
             .env("KALTSTELLEN_DATA_DIR", self.path("data"))
+            .env_remove("KALTSTELLEN_UPDATE")
             .env(
                 "KALTSTELLEN_RUN_KEY",
                 "Software\\kaltstellen-test-gui-unused\\Run",
@@ -162,6 +163,8 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
         {"type": "add_entry", "profile": "play", "exe": "ks-wv-a.exe"},
         {"type": "add_entry", "profile": "play", "exe": "explorer.exe"},
         {"type": "set_hotkey", "profile": "play", "hotkey": "Ctrl+Alt+Banana"},
+        {"type": "set_update_mode", "mode": "off"},
+        {"type": "install_update"},
         {"type": "apply", "profile": "play"}
     ]"#;
     fs::write(world.path("steps.json"), steps).unwrap();
@@ -193,12 +196,27 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
         .iter()
         .map(|r| r["ok"].as_bool().unwrap())
         .collect();
-    assert_eq!(ok, vec![true, true, false, false, true], "{results}");
+    assert_eq!(
+        ok,
+        vec![true, true, false, false, true, false, true],
+        "{results}"
+    );
     assert!(
         results[2]["error"].as_str().unwrap().contains("protected"),
         "{results}"
     );
-    assert_eq!(results[4]["status"], "Applied \"play\".", "{results}");
+    // UP1 in the window: the mode is saved like the tray's (off: no check,
+    // so no network); nothing to install without a known newer version.
+    let settings = fs::read_to_string(world.path("config").join("settings.json")).unwrap();
+    assert!(settings.contains("\"update\": \"off\""), "{settings}");
+    assert!(
+        results[5]["error"]
+            .as_str()
+            .unwrap()
+            .contains("check first"),
+        "{results}"
+    );
+    assert_eq!(results[6]["status"], "Applied \"play\".", "{results}");
 
     let config = world.config();
     assert!(config.starts_with("# Owner's notes stay."), "{config}");

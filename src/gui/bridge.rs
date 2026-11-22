@@ -39,6 +39,35 @@ pub trait Host {
     /// Starts `kaltstellen switch PROFILE`; the result comes back later
     /// through [`Bridge::applied`].
     fn apply(&self, profile: &str);
+    /// UP1: what is known about updates.
+    fn update_info(&self) -> UpdateInfo;
+    fn set_update_mode(&self, mode: crate::update::Mode) -> Result<(), String>;
+    /// Starts a check; the end comes back through [`Bridge::checked`].
+    fn check_updates(&self);
+    /// Opens the visible update (a console window running `kaltstellen
+    /// update`), as the tray's `Install update…` does.
+    fn install_update(&self) -> Result<(), String>;
+}
+
+/// UP1 in the main window.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct UpdateInfo {
+    /// The installed version.
+    pub version: String,
+    /// `auto`, `manual` or `off`.
+    pub mode: &'static str,
+    /// `KALTSTELLEN_UPDATE` decides; the window cannot change the mode.
+    pub mode_locked: bool,
+    /// A newer version found by the last check.
+    pub available: Option<String>,
+    /// Why this copy cannot install it here.
+    pub blocked: Option<String>,
+    /// Seconds since 1970 of the last check.
+    pub last_check: Option<u64>,
+    /// Why the last check failed.
+    pub error: Option<String>,
+    /// A check started from the window runs.
+    pub checking: bool,
 }
 
 /// Intents and queries of the page.
@@ -99,6 +128,11 @@ pub enum Request {
     SetAutostart {
         on: bool,
     },
+    SetUpdateMode {
+        mode: String,
+    },
+    CheckUpdates,
+    InstallUpdate,
 }
 
 /// One entry as the page shows it.
@@ -135,6 +169,7 @@ pub struct StateView {
     pub autostart: Option<bool>,
     pub applying: bool,
     pub status: String,
+    pub update: UpdateInfo,
 }
 
 fn protection_name(exe: &str) -> &'static str {
@@ -219,6 +254,7 @@ pub struct Bridge<H: Host> {
     /// M1: delete this profile once the switch to `neutral` is done.
     pending_delete: Option<String>,
     applying: bool,
+    checking: bool,
 }
 
 impl<H: Host> Bridge<H> {
@@ -230,6 +266,7 @@ impl<H: Host> Bridge<H> {
             status,
             pending_delete: None,
             applying: false,
+            checking: false,
         }
     }
 
@@ -258,6 +295,10 @@ impl<H: Host> Bridge<H> {
             autostart: self.host.autostart(),
             applying: self.applying,
             status: self.status.clone(),
+            update: UpdateInfo {
+                checking: self.checking,
+                ..self.host.update_info()
+            },
         }
     }
 
@@ -520,6 +561,43 @@ impl<H: Host> Bridge<H> {
                 self.status = format!("Applying \"{profile}\"…");
                 Ok(None)
             }
+            Request::SetUpdateMode { mode } => {
+                check_text(&[&mode])?;
+                let parsed = crate::update::Mode::parse(&mode)
+                    .filter(|m| m.name() == mode.trim())
+                    .ok_or_else(|| format!("unknown update mode \"{mode}\""))?;
+                if self.host.update_info().mode_locked {
+                    return Err("KALTSTELLEN_UPDATE decides the update mode".to_owned());
+                }
+                self.host.set_update_mode(parsed)?;
+                self.status = format!("Update mode {}.", parsed.name());
+                if parsed.checks() && !self.checking {
+                    self.checking = true;
+                    self.host.check_updates();
+                }
+                Ok(None)
+            }
+            Request::CheckUpdates => {
+                if self.checking {
+                    return Err("a check is still running".to_owned());
+                }
+                self.checking = true;
+                self.status = "Checking for updates…".to_owned();
+                self.host.check_updates();
+                Ok(None)
+            }
+            Request::InstallUpdate => {
+                let info = self.host.update_info();
+                let Some(version) = info.available else {
+                    return Err("no newer version is known; check first".to_owned());
+                };
+                if let Some(how) = info.blocked {
+                    return Err(format!("this copy cannot update itself: {how}"));
+                }
+                self.host.install_update()?;
+                self.status = format!("Installing {version} in a separate window…");
+                Ok(None)
+            }
             Request::SetAutostart { on } => {
                 self.host.set_autostart(on)?;
                 self.status = format!("Start at sign-in {}.", if on { "on" } else { "off" });
@@ -535,6 +613,18 @@ impl<H: Host> Bridge<H> {
         self.applying = true;
         self.host.apply(profile);
         Ok(())
+    }
+
+    /// The check started by `check_updates` ended; returns the event.
+    pub fn checked(&mut self) -> String {
+        self.checking = false;
+        let info = self.host.update_info();
+        self.status = match (&info.error, &info.available) {
+            (Some(error), _) => format!("Update check failed: {error}"),
+            (None, Some(version)) => format!("Version {version} is available."),
+            (None, None) => format!("kaltstellen {} is the newest version.", info.version),
+        };
+        json!({"v": VERSION, "event": "update_checked", "state": self.state()}).to_string()
     }
 
     /// The switch started by `apply` ended; returns the event for the page.
@@ -566,6 +656,9 @@ mod tests {
         dismissed: Rc<RefCell<Vec<String>>>,
         autostart: Rc<RefCell<Option<bool>>>,
         pick: Option<PathBuf>,
+        update: Rc<RefCell<UpdateInfo>>,
+        checks: Rc<RefCell<usize>>,
+        installs: Rc<RefCell<usize>>,
     }
 
     impl Host for Fake {
@@ -607,6 +700,20 @@ mod tests {
         }
         fn apply(&self, profile: &str) {
             self.applied.borrow_mut().push(profile.to_owned());
+        }
+        fn update_info(&self) -> UpdateInfo {
+            self.update.borrow().clone()
+        }
+        fn set_update_mode(&self, mode: crate::update::Mode) -> Result<(), String> {
+            self.update.borrow_mut().mode = mode.name();
+            Ok(())
+        }
+        fn check_updates(&self) {
+            *self.checks.borrow_mut() += 1;
+        }
+        fn install_update(&self) -> Result<(), String> {
+            *self.installs.borrow_mut() += 1;
+            Ok(())
         }
     }
 
@@ -799,6 +906,54 @@ mod tests {
             json!({"v": 1, "id": 8, "type": "apply", "profile": "nope"}),
         );
         assert_eq!(unknown["ok"], false);
+    }
+
+    #[test]
+    fn up1_update_mode_check_and_install_through_the_bridge() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, fake) = bridge(&dir);
+        *fake.update.borrow_mut() = UpdateInfo {
+            version: "1.0.0".into(),
+            mode: "auto",
+            ..UpdateInfo::default()
+        };
+        let state = send(&mut b, json!({"v": 1, "id": 1, "type": "get_state"}));
+        assert_eq!(state["state"]["update"]["version"], "1.0.0");
+        assert_eq!(state["state"]["update"]["mode"], "auto");
+        // Only the three names; a mode that checks starts a check.
+        let bad = send(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "set_update_mode", "mode": "on"}),
+        );
+        assert_eq!(bad["ok"], false);
+        let manual = send(
+            &mut b,
+            json!({"v": 1, "id": 3, "type": "set_update_mode", "mode": "manual"}),
+        );
+        assert_eq!(manual["state"]["update"]["mode"], "manual");
+        assert_eq!(manual["state"]["update"]["checking"], true);
+        assert_eq!(*fake.checks.borrow(), 1);
+        let again = send(&mut b, json!({"v": 1, "id": 4, "type": "check_updates"}));
+        assert_eq!(again["ok"], false, "one check at a time");
+        fake.update.borrow_mut().available = Some("1.1.0".into());
+        let event: Value = serde_json::from_str(&b.checked()).unwrap();
+        assert_eq!(event["event"], "update_checked");
+        assert_eq!(event["state"]["status"], "Version 1.1.0 is available.");
+        assert_eq!(event["state"]["update"]["checking"], false);
+        let install = send(&mut b, json!({"v": 1, "id": 5, "type": "install_update"}));
+        assert_eq!(install["ok"], true);
+        assert_eq!(*fake.installs.borrow(), 1);
+        // Not installable here: refused on the Rust side.
+        fake.update.borrow_mut().blocked = Some("installed by scoop".into());
+        let refused = send(&mut b, json!({"v": 1, "id": 6, "type": "install_update"}));
+        assert_eq!(refused["ok"], false);
+        // The environment decides: the window cannot change the mode.
+        fake.update.borrow_mut().mode_locked = true;
+        let locked = send(
+            &mut b,
+            json!({"v": 1, "id": 7, "type": "set_update_mode", "mode": "off"}),
+        );
+        assert_eq!(locked["ok"], false);
     }
 
     #[test]

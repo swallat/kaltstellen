@@ -59,8 +59,35 @@ function render() {
   $('autostart').checked = !!state.autostart;
   $('config-file').textContent = state.config_file;
   setStatus(state.status);
+  renderUpdate();
   renderProfiles();
   renderDetail();
+}
+
+function when(seconds) {
+  return new Date(seconds * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+/** UP1: version, what the last check found, the mode and the two buttons. */
+function renderUpdate() {
+  const u = state.update;
+  $('update-version').textContent = `Version ${u.version}`;
+  let text;
+  if (u.checking) text = 'Checking for a newer version…';
+  else if (u.error) text = `Last check failed: ${u.error}`;
+  else if (u.available && u.blocked) text = `Version ${u.available} is available; ${u.blocked}.`;
+  else if (u.available) text = `Version ${u.available} is available.`;
+  else if (u.last_check) text = `Up to date (checked ${when(u.last_check)}).`;
+  else text = 'Not checked yet.';
+  $('update-state').textContent = text;
+  const mode = $('update-mode');
+  if (document.activeElement !== mode) mode.value = u.mode;
+  mode.disabled = u.mode_locked;
+  $('update-locked').hidden = !u.mode_locked;
+  $('check-updates').disabled = u.checking;
+  const install = $('install-update');
+  install.hidden = !u.available || !!u.blocked;
+  install.textContent = u.available ? `Install ${u.available}` : 'Install';
 }
 
 function renderProfiles() {
@@ -360,12 +387,16 @@ $('hotkey-form').addEventListener('submit', async (event) => {
 $('add-program').addEventListener('click', openAdd);
 $('refresh-unassigned').addEventListener('click', loadUnassigned);
 $('autostart').addEventListener('change', (event) => call('set_autostart', { on: event.target.checked }));
+$('update-mode').addEventListener('change', (event) => call('set_update_mode', { mode: event.target.value }));
+$('check-updates').addEventListener('click', () => call('check_updates'));
+$('install-update').addEventListener('click', () => call('install_update'));
 
 onEvent(async (event) => {
   if (event.event === 'applied') {
     adopt(event.state);
     await loadUnassigned();
   }
+  if (event.event === 'update_checked') adopt(event.state);
 });
 
 // Test driver: runs bridge requests in order (kaltstellen gui --drive).
