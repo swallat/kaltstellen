@@ -1,0 +1,15 @@
+[package]
+name = "ks-fixtures"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Helper programs for kaltstellen's acceptance tests; never shipped"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+] }

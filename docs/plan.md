@@ -38,3 +38,9 @@ name. Purpose: find out which real apps tolerate being frozen.
 
 - Graphical profile editor.
 - Release builds attached to GitHub releases.
+
+## Progress notes
+
+- WP1 foundation (2026-11-22): module layout, error codes (`docs/errors.md`),
+  rotating file logger, test fixtures (`tests/fixtures`), CI with fmt,
+  unsafe check, clippy and tests. Acceptance checklist in `docs/acceptance.md`.

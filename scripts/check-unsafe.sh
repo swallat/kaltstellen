@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Spec Q4: all `unsafe` code lives in src/process.rs.
+# Spec Q4: all `unsafe` code of the tool lives in src/process.rs. The test
+# fixtures in tests/fixtures/ are exempt (decision 2026-11-22: never shipped).
 # Backs up the compiler check (`#![deny(unsafe_code)]` in src/lib.rs), which
 # an `#[allow]` could silence. Matches unsafe blocks, fns, impls, traits,
 # extern blocks and `unsafe(...)` attributes, not the word in comments.
@@ -8,7 +9,7 @@ cd "$(dirname "$0")/.."
 
 pattern='\bunsafe[[:space:]]*(\{|\(|fn\b|impl\b|extern\b|trait\b)'
 hits=$(grep -rnE "$pattern" --include='*.rs' --exclude-dir=target . \
-    | grep -v '^\./src/process\.rs:' || true)
+    | grep -v -e '^\./src/process\.rs:' -e '^\./tests/fixtures/' || true)
 
 if [[ -n "$hits" ]]; then
     echo "unsafe code outside src/process.rs (spec Q4):"
