@@ -95,7 +95,10 @@ main session made them; they show the views below in light and dark.
     in the window: the status line says the file was changed and reloads it.
 13. Right click in the page: no browser context menu (release build). Ctrl+P,
     F5, Ctrl+F do nothing (release build).
-14. Tray menu `Open kaltstellen…` opens the window without a console window;
+14. With the window open and minimised, choose `Open kaltstellen…` again
+    (or run `kaltstellen gui`): the same window comes back to the front, no
+    second window opens.
+15. Tray menu `Open kaltstellen…` opens the window without a console window;
     closing it ends its process and the `msedgewebview2.exe` processes it
     started (Task Manager, Details, column "Command line" shows the data
     folder `kaltstellen\webview2`).

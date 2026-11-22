@@ -16,6 +16,7 @@ use std::sync::mpsc;
 
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
 use webview2_com::*;
+use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Foundation::{E_POINTER, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::System::Com::{
     COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, IStream, STGM_CREATE, STGM_WRITE,
@@ -29,6 +30,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_SHOW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
     ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY, WM_SETFOCUS,
     WM_SIZE, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetClassNameW, GetPropW, IsIconic, SW_RESTORE, SetForegroundWindow, SetPropW,
 };
 use windows::core::{PCWSTR, PWSTR};
 
@@ -71,6 +75,8 @@ pub struct Options {
     pub query: String,
     /// Show without taking the keyboard focus (screenshots, tests).
     pub no_activate: bool,
+    /// Marks the window as the one of this instance (see [`bring_to_front`]).
+    pub instance: String,
 }
 
 /// What the safe side wants done after a message from the page.
@@ -111,6 +117,65 @@ impl Waker {
         let _ =
             unsafe { PostMessageW(Some(HWND(self.0 as *mut _)), WM_WAKE, WPARAM(0), LPARAM(0)) };
     }
+}
+
+/// Name of the window property that marks the instance.
+const INSTANCE_PROPERTY: &str = "kaltstellen.instance";
+
+/// A non-zero number for an instance name (FNV-1a, 31 bits).
+fn instance_tag(instance: &str) -> usize {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in instance.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    (hash & 0x7FFF_FFFF).max(1) as usize
+}
+
+/// M6: brings the main window of `instance` to the front, restored if it
+/// was minimised. False if no such window was found.
+pub fn bring_to_front(instance: &str) -> bool {
+    struct Search {
+        class: Vec<u16>,
+        tag: usize,
+        property: Vec<u16>,
+        found: Option<HWND>,
+    }
+    unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> windows::core::BOOL {
+        // SAFETY: `param` points to the `Search` below for the whole call.
+        let search = unsafe { &mut *(param.0 as *mut Search) };
+        let mut class = [0u16; 64];
+        // SAFETY: valid buffer; a stale handle makes the calls fail.
+        let len = unsafe { GetClassNameW(hwnd, &mut class) } as usize;
+        if class[..len] == search.class[..search.class.len() - 1] {
+            // SAFETY: as above.
+            let tag = unsafe { GetPropW(hwnd, PCWSTR(search.property.as_ptr())) };
+            if tag.0 as usize == search.tag {
+                search.found = Some(hwnd);
+                return false.into();
+            }
+        }
+        true.into()
+    }
+    let mut search = Search {
+        class: wide(CLASS),
+        tag: instance_tag(instance),
+        property: wide(INSTANCE_PROPERTY),
+        found: None,
+    };
+    // SAFETY: the callback only uses `search`, which outlives the call.
+    let _ = unsafe { EnumWindows(Some(visit), LPARAM(&raw mut search as isize)) };
+    let Some(hwnd) = search.found else {
+        return false;
+    };
+    // SAFETY: a window of another process of ours; failures are harmless.
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        }
+        let _ = SetForegroundWindow(hwnd);
+    }
+    true
 }
 
 /// The installed Evergreen WebView2 runtime version, `None` if there is
@@ -376,6 +441,16 @@ pub fn run(
         );
     }
 
+    // Window property naming this instance, read by a second start.
+    let property = wide(INSTANCE_PROPERTY);
+    // SAFETY: our window; the value is a number, not a pointer.
+    let _ = unsafe {
+        SetPropW(
+            hwnd,
+            PCWSTR(property.as_ptr()),
+            Some(HANDLE(instance_tag(&options.instance) as *mut _)),
+        )
+    };
     let environment = create_environment(&options.user_data)?;
     let controller = create_controller(&environment, hwnd)?;
     // SAFETY: COM calls on this thread's objects.

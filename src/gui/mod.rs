@@ -86,7 +86,12 @@ pub fn main(args: Args) -> u8 {
     let _instance = match Instance::acquire(&mutex) {
         Ok(Some(instance)) => instance,
         Ok(None) => {
-            eprintln!("the kaltstellen window is already open in this session");
+            // M6: a second start brings the open window to the front.
+            if webview::bring_to_front(&mutex) {
+                eprintln!("the kaltstellen window is already open; brought it to the front");
+            } else {
+                eprintln!("the kaltstellen window is already open in this session");
+            }
             return exit::OK;
         }
         Err(err) => {
@@ -135,6 +140,7 @@ pub fn main(args: Args) -> u8 {
         theme: args.theme,
         query: query.join("&"),
         no_activate: review,
+        instance: mutex.clone(),
     };
     let result = webview::run(options, assets::get, |waker| {
         let (results, inbox) = channel();

@@ -15,6 +15,41 @@ use std::time::Duration;
 use common::*;
 use kaltstellen::config::OnTimeout;
 use kaltstellen::process::Snapshot;
+use windows::Win32::Foundation::{HWND, LPARAM};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetClassNameW, GetWindowThreadProcessId, IsIconic, SW_MINIMIZE, ShowWindow,
+};
+use windows::core::BOOL;
+
+/// The visible main window of process `pid`.
+fn main_window(pid: u32) -> Option<HWND> {
+    struct Search {
+        pid: u32,
+        found: Option<HWND>,
+    }
+    unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> BOOL {
+        // SAFETY: `param` points to the `Search` below for the whole call.
+        let search = unsafe { &mut *(param.0 as *mut Search) };
+        let mut pid = 0;
+        let mut class = [0u16; 64];
+        // SAFETY: valid out pointer and buffer.
+        let len = unsafe {
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            GetClassNameW(hwnd, &mut class)
+        } as usize;
+        if pid == search.pid
+            && String::from_utf16_lossy(&class[..len]) == kaltstellen::win32::webview::CLASS
+        {
+            search.found = Some(hwnd);
+            return false.into();
+        }
+        true.into()
+    }
+    let mut search = Search { pid, found: None };
+    // SAFETY: the callback only uses `search`, which outlives the call.
+    let _ = unsafe { EnumWindows(Some(visit), LPARAM(&raw mut search as isize)) };
+    search.found
+}
 
 const LONG: Duration = Duration::from_secs(120);
 
@@ -253,10 +288,22 @@ fn wp10_missing_runtime_invalid_file_and_second_window() {
     let pid = first.id();
     assert!(wait_for(LONG, || !descendants(pid).is_empty()));
     let webview = descendants(pid);
+    // M6: a second start brings the open window back, also when minimised.
+    assert!(wait_for(LONG, || main_window(pid).is_some()));
+    let window = main_window(pid).unwrap();
+    // SAFETY: a window of a process this test started.
+    unsafe {
+        let _ = ShowWindow(window, SW_MINIMIZE);
+    }
+    assert!(wait_for(LONG, || unsafe { IsIconic(window) }.as_bool()));
     let second = world.command(&["gui"]).output().unwrap();
     assert_eq!(second.status.code(), Some(0));
     let message = String::from_utf8_lossy(&second.stderr);
-    assert!(message.contains("already open"), "{message}");
+    assert!(message.contains("brought it to the front"), "{message}");
+    assert!(
+        wait_for(LONG, || !unsafe { IsIconic(window) }.as_bool()),
+        "restored"
+    );
     // Closed like the user would (WM_CLOSE): the process and its WebView2
     // processes end.
     let info = Snapshot::take().unwrap().get(pid).cloned().unwrap();
