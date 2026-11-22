@@ -111,6 +111,12 @@ impl Store {
         }
     }
 
+    /// Reads the state for display only: no renaming of a corrupt file, no
+    /// error. `None` if there is no readable, valid file.
+    pub fn peek(&self) -> Option<State> {
+        serde_json::from_str(&fs::read_to_string(self.file()).ok()?).ok()
+    }
+
     /// Writes the state atomically: temporary file, then rename.
     pub fn save(&self, state: &State) -> Result<()> {
         let file = self.file();

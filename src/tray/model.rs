@@ -1,0 +1,455 @@
+//! Pure logic of the tray app: request queue (W3), status and icon state
+//! (W2), and the menu built from the configuration. No Win32 here; the
+//! window code in `win32::tray` only draws what this module decides.
+
+use crate::config::NEUTRAL;
+
+/// Profile names compare like `Config::profile` does: trimmed, any case.
+fn same_profile(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+/// What the queue decided about a request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decision {
+    /// Nothing runs: start this switch now.
+    Start(String),
+    /// A switch runs; the request waits. A request it replaced is returned
+    /// as superseded (W3, later exit code 3 over the pipe).
+    Queued { superseded: Option<String> },
+    /// The request equals the profile that will be active after the
+    /// running switch, so it is dropped; a request it replaced is returned
+    /// as superseded.
+    Dropped { superseded: Option<String> },
+}
+
+/// W3: while a switch runs, at most one further request waits. The latest
+/// wins; a waiting request equal to the profile the running switch leads to
+/// is dropped.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Queue {
+    running: Option<String>,
+    pending: Option<String>,
+}
+
+impl Queue {
+    pub fn request(&mut self, target: &str) -> Decision {
+        let target = target.trim().to_owned();
+        let Some(running) = &self.running else {
+            self.running = Some(target.clone());
+            return Decision::Start(target);
+        };
+        let superseded = self.pending.take();
+        if same_profile(running, &target) {
+            Decision::Dropped { superseded }
+        } else {
+            self.pending = Some(target);
+            Decision::Queued { superseded }
+        }
+    }
+
+    /// The running switch ended. Returns the waiting request, which is now
+    /// the running one.
+    pub fn finish(&mut self) -> Option<String> {
+        self.running = self.pending.take();
+        self.running.clone()
+    }
+
+    /// Drops the waiting request (Quit); returns it.
+    pub fn clear_pending(&mut self) -> Option<String> {
+        self.pending.take()
+    }
+
+    pub fn running(&self) -> Option<&str> {
+        self.running.as_deref()
+    }
+
+    pub fn pending(&self) -> Option<&str> {
+        self.pending.as_deref()
+    }
+}
+
+/// The three icon states of spec section 8.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Icon {
+    Neutral,
+    Active,
+    Error,
+}
+
+/// What the tray knows about the last switch and the configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Status {
+    pub active: String,
+    /// Target of the switch that runs right now.
+    pub switching: Option<String>,
+    /// Errors of the last finished switch (W2); empty after a clean one.
+    pub switch_errors: Vec<String>,
+    /// The configuration file is invalid (C3); the last valid one is used.
+    pub config_error: Option<String>,
+}
+
+impl Default for Status {
+    fn default() -> Self {
+        Self {
+            active: NEUTRAL.to_owned(),
+            switching: None,
+            switch_errors: Vec::new(),
+            config_error: None,
+        }
+    }
+}
+
+/// `szTip` of `NOTIFYICONDATAW` holds 128 UTF-16 units including the NUL.
+pub const TOOLTIP_MAX: usize = 127;
+
+impl Status {
+    pub fn is_neutral(&self) -> bool {
+        same_profile(&self.active, NEUTRAL)
+    }
+
+    pub fn icon(&self) -> Icon {
+        if !self.switch_errors.is_empty() || self.config_error.is_some() {
+            Icon::Error
+        } else if self.is_neutral() {
+            Icon::Neutral
+        } else {
+            Icon::Active
+        }
+    }
+
+    /// One switch finished. A clean switch clears the error state (spec
+    /// section 8); one with errors sets it.
+    pub fn finished(&mut self, active: String, errors: Vec<String>) {
+        self.active = active;
+        self.switching = None;
+        self.switch_errors = errors;
+    }
+
+    pub fn tooltip(&self) -> String {
+        let mut tip = format!("kaltstellen: {}", self.active);
+        if let Some(target) = &self.switching {
+            tip.push_str(&format!(" (switching to {target})"));
+        }
+        match self.switch_errors.len() {
+            0 => {}
+            1 => tip.push_str(", 1 error"),
+            n => tip.push_str(&format!(", {n} errors")),
+        }
+        if self.config_error.is_some() {
+            tip.push_str(", configuration invalid");
+        }
+        truncate(&tip, TOOLTIP_MAX)
+    }
+
+    /// The disabled status line, if there is anything to say.
+    pub fn status_line(&self) -> Option<String> {
+        let line = if let Some(target) = &self.switching {
+            format!("Switching to {target}…")
+        } else if let Some(first) = self.switch_errors.first() {
+            match self.switch_errors.len() {
+                1 => format!("Last switch: {first}"),
+                n => format!("Last switch: {n} errors, first: {first}"),
+            }
+        } else if let Some(problem) = &self.config_error {
+            format!("Configuration invalid: {problem}")
+        } else {
+            return None;
+        };
+        Some(truncate(&line, 100))
+    }
+}
+
+/// Cuts at a character boundary and marks the cut.
+fn truncate(text: &str, max_units: usize) -> String {
+    if text.encode_utf16().count() <= max_units {
+        return text.to_owned();
+    }
+    let mut out = String::new();
+    let mut units = 0;
+    for c in text.chars() {
+        units += c.len_utf16();
+        if units > max_units - 1 {
+            break;
+        }
+        out.push(c);
+    }
+    out.push('…');
+    out
+}
+
+/// What a menu item does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    Switch(String),
+    Quit,
+}
+
+/// One line of the tray menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Item {
+    Separator,
+    Entry {
+        /// Command ID passed back by `WM_COMMAND`; 0 for disabled lines.
+        id: u16,
+        label: String,
+        checked: bool,
+        enabled: bool,
+    },
+}
+
+pub const ID_NEUTRAL: u16 = 1;
+pub const ID_QUIT: u16 = 2;
+/// Profile `n` of the configuration has ID `ID_PROFILE_BASE + n`.
+pub const ID_PROFILE_BASE: u16 = 100;
+
+/// The menu for the given profiles and status, with the command of each ID.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Menu {
+    pub items: Vec<Item>,
+    commands: Vec<(u16, Command)>,
+}
+
+impl Menu {
+    /// Spec section 8: profiles (active one checked), `Neutral`, a status
+    /// line when there is something to report, `Quit`. `Open kaltstellen…`
+    /// belongs to the GUI (M3) and is shown disabled.
+    pub fn build(profiles: &[String], status: &Status) -> Self {
+        let mut menu = Menu::default();
+        let mut active_listed = status.is_neutral();
+        for (n, name) in profiles.iter().enumerate() {
+            let Some(id) = u16::try_from(n)
+                .ok()
+                .and_then(|n| n.checked_add(ID_PROFILE_BASE))
+            else {
+                break;
+            };
+            let checked = same_profile(name, &status.active);
+            active_listed |= checked;
+            menu.entry(id, escape(name), checked, Command::Switch(name.clone()));
+        }
+        if !active_listed {
+            // C4: removed or renamed while active; it stays active under its
+            // old name until the next switch.
+            menu.items.push(Item::Entry {
+                id: 0,
+                label: format!(
+                    "{} (no longer in the configuration)",
+                    escape(&status.active)
+                ),
+                checked: true,
+                enabled: false,
+            });
+        }
+        menu.entry(
+            ID_NEUTRAL,
+            "&Neutral".to_owned(),
+            status.is_neutral(),
+            Command::Switch(NEUTRAL.to_owned()),
+        );
+        menu.items.push(Item::Separator);
+        if let Some(line) = status.status_line() {
+            menu.disabled(escape(&line));
+            menu.items.push(Item::Separator);
+        }
+        menu.disabled("Open kaltstellen…".to_owned());
+        menu.entry(ID_QUIT, "&Quit".to_owned(), false, Command::Quit);
+        menu
+    }
+
+    fn entry(&mut self, id: u16, label: String, checked: bool, command: Command) {
+        self.items.push(Item::Entry {
+            id,
+            label,
+            checked,
+            enabled: true,
+        });
+        self.commands.push((id, command));
+    }
+
+    fn disabled(&mut self, label: String) {
+        self.items.push(Item::Entry {
+            id: 0,
+            label,
+            checked: false,
+            enabled: false,
+        });
+    }
+
+    pub fn command(&self, id: u16) -> Option<&Command> {
+        self.commands.iter().find(|(i, _)| *i == id).map(|(_, c)| c)
+    }
+}
+
+/// A `&` in a menu label marks the access key; show a literal one.
+fn escape(label: &str) -> String {
+    label.replace('&', "&&")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn w3_idle_queue_starts_at_once_even_for_the_active_profile() {
+        let mut q = Queue::default();
+        assert_eq!(q.request(" focus "), Decision::Start("focus".into()));
+        assert_eq!(q.running(), Some("focus"));
+        assert_eq!(q.finish(), None);
+        // W4: re-applying when idle is a real switch.
+        assert_eq!(q.request("focus"), Decision::Start("focus".into()));
+    }
+
+    #[test]
+    fn w3_only_the_latest_request_waits() {
+        let mut q = Queue::default();
+        q.request("a");
+        assert_eq!(q.request("b"), Decision::Queued { superseded: None });
+        assert_eq!(
+            q.request("c"),
+            Decision::Queued {
+                superseded: Some("b".into())
+            }
+        );
+        assert_eq!(q.pending(), Some("c"));
+        assert_eq!(q.finish(), Some("c".into()));
+        assert_eq!(q.running(), Some("c"));
+        assert_eq!(q.finish(), None);
+        assert_eq!(q.running(), None);
+    }
+
+    #[test]
+    fn w3_request_equal_to_the_coming_profile_is_dropped() {
+        let mut q = Queue::default();
+        q.request("a");
+        assert_eq!(q.request("A"), Decision::Dropped { superseded: None });
+        assert_eq!(q.pending(), None);
+        // The latest wins, and the latest equals what will be active: the
+        // earlier waiting request goes too.
+        q.request("b");
+        assert_eq!(
+            q.request("a"),
+            Decision::Dropped {
+                superseded: Some("b".into())
+            }
+        );
+        assert_eq!(q.finish(), None);
+    }
+
+    #[test]
+    fn quit_clears_the_waiting_request() {
+        let mut q = Queue::default();
+        q.request("a");
+        q.request("b");
+        assert_eq!(q.clear_pending(), Some("b".into()));
+        assert_eq!(q.finish(), None);
+    }
+
+    #[test]
+    fn w2_icon_follows_profile_and_errors() {
+        let mut s = Status::default();
+        assert_eq!(s.icon(), Icon::Neutral);
+        s.finished("focus".into(), vec![]);
+        assert_eq!(s.icon(), Icon::Active);
+        s.finished("focus".into(), vec!["KS105 boom".into()]);
+        assert_eq!(s.icon(), Icon::Error);
+        // Cleared by the next successful switch.
+        s.finished("neutral".into(), vec![]);
+        assert_eq!(s.icon(), Icon::Neutral);
+        s.config_error = Some("KS202 line 3".into());
+        assert_eq!(s.icon(), Icon::Error);
+    }
+
+    #[test]
+    fn tooltip_names_the_active_profile_and_fits() {
+        let mut s = Status::default();
+        assert_eq!(s.tooltip(), "kaltstellen: neutral");
+        s.finished("focus".into(), vec!["x".into(), "y".into()]);
+        s.switching = Some("music".into());
+        assert_eq!(
+            s.tooltip(),
+            "kaltstellen: focus (switching to music), 2 errors"
+        );
+        s.active = "ä".repeat(300);
+        let tip = s.tooltip();
+        assert!(tip.encode_utf16().count() <= TOOLTIP_MAX);
+        assert!(tip.ends_with('…'));
+    }
+
+    fn labels(menu: &Menu) -> Vec<String> {
+        menu.items
+            .iter()
+            .map(|item| match item {
+                Item::Separator => "-".to_owned(),
+                Item::Entry {
+                    label,
+                    checked,
+                    enabled,
+                    ..
+                } => format!(
+                    "{}{}{}",
+                    if *checked { "[x] " } else { "" },
+                    label,
+                    if *enabled { "" } else { " (disabled)" }
+                ),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn menu_lists_profiles_neutral_and_quit() {
+        let profiles = vec!["focus".to_owned(), "R&D".to_owned()];
+        let status = Status {
+            active: "FOCUS".into(),
+            ..Status::default()
+        };
+        let menu = Menu::build(&profiles, &status);
+        assert_eq!(
+            labels(&menu),
+            vec![
+                "[x] focus",
+                "R&&D",
+                "&Neutral",
+                "-",
+                "Open kaltstellen… (disabled)",
+                "&Quit"
+            ]
+        );
+        assert_eq!(
+            menu.command(ID_PROFILE_BASE + 1),
+            Some(&Command::Switch("R&D".into()))
+        );
+        assert_eq!(
+            menu.command(ID_NEUTRAL),
+            Some(&Command::Switch("neutral".into()))
+        );
+        assert_eq!(menu.command(ID_QUIT), Some(&Command::Quit));
+        assert_eq!(menu.command(0), None);
+    }
+
+    #[test]
+    fn menu_shows_errors_and_a_removed_active_profile() {
+        let mut status = Status::default();
+        status.finished("old".into(), vec!["KS110 [start] tool.exe: missing".into()]);
+        let menu = Menu::build(&["focus".to_owned()], &status);
+        assert_eq!(
+            labels(&menu),
+            vec![
+                "focus",
+                "[x] old (no longer in the configuration) (disabled)",
+                "&Neutral",
+                "-",
+                "Last switch: KS110 [start] tool.exe: missing (disabled)",
+                "-",
+                "Open kaltstellen… (disabled)",
+                "&Quit"
+            ]
+        );
+        let neutral = Menu::build(&[], &Status::default());
+        assert_eq!(
+            labels(&neutral)[0],
+            "[x] &Neutral",
+            "neutral is checked when active"
+        );
+    }
+}

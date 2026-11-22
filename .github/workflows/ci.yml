@@ -16,7 +16,7 @@ jobs:
       - run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
-      - name: unsafe only in src/process.rs (Q4)
+      - name: unsafe only in src/process.rs and src/win32/ (Q4)
         shell: bash
         run: scripts/check-unsafe.sh
       - run: cargo clippy --workspace --all-targets -- -D warnings

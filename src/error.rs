@@ -69,6 +69,10 @@ pub enum Code {
     // 5xx: tray communication
     /// The tray instance could not be reached.
     TrayUnreachable = 501,
+    /// The single-instance mutex of the tray could not be created (L1).
+    TrayInstance = 502,
+    /// The tray window or its message loop could not be set up.
+    TrayWindow = 503,
 
     // 9xx: internal
     /// Logging could not be set up.
@@ -102,6 +106,8 @@ impl Code {
         Code::UnknownProfile,
         Code::Superseded,
         Code::TrayUnreachable,
+        Code::TrayInstance,
+        Code::TrayWindow,
         Code::LogSetup,
     ];
 

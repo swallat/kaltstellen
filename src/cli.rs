@@ -58,6 +58,8 @@ enum Command {
     Status,
     /// Resume everything recorded as frozen, e.g. after a crash
     Recover,
+    /// Run the notification-area icon with the profile menu
+    Tray,
 }
 
 /// E2 exit codes.
@@ -74,6 +76,7 @@ pub fn main() -> ExitCode {
         Command::Switch { profile, force } => switch(&profile, force),
         Command::Status => status(),
         Command::Recover => recover(),
+        Command::Tray => crate::tray::main(),
         command => match run(command) {
             Ok(true) => 0,
             Ok(false) => EXIT_ERRORS,
@@ -374,7 +377,8 @@ fn run(command: Command) -> Result<bool> {
         Command::CheckConfig { .. }
         | Command::Switch { .. }
         | Command::Status
-        | Command::Recover => unreachable!("handled in main"),
+        | Command::Recover
+        | Command::Tray => unreachable!("handled in main"),
     }
 }
 
