@@ -26,13 +26,20 @@ name. Purpose: find out which real apps tolerate being frozen.
 
 ## M3: automation
 
-- Trigger processes switch profiles automatically (U4).
+- Trigger processes switch profiles automatically (U4): moved after
+  version 1, see below.
 - Global hotkeys (U3).
 
 ## M4: services and elevation
 
 - Stop and start services (A5).
 - Elevation model as decided in open question 4 (Q3).
+
+## After version 1
+
+- Automatic triggers (U4), direction decided by the owner on 2026-11-23:
+  trigger programs per profile, opt-in, a manual choice always wins. Open
+  points in [design-automatic-triggers.md](design-automatic-triggers.md).
 
 ## Later, if wanted
 

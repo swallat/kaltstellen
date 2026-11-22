@@ -301,7 +301,8 @@ hotkey = "Ctrl+Shift+Alt+F1"
 - M1: config, `switch <profile>`, start/stop/suspend with process trees, state file (P1-P4, A1-A4, A6, A7, W1-W6, C1-C6, S6, S8, S9, E2).
 - M2: tray app, single instance, resume on quit and sign-out, crash recovery, minimise before suspend (U1, L1, L2, S3, S5, S4).
 - M3: main window with program assignment and per-program action; hotkeys (M1-M5, U3, E1).
-- M4: automatic triggers with conflict rules (U4); services and elevation helper (A5, P8).
+- M4: services and elevation helper (A5, P8).
+- After version 1: automatic triggers (U4): trigger programs per profile, opt-in, a manual choice always wins **[decided]** (owner, 2026-11-23); open points in [design-automatic-triggers.md](design-automatic-triggers.md).
 
 ## 12. Confirmation status
 

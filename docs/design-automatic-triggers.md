@@ -1,9 +1,21 @@
 # Design note: automatic triggers (M4; U4)
 
-Status: proposal for the owner to decide. Nothing of this is implemented.
-Version 1 is manual only (spec section 1, U5 decided).
+Status: **direction decided** by the owner on 2026-11-23: trigger programs
+per profile, opt-in, a manual choice always wins, built **after version 1**.
+Nothing of this is implemented; version 1 is manual only (spec section 1, U5).
+The details below are a proposal; the points still open are listed at the
+end.
 
-## The question first: is auto-activation wanted?
+## Decided
+
+- Automatic switching exists only as **trigger programs per profile**
+  (the "Trigger model" below); no time of day, power source or full-screen
+  detection.
+- **Opt-in**: nothing happens unless a profile names trigger programs.
+- **Manual always wins** (conflict rule 1 below).
+- **After version 1**: a post-v1 item in `docs/plan.md`.
+
+## Background: why only the narrow case
 
 Manual switching already takes one click or one hotkey. Automatic switching
 adds a background watcher (against the lazy, watcher-free design of W6 and
@@ -12,10 +24,8 @@ a program in the middle of a call or a download. The benefit is real for a
 narrow case: "when the flight simulator starts, apply the flight profile;
 when it ends, go back to neutral".
 
-**Recommendation**: do not add general automation. If the owner wants it,
-add only the narrow case below, opt-in per profile, and with a visible,
-reversible effect (notification plus one-click undo). Revisit after real use
-of the manual version shows how often the owner forgets to switch.
+This is why only the narrow case below was chosen, opt-in per profile, with
+a visible, reversible effect (notification plus one-click undo proposed).
 
 ## Trigger model (if wanted)
 
@@ -66,14 +76,25 @@ of the manual version shows how often the owner forgets to switch.
 | Poll misses a very short-lived trigger | No switch | Acceptable; triggers are long-running programs. |
 | Sign-out while triggered | S5 resume as usual; the offer after sign-in is the triggered profile | Offer the profile that was active before the trigger instead. |
 
-## Open questions for the owner
+## Open points (to settle before it is built)
 
-1. Is auto-activation wanted at all (see the recommendation)?
-2. If yes: only "trigger program starts/ends", or also time of day, power
-   source (battery), or a full-screen application?
-3. Should an automatic switch show a notification with an undo button?
-4. How long should a manual switch keep automation quiet: until the trigger
-   situation changes (proposed), a fixed time, or until re-enabled from the
-   menu?
-5. Is a poll every few seconds acceptable for Q1 if measured below the
-   thresholds, or must detection be event-based?
+1. **Notification and undo**: should an automatic switch show a
+   notification with a one-click `Back to <previous>`? (Proposed: yes.)
+2. **How long manual wins**: until the trigger situation changes
+   (proposed), a fixed time, or until automation is switched on again from
+   the menu?
+3. **Detection and Q1**: a 2 to 5 s poll of the handle-free snapshot, only
+   while some profile has triggers, if measured below the Q1 thresholds; or
+   must it be event-based?
+4. **Two triggers at once**: first wins (proposed) or a `priority` per
+   profile?
+5. **Return when the trigger ends**: back to the profile active before the
+   trigger (proposed), or always `neutral`; and the debounce time before
+   "ended" counts (proposed: some seconds).
+6. **Configuration form**: `trigger = ["simulator.exe"]` per profile with
+   optional paths as in A7, and the check that a trigger program is not
+   stopped or frozen by its own profile; where to edit it in the main window.
+7. **A global off switch**: a tray item `Automatic switching` to pause all
+   triggers, and whether its state is remembered.
+8. **After sign-in (S5)**: offer the profile from before the trigger rather
+   than the triggered one?
