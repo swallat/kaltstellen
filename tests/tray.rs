@@ -22,6 +22,8 @@ fn tray(dir: &Path) -> Command {
     let mut command = Command::new(EXE);
     command
         .arg("tray")
+        // Never ask about start at sign-in in tests (L8).
+        .env("KALTSTELLEN_AUTOSTART_PROMPT", "skip")
         .env("KALTSTELLEN_CONFIG_DIR", dir.join("config"))
         .env("KALTSTELLEN_DATA_DIR", dir.join("data"))
         .stdin(Stdio::null())

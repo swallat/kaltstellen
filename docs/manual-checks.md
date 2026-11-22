@@ -39,6 +39,16 @@ Afterwards remove `%TEMP%\ks-manual` and `HKCU\Software\kaltstellen-manual`.
    console window may flash and must close by itself; the icon appears.
 9. `Quit`: the icon disappears, the process ends.
 
+## Start at sign-in question (L8)
+
+1. With a fresh test configuration folder, start `kaltstellen tray`: a
+   message box asks whether kaltstellen should start with Windows; the tray
+   icon is already there and its menu works while the box is open.
+2. Answer Yes: `kaltstellen autostart` reports `on` (test Run key). Quit and
+   start again: no question.
+3. With another fresh folder answer No: nothing is written; no question at
+   the next start either.
+
 ## Hotkeys (T17)
 
 1. Give a test profile `hotkey = "Ctrl+Shift+Alt+F9"`, start the tray, press the keys: the profile is applied (icon orange), once per press even when held down.

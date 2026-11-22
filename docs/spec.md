@@ -109,8 +109,8 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
   - `WM_POWERBROADCAST`: suspend, resume and power events are logged (`tray: power event …`); nothing is resumed or frozen.
   - Tested by posting these messages to the tray window of a test instance; a real sign-out or shutdown (T7, T20) is still to be run on the VM.
 
-- **L8 Start at sign-in** **[assumed]** (plan WP7, opt-in):
-  - Off by default. Switched on with `kaltstellen autostart on` or the tray menu item `Start at sign-in` (checked when on), off with `kaltstellen autostart off` or the same item; `kaltstellen autostart` shows the state.
+- **L8 Start at sign-in** **[decided]** (owner, 2026-11-23; plan WP7):
+  - Never written without consent. On its very first start the tray asks once whether it should start with Windows (Yes / No) and records in `settings.json` (`autostart_asked`) that it asked; it never asks again, also not after No. If start at sign-in is already on, it does not ask. `kaltstellen autostart on|off` and the menu item `Start at sign-in` stay. **[assumed]**: the question is a message box on a thread of its own, so start-up recovery, the pipe and the menu do not wait for it; `KALTSTELLEN_AUTOSTART_PROMPT` = `yes` or `no` answers it without a dialog and `skip` does not ask (tests, managed installations).
   - Value `kaltstellen` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` with the data `"<full path of the running executable>" tray`. Switching on replaces a value that points elsewhere (another copy); the state then reads `on, but for another program` until switched on again from the copy in use. The menu item counts as checked only if the value points at the running executable.
   - Only `HKEY_CURRENT_USER` is written; no elevation. `KALTSTELLEN_RUN_KEY` replaces the key path below `HKEY_CURRENT_USER`; the tests use it with a key of their own and delete that key afterwards.
   - Errors are `KS601`, exit code 1.

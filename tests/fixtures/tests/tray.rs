@@ -165,6 +165,8 @@ impl Tray {
         let mut command = Command::new(kaltstellen_exe());
         command
             .arg("tray")
+            // Never ask about start at sign-in in tests (L8).
+            .env("KALTSTELLEN_AUTOSTART_PROMPT", "skip")
             .env("KALTSTELLEN_CONFIG_DIR", self.dir.path().join("config"))
             .env("KALTSTELLEN_DATA_DIR", self.data())
             .env("KALTSTELLEN_RUN_KEY", self.run_key())
@@ -988,4 +990,30 @@ fn t16_a_switch_over_the_pipe_protects_its_caller_and_its_ancestors() {
     assert_eq!(t.run(&["switch", "neutral"]).0, 0);
     assert!(beating(&sibling_beat));
     assert_eq!(t.quit(), Some(0));
+}
+
+#[test]
+fn l8_the_tray_asks_once_about_start_at_sign_in() {
+    let mut t = Tray::new();
+    t.config("");
+    for (n, answer) in [(1, "yes"), (2, "no")] {
+        let mut command = t.command();
+        command.env("KALTSTELLEN_AUTOSTART_PROMPT", answer);
+        t.child = Some(command.spawn().unwrap());
+        t.wait_log("tray: recover finished", n);
+        if n == 1 {
+            t.wait_log("tray: start at sign-in question answered yes", 1);
+            t.wait_log("tray: start at sign-in on", 1);
+            let expected = autostart::command_line(&kaltstellen_exe());
+            assert_eq!(registry::read(&t.run_key(), VALUE).unwrap(), Some(expected));
+            assert!(
+                t.settings().contains("\"autostart_asked\": true"),
+                "{}",
+                t.settings()
+            );
+        }
+        assert_eq!(t.quit(), Some(0));
+    }
+    // The second start did not ask again, whatever the answer would be.
+    assert_eq!(t.logged("question answered"), 1);
 }

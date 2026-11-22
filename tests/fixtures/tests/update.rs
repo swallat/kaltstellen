@@ -266,6 +266,8 @@ impl Setup {
         let mut command = Command::new(&self.exe);
         command
             .arg("tray")
+            // Never ask about start at sign-in in tests (L8).
+            .env("KALTSTELLEN_AUTOSTART_PROMPT", "skip")
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         self.env(&mut command);

@@ -18,6 +18,9 @@ pub struct Settings {
     /// UP1: `on` or `off`; absent means the default (`on`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<String>,
+    /// L8: the tray has asked once whether it should start with Windows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub autostart_asked: bool,
 }
 
 fn file(dir: &Path) -> PathBuf {
@@ -72,6 +75,7 @@ mod tests {
         let settings = Settings {
             last_profile: Some("focus".into()),
             update: None,
+            autostart_asked: true,
         };
         save(&dir.path().join("nested"), &settings).unwrap();
         assert_eq!(load(&dir.path().join("nested")), (settings, None));

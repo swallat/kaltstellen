@@ -37,6 +37,10 @@ reasoning is. Implementation choices made without the owner are marked
    in spec L9 (start errors resolve when the program runs, stop and freeze
    errors when it no longer runs, the rest stays until the next switch).
 
+9. **L8 question** `[assumed]`: a message box on its own thread so start-up
+   is not held up; `KALTSTELLEN_AUTOSTART_PROMPT` (`yes`, `no`, `skip`) for
+   tests and managed installations.
+
 ## Decided by the owner on 2026-11-23
 
 - **L5 pipe**: as built, including no fallback when a running tray does not

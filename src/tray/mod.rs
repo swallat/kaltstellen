@@ -232,8 +232,11 @@ pub fn main() -> u8 {
             menu: Menu::default(),
             hotkeys: hotkeys::Registrar::default(),
             updates: update::Updates::new(waker.clone()),
+            waker: waker.clone(),
+            autostart_answer: None,
         };
         app.refresh_autostart();
+        app.ask_autostart_once();
         app.refresh_update();
         app.schedule_update();
         app.sync_hotkeys();
@@ -288,7 +291,15 @@ struct App {
     hotkeys: hotkeys::Registrar,
     /// UP1: the daily check and its child process.
     updates: update::Updates,
+    /// Wakes this window thread from other threads.
+    waker: window::Waker,
+    /// L8: the answer to the start-at-sign-in question, while it is open.
+    autostart_answer: Option<Receiver<bool>>,
 }
+
+/// L8: answers the start-at-sign-in question without a dialog (`yes`,
+/// `no`) or skips it (`skip`); for tests and managed installations.
+const AUTOSTART_PROMPT_ENV: &str = "KALTSTELLEN_AUTOSTART_PROMPT";
 
 /// L9: how often errors of the last switch are checked again while one
 /// could still resolve itself.
@@ -399,6 +410,74 @@ impl App {
     }
 
     /// Reads start at sign-in for the menu.
+    /// L8: asks once, on the very first start, whether the tray should
+    /// start with Windows. The question runs on a thread of its own, so
+    /// recovery, the pipe and the menu go on meanwhile; the answer comes
+    /// back through the waker. `KALTSTELLEN_AUTOSTART_PROMPT` = `yes`, `no`
+    /// answers without a dialog, `skip` does not ask (tests).
+    fn ask_autostart_once(&mut self) {
+        let Some(dir) = self.config_dir.clone() else {
+            return;
+        };
+        if settings::load(&dir).0.autostart_asked {
+            return;
+        }
+        if self.status.autostart == Some(true) {
+            // Already on: nothing to ask.
+            let _ = settings::edit(&dir, |s| s.autostart_asked = true);
+            return;
+        }
+        let preset = std::env::var(AUTOSTART_PROMPT_ENV).ok();
+        let (tx, rx) = mpsc::channel();
+        self.autostart_answer = Some(rx);
+        let waker = self.waker.clone();
+        match preset.as_deref().map(str::trim) {
+            Some("skip") => {
+                self.autostart_answer = None;
+            }
+            Some("yes") | Some("no") => {
+                let _ = tx.send(preset.as_deref().map(str::trim) == Some("yes"));
+                waker.wake();
+            }
+            _ => {
+                info!("tray: asking whether to start at sign-in");
+                std::thread::spawn(move || {
+                    let yes = crate::win32::dialog::ask_yes_no(
+                        "kaltstellen",
+                        "Start kaltstellen automatically when you sign in to Windows?\n\n\
+                         You can change this later with \"Start at sign-in\" in the tray menu.",
+                    );
+                    let _ = tx.send(yes);
+                    waker.wake();
+                });
+            }
+        }
+    }
+
+    /// The answer to the start-at-sign-in question arrived.
+    fn autostart_answered(&mut self) {
+        let Some(answer) = self
+            .autostart_answer
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        else {
+            return;
+        };
+        self.autostart_answer = None;
+        info!(
+            "tray: start at sign-in question answered {}",
+            if answer { "yes" } else { "no" }
+        );
+        if let Some(dir) = &self.config_dir
+            && let Err(err) = settings::edit(dir, |s| s.autostart_asked = true)
+        {
+            warn!("tray: {err}");
+        }
+        if answer && self.status.autostart != Some(true) {
+            self.toggle_autostart();
+        }
+    }
+
     fn refresh_autostart(&mut self) {
         let at = autostart::Location::current();
         self.status.autostart = match std::env::current_exe()
@@ -729,6 +808,7 @@ impl window::Handler for App {
     }
 
     fn wake(&mut self) {
+        self.autostart_answered();
         while let Ok(done) = self.done.try_recv() {
             let quit = done.job == Job::Quit;
             self.finished(done);
