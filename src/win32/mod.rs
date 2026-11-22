@@ -1,4 +1,5 @@
-//! Safe wrappers around the Win32 user-interface APIs the tray app needs.
+//! Safe wrappers around the Win32 APIs of the tray app, the main window and
+//! the updater (WinHTTP, CNG hashing).
 //!
 //! Together with [`crate::process`] this tree is the only place allowed to
 //! contain `unsafe` (spec Q4 as widened in WP7). Each module wraps one
@@ -8,6 +9,8 @@
 
 pub mod console;
 pub mod gui;
+pub mod hash;
+pub mod http;
 pub mod instance;
 pub mod pipe;
 pub mod registry;
