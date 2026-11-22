@@ -259,7 +259,7 @@ pub struct Bridge<H: Host> {
 
 impl<H: Host> Bridge<H> {
     pub fn new(document: Document, host: H) -> Self {
-        let status = format!("Editing {}", document.path().display());
+        let status = "Changes are saved at once.".to_owned();
         Self {
             document,
             host,
