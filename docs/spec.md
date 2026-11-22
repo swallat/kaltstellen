@@ -79,6 +79,17 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
   - The icons are embedded as resources 101 (neutral), 102 (active), 103 (error) and loaded at the system's small-icon size; the process is not per-monitor DPI aware yet. After an Explorer restart (`TaskbarCreated`) the icon is added again.
   - The tray window is a hidden top-level window (class `kaltstellen-tray`, no taskbar button), not a message-only window, so it can receive `WM_QUERYENDSESSION` in WP8.
 
+- **L5 Pipe details fixed while implementing** **[assumed]** (WP7, second increment). Message format: [pipe-protocol.md](pipe-protocol.md).
+  - Name `\\.\pipe\kaltstellen-<user SID>-<session id>`, plus the data-directory hash of L4 when `KALTSTELLEN_DATA_DIR` is set. Pipe names are machine-wide, unlike the `Local\` mutex, hence user and session in the name.
+  - Access (L1 "ACL allows only the current user"): protected DACL with a single entry for the user's SID (no SYSTEM, no Administrators), remote clients refused, first instance created with `FILE_FLAG_FIRST_PIPE_INSTANCE` so a name taken by someone else makes the tray run without a pipe (error state, status line) rather than share it. The client checks that the server process runs as the same user and connects at identification level only.
+  - With a tray in the session, `switch`, `recover` and `status` go through the pipe; without one they run in-process as before. This replaces the State bullet of L4 for the command line: a command-line switch no longer competes with the tray for the state lock, it waits in the tray's queue. If the tray's mutex exists but its pipe does not answer within 5 s (tray starting, hung), the command ends with `KS501`, exit code 5, and does not fall back, so it cannot race the tray.
+  - Output and exit codes through the tray are those of an in-process run (same configuration checks, same lines). Two additions: `waiting for the tray's running switch` on stderr when the request waits, and for `status` the lines `tray: running …` and `tray: waiting …` on stdout.
+  - A request whose target equals the running job's target (W3 drop) is not an error: the client gets the running job's result. Recovery counts as a switch to `neutral` (L4), so `recover` and `switch neutral` share each other's result while the other runs. `force` is part of the request and travels with it; it is not compared when deciding about the drop.
+  - The waiting request that a later one replaces ends with `KS402`, exit code 3; one replaced by Quit too (`by` is `quit`). Requests arriving while the tray quits are refused with exit code 5.
+  - An unknown profile (exit code 4) and an invalid configuration (exit code 2) are refused at once, before queueing, so they never replace a waiting valid request. The tray's own menu keeps using the last valid configuration (C3).
+  - `--no-wait` returns after the tray answered `accepted` and prints `started by the tray` or `queued by the tray`; without a tray it has no effect and the command runs in-process to the end.
+  - The protocol is versioned (`version: 1`); a mismatch is `KS505`, exit code 5.
+
 ## 5. Configuration (TOML)
 
 Location `%APPDATA%\kaltstellen\config.toml`. The repository ships only `config.example.toml` with generic names.

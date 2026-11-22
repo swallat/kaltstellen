@@ -9,63 +9,110 @@ fn same_profile(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
 
+/// Work for the worker thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Job {
+    /// S3 at start, or `kaltstellen recover`: resume what is recorded as
+    /// frozen; `neutral`.
+    Recover,
+    /// `force` confirms warn-list programs for this request only (P6).
+    Switch { target: String, force: bool },
+    /// L2: resume everything suspended, keep stopped records, then exit.
+    Quit,
+    /// S5 at `WM_QUERYENDSESSION`: resume everything suspended, stay.
+    EndSession,
+}
+
+impl Job {
+    pub fn switch(target: &str) -> Self {
+        Job::Switch {
+            target: target.trim().to_owned(),
+            force: false,
+        }
+    }
+
+    /// The profile that is active once the job is done (W3 compares these).
+    pub fn leads_to(&self) -> &str {
+        match self {
+            Job::Switch { target, .. } => target,
+            Job::Recover | Job::Quit | Job::EndSession => NEUTRAL,
+        }
+    }
+}
+
+impl std::fmt::Display for Job {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Job::Recover => f.write_str("recover"),
+            Job::Switch { target, .. } => write!(f, "switch to \"{target}\""),
+            Job::Quit => f.write_str("quit"),
+            Job::EndSession => f.write_str("end of session"),
+        }
+    }
+}
+
 /// What the queue decided about a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
-    /// Nothing runs: start this switch now.
-    Start(String),
-    /// A switch runs; the request waits. A request it replaced is returned
-    /// as superseded (W3, later exit code 3 over the pipe).
-    Queued { superseded: Option<String> },
-    /// The request equals the profile that will be active after the
-    /// running switch, so it is dropped; a request it replaced is returned
-    /// as superseded.
-    Dropped { superseded: Option<String> },
+    /// Nothing runs: start this job now.
+    Start(Job),
+    /// A job runs; the request waits. A request it replaced is returned as
+    /// superseded (W3, exit code 3 over the pipe).
+    Queued { superseded: Option<Job> },
+    /// The request leads to the profile the running job leads to, so it is
+    /// dropped and shares the running job's result; a request it replaced
+    /// is returned as superseded.
+    Dropped { superseded: Option<Job> },
 }
 
-/// W3: while a switch runs, at most one further request waits. The latest
-/// wins; a waiting request equal to the profile the running switch leads to
-/// is dropped.
+/// W3: while a job runs, at most one further request waits. The latest
+/// wins; a waiting request equal to the profile the running job leads to is
+/// dropped.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Queue {
-    running: Option<String>,
-    pending: Option<String>,
+    running: Option<Job>,
+    pending: Option<Job>,
 }
 
 impl Queue {
-    pub fn request(&mut self, target: &str) -> Decision {
-        let target = target.trim().to_owned();
+    pub fn request(&mut self, job: Job) -> Decision {
         let Some(running) = &self.running else {
-            self.running = Some(target.clone());
-            return Decision::Start(target);
+            self.running = Some(job.clone());
+            return Decision::Start(job);
         };
         let superseded = self.pending.take();
-        if same_profile(running, &target) {
+        if same_profile(running.leads_to(), job.leads_to()) {
             Decision::Dropped { superseded }
         } else {
-            self.pending = Some(target);
+            self.pending = Some(job);
             Decision::Queued { superseded }
         }
     }
 
-    /// The running switch ended. Returns the waiting request, which is now
-    /// the running one.
-    pub fn finish(&mut self) -> Option<String> {
+    /// Starts `job` at once if nothing runs; otherwise it runs next and the
+    /// waiting request, if any, is returned as superseded (Quit, end of
+    /// session). `Err(superseded)` means it was queued.
+    pub fn jump(&mut self, job: Job) -> Result<Job, Option<Job>> {
+        if self.running.is_none() {
+            self.running = Some(job.clone());
+            return Ok(job);
+        }
+        Err(self.pending.replace(job))
+    }
+
+    /// The running job ended. Returns the waiting request, which is now the
+    /// running one.
+    pub fn finish(&mut self) -> Option<Job> {
         self.running = self.pending.take();
         self.running.clone()
     }
 
-    /// Drops the waiting request (Quit); returns it.
-    pub fn clear_pending(&mut self) -> Option<String> {
-        self.pending.take()
+    pub fn running(&self) -> Option<&Job> {
+        self.running.as_ref()
     }
 
-    pub fn running(&self) -> Option<&str> {
-        self.running.as_deref()
-    }
-
-    pub fn pending(&self) -> Option<&str> {
-        self.pending.as_deref()
+    pub fn pending(&self) -> Option<&Job> {
+        self.pending.as_ref()
     }
 }
 
@@ -87,6 +134,8 @@ pub struct Status {
     pub switch_errors: Vec<String>,
     /// The configuration file is invalid (C3); the last valid one is used.
     pub config_error: Option<String>,
+    /// The pipe for the command line could not be set up (L1).
+    pub pipe_error: Option<String>,
 }
 
 impl Default for Status {
@@ -96,6 +145,7 @@ impl Default for Status {
             switching: None,
             switch_errors: Vec::new(),
             config_error: None,
+            pipe_error: None,
         }
     }
 }
@@ -109,7 +159,10 @@ impl Status {
     }
 
     pub fn icon(&self) -> Icon {
-        if !self.switch_errors.is_empty() || self.config_error.is_some() {
+        if !self.switch_errors.is_empty()
+            || self.config_error.is_some()
+            || self.pipe_error.is_some()
+        {
             Icon::Error
         } else if self.is_neutral() {
             Icon::Neutral
@@ -153,6 +206,8 @@ impl Status {
             }
         } else if let Some(problem) = &self.config_error {
             format!("Configuration invalid: {problem}")
+        } else if let Some(problem) = &self.pipe_error {
+            format!("Command line cannot reach the tray: {problem}")
         } else {
             return None;
         };
@@ -290,30 +345,34 @@ fn escape(label: &str) -> String {
 mod tests {
     use super::*;
 
+    fn sw(target: &str) -> Job {
+        Job::switch(target)
+    }
+
     #[test]
     fn w3_idle_queue_starts_at_once_even_for_the_active_profile() {
         let mut q = Queue::default();
-        assert_eq!(q.request(" focus "), Decision::Start("focus".into()));
-        assert_eq!(q.running(), Some("focus"));
+        assert_eq!(q.request(sw(" focus ")), Decision::Start(sw("focus")));
+        assert_eq!(q.running(), Some(&sw("focus")));
         assert_eq!(q.finish(), None);
         // W4: re-applying when idle is a real switch.
-        assert_eq!(q.request("focus"), Decision::Start("focus".into()));
+        assert_eq!(q.request(sw("focus")), Decision::Start(sw("focus")));
     }
 
     #[test]
     fn w3_only_the_latest_request_waits() {
         let mut q = Queue::default();
-        q.request("a");
-        assert_eq!(q.request("b"), Decision::Queued { superseded: None });
+        q.request(sw("a"));
+        assert_eq!(q.request(sw("b")), Decision::Queued { superseded: None });
         assert_eq!(
-            q.request("c"),
+            q.request(sw("c")),
             Decision::Queued {
-                superseded: Some("b".into())
+                superseded: Some(sw("b"))
             }
         );
-        assert_eq!(q.pending(), Some("c"));
-        assert_eq!(q.finish(), Some("c".into()));
-        assert_eq!(q.running(), Some("c"));
+        assert_eq!(q.pending(), Some(&sw("c")));
+        assert_eq!(q.finish(), Some(sw("c")));
+        assert_eq!(q.running(), Some(&sw("c")));
         assert_eq!(q.finish(), None);
         assert_eq!(q.running(), None);
     }
@@ -321,28 +380,59 @@ mod tests {
     #[test]
     fn w3_request_equal_to_the_coming_profile_is_dropped() {
         let mut q = Queue::default();
-        q.request("a");
-        assert_eq!(q.request("A"), Decision::Dropped { superseded: None });
+        q.request(sw("a"));
+        assert_eq!(q.request(sw("A")), Decision::Dropped { superseded: None });
         assert_eq!(q.pending(), None);
         // The latest wins, and the latest equals what will be active: the
         // earlier waiting request goes too.
-        q.request("b");
+        q.request(sw("b"));
         assert_eq!(
-            q.request("a"),
+            q.request(sw("a")),
             Decision::Dropped {
-                superseded: Some("b".into())
+                superseded: Some(sw("b"))
             }
         );
         assert_eq!(q.finish(), None);
     }
 
     #[test]
-    fn quit_clears_the_waiting_request() {
+    fn w3_recovery_counts_as_a_switch_to_neutral() {
         let mut q = Queue::default();
-        q.request("a");
-        q.request("b");
-        assert_eq!(q.clear_pending(), Some("b".into()));
-        assert_eq!(q.finish(), None);
+        q.request(Job::Recover);
+        assert_eq!(
+            q.request(sw("Neutral")),
+            Decision::Dropped { superseded: None }
+        );
+        assert_eq!(q.request(sw("a")), Decision::Queued { superseded: None });
+        assert_eq!(
+            q.request(Job::Recover),
+            Decision::Dropped {
+                superseded: Some(sw("a"))
+            }
+        );
+    }
+
+    #[test]
+    fn force_travels_with_the_request() {
+        let mut q = Queue::default();
+        q.request(sw("a"));
+        let forced = Job::Switch {
+            target: "b".into(),
+            force: true,
+        };
+        q.request(forced.clone());
+        assert_eq!(q.finish(), Some(forced));
+    }
+
+    #[test]
+    fn quit_jumps_the_queue_and_supersedes_the_waiting_request() {
+        let mut q = Queue::default();
+        assert_eq!(q.jump(Job::Quit), Ok(Job::Quit));
+        let mut q = Queue::default();
+        q.request(sw("a"));
+        q.request(sw("b"));
+        assert_eq!(q.jump(Job::Quit), Err(Some(sw("b"))));
+        assert_eq!(q.finish(), Some(Job::Quit));
     }
 
     #[test]

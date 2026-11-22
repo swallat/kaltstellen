@@ -8,6 +8,7 @@
 
 pub mod console;
 pub mod instance;
+pub mod pipe;
 pub mod tray;
 
 /// UTF-16, NUL-terminated, for `PCWSTR` arguments.

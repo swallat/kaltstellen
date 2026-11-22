@@ -12,7 +12,7 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::Duration;
 
 use common::*;
@@ -133,11 +133,34 @@ impl Tray {
         command
     }
 
+    /// `kaltstellen ARGS` against this folder's configuration and data.
+    fn cli(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(kaltstellen_exe());
+        command
+            .args(args)
+            .env("KALTSTELLEN_CONFIG_DIR", self.dir.path().join("config"))
+            .env("KALTSTELLEN_DATA_DIR", self.data())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    }
+
+    /// Runs `kaltstellen ARGS` to the end: (exit code, stdout, stderr).
+    fn run(&self, args: &[&str]) -> (i32, String, String) {
+        let output = self.cli(args).output().unwrap();
+        (
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    }
+
     /// Starts the tray and waits for its start-up recovery (S3), which is
     /// the `n`-th in this folder's log.
     fn start(&mut self, n: usize) {
         self.child = Some(self.command().spawn().unwrap());
-        self.wait_log("tray: Recover finished", n);
+        self.wait_log("tray: recover finished", n);
     }
 
     fn pid(&self) -> u32 {
@@ -211,13 +234,13 @@ fn tray_menu_switches_and_neutral_resumes() {
     assert_eq!(t.logged("tray: icon neutral"), 1);
 
     t.click(ID_PROFILE_BASE);
-    t.wait_log("tray: Switch(\"play\") finished", 1);
+    t.wait_log("tray: switch to \"play\" finished", 1);
     assert!(t.is_frozen("ks-tray1-a.exe"));
     assert_eq!(t.store().peek().unwrap().active_profile, "play");
     t.wait_log("tray: icon active", 1);
 
     t.click(ID_NEUTRAL);
-    t.wait_log("tray: Switch(\"neutral\") finished", 1);
+    t.wait_log("tray: switch to \"neutral\" finished", 1);
     assert!(t.is_beating("ks-tray1-a.exe"));
     t.wait_log("tray: icon neutral", 2);
 
@@ -235,7 +258,7 @@ fn l2_quit_resumes_frozen_programs_and_keeps_stopped_records() {
     ));
     t.start(1);
     t.click(ID_PROFILE_BASE);
-    t.wait_log("tray: Switch(\"quiet\") finished", 1);
+    t.wait_log("tray: switch to \"quiet\" finished", 1);
     assert!(t.is_frozen("ks-tray2-a.exe"));
     assert!(wait_for(Duration::from_secs(5), || !b.alive()));
 
@@ -255,7 +278,7 @@ fn s3_t5_tray_start_recovers_what_a_killed_tray_froze() {
     t.config(&profile("play", &[("ks-tray3-a.exe", "suspend")]));
     t.start(1);
     t.click(ID_PROFILE_BASE);
-    t.wait_log("tray: Switch(\"play\") finished", 1);
+    t.wait_log("tray: switch to \"play\" finished", 1);
     t.kill();
     assert!(
         t.is_frozen("ks-tray3-a.exe"),
@@ -286,14 +309,14 @@ fn w2_c3_error_state_and_last_valid_configuration() {
     // T3 in the tray: a failed start sets the error state...
     t.click(ID_PROFILE_BASE + 1);
     t.wait_log(
-        "tray: Switch(\"broken\") finished, active profile \"broken\", 1 error(s)",
+        "tray: switch to \"broken\" finished, active profile \"broken\", 1 error(s)",
         1,
     );
     t.wait_log("tray: icon error", 1);
     // ...and the next successful switch clears it (W2, spec section 8).
     t.click(ID_PROFILE_BASE);
     t.wait_log(
-        "tray: Switch(\"play\") finished, active profile \"play\", 0 error(s)",
+        "tray: switch to \"play\" finished, active profile \"play\", 0 error(s)",
         1,
     );
     t.wait_log("tray: icon active", 1);
@@ -302,9 +325,9 @@ fn w2_c3_error_state_and_last_valid_configuration() {
     // C3: a broken file keeps the last valid configuration in effect.
     t.config(&format!("{good}typo = 1\n"));
     t.click(ID_NEUTRAL);
-    t.wait_log("tray: Switch(\"neutral\") finished", 1);
+    t.wait_log("tray: switch to \"neutral\" finished", 1);
     t.click(ID_PROFILE_BASE);
-    t.wait_log("tray: Switch(\"play\") finished", 2);
+    t.wait_log("tray: switch to \"play\" finished", 2);
     assert!(t.log().contains("keeping the last valid configuration"));
     assert!(
         t.is_frozen("ks-tray4-a.exe"),
@@ -335,12 +358,170 @@ fn t4_w3_requests_during_a_slow_switch_run_only_the_latest() {
     t.click(ID_PROFILE_BASE);
     t.click(ID_PROFILE_BASE + 1);
     t.click(ID_PROFILE_BASE + 2);
-    t.wait_log("tray: Switch(\"y\") finished", 1);
+    t.wait_log("tray: switch to \"y\" finished", 1);
     let log = t.log();
-    assert!(log.contains("tray: Switch(\"slow\") finished"), "{log}");
-    assert!(log.contains("request for \"x\" superseded"), "{log}");
-    assert!(!log.contains("Switch(\"x\") finished"), "{log}");
+    assert!(log.contains("tray: switch to \"slow\" finished"), "{log}");
+    assert!(log.contains("switch to \"x\" superseded"), "{log}");
+    assert!(!log.contains("switch to \"x\" finished"), "{log}");
     assert!(t.is_frozen("ks-tray5-y.exe"));
     assert!(t.is_beating("ks-tray5-x.exe"));
+    assert_eq!(t.quit(), Some(0));
+}
+
+/// The output without PIDs, which differ from run to run.
+fn without_pids(text: &str) -> String {
+    text.lines()
+        .map(|line| match line.find(" (pid ") {
+            Some(at) => format!("{} (pid _)", &line[..at]),
+            None => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn finish(child: Child) -> (i32, String, String) {
+    let Output {
+        status,
+        stdout,
+        stderr,
+    } = child.wait_with_output().unwrap();
+    (
+        status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&stdout).into_owned(),
+        String::from_utf8_lossy(&stderr).into_owned(),
+    )
+}
+
+#[test]
+fn l1_command_line_goes_through_the_tray_and_answers_like_in_process() {
+    let mut t = Tray::new();
+    let _a = t.program("ks-pipe1-a.exe");
+    t.config(&profile("play", &[("ks-pipe1-a.exe", "suspend")]));
+
+    // No tray: in-process (fallback), the reference output.
+    let (code, alone_out, alone_err) = t.run(&["switch", "play"]);
+    assert_eq!(code, 0, "{alone_err}");
+    assert!(t.is_frozen("ks-pipe1-a.exe"));
+    let (code, _, _) = t.run(&["switch", "neutral"]);
+    assert_eq!(code, 0);
+    assert!(t.is_beating("ks-pipe1-a.exe"));
+    assert_eq!(t.logged("command line asks"), 0);
+
+    t.start(1);
+    let (code, out, err) = t.run(&["switch", "play"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(without_pids(&out), without_pids(&alone_out));
+    assert_eq!(err, alone_err);
+    assert_eq!(
+        t.logged("tray: command line asks for switch to \"play\""),
+        1
+    );
+    assert!(t.is_frozen("ks-pipe1-a.exe"));
+    t.wait_log("tray: icon active", 1);
+
+    let (code, out, _) = t.run(&["status"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("active profile: play"), "{out}");
+    assert!(out.contains("frozen: 1"), "{out}");
+
+    // E2 code 4 with the list of profiles, as in-process.
+    let (code, _, err) = t.run(&["switch", "nope"]);
+    assert_eq!(code, 4);
+    assert!(err.contains("KS401"), "{err}");
+    assert!(err.contains("profiles: neutral, play"), "{err}");
+
+    // E2 code 2 with file and line; neutral still works.
+    t.config(&format!(
+        "{}typo = 1\n",
+        profile("play", &[("ks-pipe1-a.exe", "suspend")])
+    ));
+    let (code, _, err) = t.run(&["switch", "play"]);
+    assert_eq!(code, 2);
+    assert!(
+        err.contains("config.toml:") && err.contains("KS202"),
+        "{err}"
+    );
+    let (code, out, err) = t.run(&["recover"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("recover ks-pipe1-a.exe"), "{out}");
+    assert!(t.is_beating("ks-pipe1-a.exe"));
+    t.config(&profile("play", &[("ks-pipe1-a.exe", "suspend")]));
+
+    // --no-wait returns once the tray has queued the request.
+    let (code, out, _) = t.run(&["switch", "play", "--no-wait"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("by the tray"), "{out}");
+    t.wait_log("tray: switch to \"play\" finished", 2);
+    assert!(t.is_frozen("ks-pipe1-a.exe"));
+
+    // A second tray still only reports.
+    let (code, _, err) = t.run(&["tray"]);
+    assert_eq!(code, 0);
+    assert!(err.contains("already running"), "{err}");
+
+    assert_eq!(t.quit(), Some(0));
+    assert!(t.is_beating("ks-pipe1-a.exe"));
+}
+
+#[test]
+fn t4_w3_through_the_pipe_the_superseded_request_ends_with_code_3() {
+    let mut t = Tray::new();
+    t.cleanup.push(KillProgram("ks-pipe2-slow.exe".to_owned()));
+    let slow = copy_fixture(WINDOW, t.dir.path(), "ks-pipe2-slow.exe");
+    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "3000"]) else {
+        return;
+    };
+    let _x = t.program("ks-pipe2-x.exe");
+    let _y = t.program("ks-pipe2-y.exe");
+    t.config(&format!(
+        "{}{}{}",
+        profile("slow", &[("ks-pipe2-slow.exe", "stop")]),
+        profile("x", &[("ks-pipe2-x.exe", "suspend")]),
+        profile("y", &[("ks-pipe2-y.exe", "suspend")]),
+    ));
+    t.start(1);
+
+    let first = t.cli(&["switch", "slow"]).spawn().unwrap();
+    t.wait_log("tray: running switch to \"slow\"", 1);
+    let second = t.cli(&["switch", "x"]).spawn().unwrap();
+    t.wait_log("tray: switch to \"x\" waits", 1);
+    let third = t.cli(&["switch", "y"]).spawn().unwrap();
+
+    let (code, _, err) = finish(second);
+    assert_eq!(code, 3, "the waiting request is superseded: {err}");
+    assert!(err.contains("KS402") && err.contains("\"y\""), "{err}");
+    let (code, out, err) = finish(first);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("stop ks-pipe2-slow.exe"), "{out}");
+    let (code, out, err) = finish(third);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains("waiting for the tray's running switch"),
+        "{err}"
+    );
+    assert!(out.contains("active profile: y"), "{out}");
+    assert!(t.is_frozen("ks-pipe2-y.exe"));
+    assert!(t.is_beating("ks-pipe2-x.exe"), "x never ran");
+    assert!(!t.log().contains("switch to \"x\" finished"));
+    assert_eq!(t.quit(), Some(0));
+}
+
+#[test]
+fn l1_a_request_equal_to_the_running_switch_shares_its_result() {
+    let mut t = Tray::new();
+    t.cleanup.push(KillProgram("ks-pipe3-slow.exe".to_owned()));
+    let slow = copy_fixture(WINDOW, t.dir.path(), "ks-pipe3-slow.exe");
+    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "2000"]) else {
+        return;
+    };
+    t.config(&profile("slow", &[("ks-pipe3-slow.exe", "stop")]));
+    t.start(1);
+    let first = t.cli(&["switch", "slow"]).spawn().unwrap();
+    t.wait_log("tray: running switch to \"slow\"", 1);
+    let (code, out, err) = t.run(&["switch", "slow"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("stop ks-pipe3-slow.exe"), "same result: {out}");
+    assert_eq!(finish(first).0, 0);
+    assert_eq!(t.logged("tray: running switch to \"slow\""), 1, "ran once");
     assert_eq!(t.quit(), Some(0));
 }

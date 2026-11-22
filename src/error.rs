@@ -73,6 +73,10 @@ pub enum Code {
     TrayInstance = 502,
     /// The tray window or its message loop could not be set up.
     TrayWindow = 503,
+    /// The tray's pipe could not be created or served (L1).
+    TrayPipe = 504,
+    /// A pipe message was malformed or of another protocol version.
+    TrayProtocol = 505,
 
     // 9xx: internal
     /// Logging could not be set up.
@@ -108,6 +112,8 @@ impl Code {
         Code::TrayUnreachable,
         Code::TrayInstance,
         Code::TrayWindow,
+        Code::TrayPipe,
+        Code::TrayProtocol,
         Code::LogSetup,
     ];
 

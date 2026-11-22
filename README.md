@@ -36,9 +36,9 @@ Copy [config.example.toml](config.example.toml) to
 ```text
 kaltstellen check-config [FILE]   validate the configuration
 kaltstellen switch PROFILE        switch to a profile; "neutral" brings
-                                  everything back
+          [--force] [--no-wait]   everything back
 kaltstellen status                show the active profile and what is on ice
-kaltstellen recover               resume everything frozen, e.g. after a crash
+kaltstellen recover [--no-wait]   resume everything frozen, e.g. after a crash
 kaltstellen tray                  notification-area icon with the profile menu
 
 kaltstellen list [FILTER]         list running processes
@@ -55,6 +55,10 @@ kaltstellen resume NAME           continue them
 - Remote-access tools, graphics driver components, licence services,
   security software and shells are only touched if their entry has
   `confirmed = true`, or with `--force` for one switch.
+- With `kaltstellen tray` running, `switch`, `recover` and `status` are
+  handed to the tray and wait for it (same output and exit codes);
+  `--no-wait` returns once the tray has queued the request. A request that a
+  later one replaces while it waits ends with exit code 3.
 - Only processes of your own Windows session are touched.
 - A suspended process uses no CPU and keeps its state.
 - `--trim` also asks Windows to move the process's memory out of RAM. Because a
@@ -109,8 +113,8 @@ profiles of the configuration (the active one checked), `Neutral` and
 on start it resumes anything a crashed instance left frozen. `Quit` resumes
 everything frozen and leaves closed programs closed. Started from a terminal
 it keeps that terminal until `Quit`; started from a shortcut it lets go of
-its console window at once, which may still show for a moment. The command line does not talk to a running
-tray yet. One tile, three states:
+its console window at once, which may still show for a moment. While it
+runs, the command line goes through it. One tile, three states:
 
 | | State | Meaning |
 | :-: | --- | --- |

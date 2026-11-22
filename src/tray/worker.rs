@@ -8,27 +8,21 @@ use std::thread::{self, JoinHandle};
 
 use log::{info, warn};
 
+pub use super::model::Job;
 use super::model::{Decision, Queue};
 use super::source::Source;
 use crate::config::NEUTRAL;
-use crate::engine::{self, Options};
+use crate::engine::{self, Event, Options};
 use crate::error::Error;
 use crate::state::Store;
-
-/// Work for the worker thread.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Job {
-    /// S3 at start: resume what a crashed instance left frozen; `neutral`.
-    Recover,
-    Switch(String),
-    /// L2: resume everything suspended, keep stopped records.
-    Quit,
-}
 
 /// What a job left behind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
+    /// False when nothing could be attempted (unknown profile, lock held).
+    pub ran: bool,
     pub active: String,
+    pub events: Vec<Event>,
     pub errors: Vec<Error>,
 }
 
@@ -43,17 +37,9 @@ pub trait Runner: Send + 'static {
     fn run(&mut self, job: &Job) -> Outcome;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Quit {
-    No,
-    /// Asked for while a switch runs; starts when it ends.
-    Requested,
-    Running,
-}
-
 pub struct Controller {
     queue: Queue,
-    quit: Quit,
+    quitting: bool,
     jobs: Option<Sender<Job>>,
     worker: Option<JoinHandle<()>>,
 }
@@ -73,14 +59,14 @@ impl Controller {
             .expect("cannot start the switch thread");
         Self {
             queue: Queue::default(),
-            quit: Quit::No,
+            quitting: false,
             jobs: Some(jobs),
             worker: Some(worker),
         }
     }
 
     fn send(&self, job: Job) {
-        info!("tray: running {job:?}");
+        info!("tray: running {job}");
         if let Some(jobs) = &self.jobs
             && jobs.send(job).is_err()
         {
@@ -88,89 +74,94 @@ impl Controller {
         }
     }
 
-    /// S3: recovery counts as a switch to `neutral` for the queue, so a
-    /// `Neutral` click during it is dropped and any other click waits.
-    pub fn recover(&mut self) {
-        if let Decision::Start(_) = self.queue.request(NEUTRAL) {
-            self.send(Job::Recover);
-        }
-    }
-
-    /// A menu click on a profile.
-    pub fn request(&mut self, target: &str) -> Decision {
-        if self.quit != Quit::No {
-            info!("tray: quitting, request for \"{target}\" ignored");
+    /// A request from the menu or the pipe. While quitting nothing new is
+    /// accepted; the caller checks [`Controller::is_quitting`] first.
+    pub fn request(&mut self, job: Job) -> Decision {
+        if self.quitting {
+            info!("tray: quitting, {job} ignored");
             return Decision::Dropped { superseded: None };
         }
-        let decision = self.queue.request(target);
+        let label = job.to_string();
+        let decision = self.queue.request(job);
         match &decision {
-            Decision::Start(target) => self.send(Job::Switch(target.clone())),
+            Decision::Start(job) => self.send(job.clone()),
             Decision::Queued { superseded } => {
-                info!("tray: \"{}\" waits for the running switch", target.trim());
+                info!("tray: {label} waits for the running job");
                 if let Some(old) = superseded {
-                    info!("tray: request for \"{old}\" superseded");
+                    info!("tray: {old} superseded");
                 }
             }
             Decision::Dropped { superseded } => {
-                info!(
-                    "tray: \"{}\" dropped, the running switch leads there",
-                    target.trim()
-                );
+                info!("tray: {label} dropped, the running job leads there");
                 if let Some(old) = superseded {
-                    info!("tray: request for \"{old}\" superseded");
+                    info!("tray: {old} superseded");
                 }
             }
         }
         decision
     }
 
-    /// The window thread got `done`. Starts what comes next and returns it.
+    /// Runs `job` now or right after the running one; a waiting request is
+    /// dropped and returned.
+    fn jump(&mut self, job: Job) -> Option<Job> {
+        match self.queue.jump(job) {
+            Ok(job) => {
+                self.send(job);
+                None
+            }
+            Err(superseded) => {
+                if let Some(old) = &superseded {
+                    info!("tray: {old} superseded");
+                }
+                superseded
+            }
+        }
+    }
+
+    /// L2. Returns the waiting request it dropped, if any.
+    pub fn quit(&mut self) -> Option<Job> {
+        if self.quitting {
+            return None;
+        }
+        self.quitting = true;
+        self.jump(Job::Quit)
+    }
+
+    /// S5: resume everything as soon as possible. Returns the waiting
+    /// request it dropped, if any.
+    pub fn end_session(&mut self) -> Option<Job> {
+        if self.quitting
+            || matches!(self.queue.running(), Some(Job::EndSession))
+            || matches!(self.queue.pending(), Some(Job::EndSession))
+        {
+            return None;
+        }
+        self.jump(Job::EndSession)
+    }
+
+    /// The window thread got the result of `done`. Starts what comes next
+    /// and returns it.
     pub fn finished(&mut self, done: &Job) -> Option<Job> {
         if *done == Job::Quit {
             return None;
         }
-        if self.quit == Quit::Requested {
-            self.queue.finish();
-            self.quit = Quit::Running;
-            self.send(Job::Quit);
-            return Some(Job::Quit);
-        }
-        let next = self.queue.finish().map(Job::Switch);
+        let next = self.queue.finish();
         if let Some(job) = &next {
             self.send(job.clone());
         }
         next
     }
 
-    /// L2. Returns true if the quit job started now; otherwise it starts
-    /// when the running switch ends. A waiting request is dropped.
-    pub fn quit(&mut self) -> bool {
-        if self.quit != Quit::No {
-            return false;
-        }
-        if let Some(old) = self.queue.clear_pending() {
-            info!("tray: quitting, request for \"{old}\" dropped");
-        }
-        if self.queue.running().is_some() {
-            self.quit = Quit::Requested;
-            false
-        } else {
-            self.quit = Quit::Running;
-            self.send(Job::Quit);
-            true
-        }
+    pub fn running(&self) -> Option<&Job> {
+        self.queue.running()
     }
 
-    /// Target of the running switch, if any.
-    pub fn running(&self) -> Option<&str> {
-        match self.quit {
-            Quit::Running => None,
-            _ => self.queue.running(),
-        }
+    pub fn pending(&self) -> Option<&Job> {
+        self.queue.pending()
     }
 
     pub fn is_quitting(&self) -> bool {
-        self.quit != Quit::No
+        self.quitting
     }
 }
 
@@ -185,8 +176,7 @@ impl Drop for Controller {
 }
 
 /// The real runner: the switch engine on the state file. Each job takes the
-/// state lock (L1) and reads the state afresh, so a command-line switch
-/// between two tray switches is not lost.
+/// state lock (L1) and reads the state afresh.
 pub struct EngineRunner {
     store: Store,
     source: Arc<Mutex<Source>>,
@@ -209,7 +199,9 @@ impl Runner for EngineRunner {
                     .peek()
                     .map_or_else(|| NEUTRAL.to_owned(), |s| s.active_profile);
                 return Outcome {
+                    ran: false,
                     active,
+                    events: Vec::new(),
                     errors: vec![err],
                 };
             }
@@ -218,8 +210,8 @@ impl Runner for EngineRunner {
         let mut errors: Vec<Error> = problem.into_iter().collect();
         let mut persist = |s: &crate::state::State| store.save(s);
         let result = match job {
-            Job::Recover | Job::Quit => engine::recover(&mut state, &mut persist),
-            Job::Switch(target) => {
+            Job::Recover | Job::Quit | Job::EndSession => engine::recover(&mut state, &mut persist),
+            Job::Switch { target, force } => {
                 // C4: the switch uses the configuration as it is now and
                 // keeps it to the end, whatever happens to the file meanwhile.
                 let config = {
@@ -227,24 +219,27 @@ impl Runner for EngineRunner {
                     source.refresh();
                     source.config().clone()
                 };
-                engine::switch(
-                    &config,
-                    target,
-                    &mut state,
-                    Options::default(),
-                    &mut persist,
-                )
+                let options = Options { force: *force };
+                engine::switch(&config, target, &mut state, options, &mut persist)
             }
         };
-        match result {
-            Ok(report) => errors.extend(report.errors),
+        let mut events = Vec::new();
+        let ran = match result {
+            Ok(report) => {
+                events = report.events;
+                errors.extend(report.errors);
+                true
+            }
             Err(err) => {
                 warn!("{err}");
                 errors.push(err);
+                false
             }
-        }
+        };
         Outcome {
+            ran,
             active: state.active_profile,
+            events,
             errors,
         }
     }
@@ -266,12 +261,10 @@ mod tests {
         fn run(&mut self, job: &Job) -> Outcome {
             self.started.send(job.clone()).unwrap();
             self.release.recv().unwrap();
-            let active = match job {
-                Job::Switch(t) => t.clone(),
-                _ => NEUTRAL.to_owned(),
-            };
             Outcome {
-                active,
+                ran: true,
+                active: job.leads_to().to_owned(),
+                events: vec![],
                 errors: vec![],
             }
         }
@@ -298,14 +291,18 @@ mod tests {
             move |d| done_tx.send(d).unwrap(),
         );
         Rig {
+            release,
             controller,
             started,
-            release,
             done,
         }
     }
 
     const WAIT: Duration = Duration::from_secs(5);
+
+    fn sw(target: &str) -> Job {
+        Job::switch(target)
+    }
 
     impl Rig {
         fn started(&self) -> Job {
@@ -330,21 +327,21 @@ mod tests {
     #[test]
     fn w3_requests_during_a_switch_run_only_the_latest_afterwards() {
         let mut r = rig();
-        r.controller.recover();
+        r.controller.request(Job::Recover);
         assert_eq!(r.started(), Job::Recover);
         // Neutral is where recovery leads: dropped.
         assert_eq!(
-            r.controller.request("neutral"),
+            r.controller.request(sw("neutral")),
             Decision::Dropped { superseded: None }
         );
-        r.controller.request("a");
-        r.controller.request("b");
+        r.controller.request(sw("a"));
+        r.controller.request(sw("b"));
         assert!(r.nothing_started(), "the worker runs one job at a time");
         let (done, next) = r.complete();
         assert_eq!(done.job, Job::Recover);
-        assert_eq!(next, Some(Job::Switch("b".into())));
-        assert_eq!(r.started(), Job::Switch("b".into()));
-        assert_eq!(r.controller.running(), Some("b"));
+        assert_eq!(next, Some(sw("b")));
+        assert_eq!(r.started(), sw("b"));
+        assert_eq!(r.controller.running(), Some(&sw("b")));
         let (done, next) = r.complete();
         assert_eq!(done.outcome.active, "b");
         assert_eq!(next, None);
@@ -355,12 +352,13 @@ mod tests {
     #[test]
     fn l2_quit_waits_for_the_running_switch_and_drops_the_waiting_one() {
         let mut r = rig();
-        r.controller.request("a");
-        assert_eq!(r.started(), Job::Switch("a".into()));
-        r.controller.request("b");
-        assert!(!r.controller.quit(), "quit waits for the running switch");
+        r.controller.request(sw("a"));
+        assert_eq!(r.started(), sw("a"));
+        r.controller.request(sw("b"));
+        assert_eq!(r.controller.quit(), Some(sw("b")));
+        assert!(r.controller.is_quitting());
         assert_eq!(
-            r.controller.request("c"),
+            r.controller.request(sw("c")),
             Decision::Dropped { superseded: None },
             "no new switches while quitting"
         );
@@ -376,9 +374,29 @@ mod tests {
     #[test]
     fn l2_quit_when_idle_starts_at_once() {
         let mut r = rig();
-        assert!(r.controller.quit());
+        assert_eq!(r.controller.quit(), None);
         assert_eq!(r.started(), Job::Quit);
-        assert!(!r.controller.quit(), "a second quit does nothing");
+        assert_eq!(r.controller.quit(), None, "a second quit does nothing");
+        r.complete();
+    }
+
+    #[test]
+    fn s5_end_session_runs_next_and_once() {
+        let mut r = rig();
+        r.controller.request(sw("a"));
+        r.started();
+        r.controller.request(sw("b"));
+        assert_eq!(r.controller.end_session(), Some(sw("b")));
+        assert_eq!(r.controller.end_session(), None, "asked once");
+        let (_, next) = r.complete();
+        assert_eq!(next, Some(Job::EndSession));
+        assert_eq!(r.started(), Job::EndSession);
+        let (done, next) = r.complete();
+        assert_eq!(done.outcome.active, "neutral");
+        assert_eq!(next, None);
+        // The tray keeps running: new requests work again.
+        assert!(matches!(r.controller.request(sw("c")), Decision::Start(_)));
+        r.started();
         r.complete();
     }
 }

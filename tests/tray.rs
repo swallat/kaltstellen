@@ -63,7 +63,7 @@ fn l1_tray_runs_once_and_ends_on_close() {
     assert!(
         wait_for(Duration::from_secs(10), || log_has(
             dir.path(),
-            "tray: Recover finished"
+            "tray: recover finished"
         )),
         "the tray never finished its start-up recovery"
     );
@@ -85,6 +85,6 @@ fn l1_tray_runs_once_and_ends_on_close() {
         "the tray did not end on its own"
     );
     assert_eq!(first.0.wait().unwrap().code(), Some(0));
-    assert!(log_has(dir.path(), "tray: Quit finished"));
+    assert!(log_has(dir.path(), "tray: quit finished"));
     assert!(log_has(dir.path(), "tray: ended"));
 }

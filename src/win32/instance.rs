@@ -2,7 +2,7 @@
 //! the session's `Local\` namespace.
 
 use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE};
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
 use windows::core::PCWSTR;
 
 use super::wide;
@@ -32,6 +32,21 @@ impl Instance {
         }
         Ok(Some(Instance(handle)))
     }
+
+    /// Whether some process has the mutex `name` open right now, that is
+    /// whether an instance runs.
+    pub fn exists(name: &str) -> bool {
+        let name = wide(name);
+        // SAFETY: `name` is NUL-terminated; the handle is closed at once.
+        match unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, PCWSTR(name.as_ptr())) } {
+            Ok(handle) => {
+                // SAFETY: just opened, closed once.
+                let _ = unsafe { CloseHandle(handle) };
+                true
+            }
+            Err(_) => false,
+        }
+    }
 }
 
 impl Drop for Instance {
@@ -52,7 +67,9 @@ mod tests {
         // The mutex is owned by this thread, but a second CreateMutexW still
         // reports that it exists, which is what a second process sees.
         assert!(Instance::acquire(&name).unwrap().is_none());
+        assert!(Instance::exists(&name));
         drop(first);
+        assert!(!Instance::exists(&name));
         assert!(Instance::acquire(&name).unwrap().is_some());
     }
 }

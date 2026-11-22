@@ -7,14 +7,17 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use log::{LevelFilter, info, warn};
 
-use crate::config::{self, Config};
-use crate::engine::{self, Report};
+use crate::config;
+use crate::engine;
 use crate::error::{Code, Error};
+use crate::exit;
 use crate::logging;
 use crate::paths;
 use crate::process::{Access, Snapshot, Target};
 use crate::protection::{self, Protection};
 use crate::state::{Lock, State, Store};
+use crate::tray::protocol::{self, Body, Finished};
+use crate::tray::{Endpoints, client};
 
 /// Put background apps on ice: suspend, resume and trim Windows processes.
 #[derive(Parser)]
@@ -53,36 +56,41 @@ enum Command {
         /// Confirm programs on the warn list (remote access, drivers, ...)
         #[arg(long)]
         force: bool,
+        /// With a tray running: return once the tray has queued the request
+        #[arg(long)]
+        no_wait: bool,
     },
     /// Show the active profile and what kaltstellen has put on ice
     Status,
     /// Resume everything recorded as frozen, e.g. after a crash
-    Recover,
+    Recover {
+        /// With a tray running: return once the tray has queued the request
+        #[arg(long)]
+        no_wait: bool,
+    },
     /// Run the notification-area icon with the profile menu
     Tray,
 }
-
-/// E2 exit codes.
-const EXIT_ERRORS: u8 = 1;
-const EXIT_CONFIG_INVALID: u8 = 2;
-const EXIT_UNKNOWN_PROFILE: u8 = 4;
-const EXIT_LOCKED: u8 = 5;
 
 pub fn main() -> ExitCode {
     let cli = Cli::parse();
     init_logging();
     let code = match cli.command {
         Command::CheckConfig { file } => check_config(file),
-        Command::Switch { profile, force } => switch(&profile, force),
+        Command::Switch {
+            profile,
+            force,
+            no_wait,
+        } => switch(&profile, force, !no_wait),
         Command::Status => status(),
-        Command::Recover => recover(),
+        Command::Recover { no_wait } => recover(!no_wait),
         Command::Tray => crate::tray::main(),
         command => match run(command) {
             Ok(true) => 0,
-            Ok(false) => EXIT_ERRORS,
+            Ok(false) => exit::ERRORS,
             Err(err) => {
                 eprintln!("error: {err:#}");
-                EXIT_ERRORS
+                exit::ERRORS
             }
         },
     };
@@ -92,7 +100,7 @@ pub fn main() -> ExitCode {
 fn store() -> Result<Store, u8> {
     paths::data_dir().map(Store::new).ok_or_else(|| {
         eprintln!("error: no data directory (LOCALAPPDATA unset)");
-        EXIT_ERRORS
+        exit::ERRORS
     })
 }
 
@@ -105,9 +113,9 @@ fn locked_store() -> Result<(Store, Lock), u8> {
         Err(err) => {
             eprintln!("error: {err}");
             Err(if err.code == Code::StateLocked {
-                EXIT_LOCKED
+                exit::UNREACHABLE
             } else {
-                EXIT_ERRORS
+                exit::ERRORS
             })
         }
     }
@@ -124,129 +132,150 @@ fn load_state(store: &Store) -> State {
 
 fn print_rejected(file: &Path, rejected: &config::Rejected) {
     warn!("{}: {rejected}", file.display());
-    for issue in &rejected.issues {
-        let line = issue.line.map_or(String::new(), |l| format!(":{l}"));
-        eprintln!(
-            "{}{line}: error {}: {}",
-            file.display(),
-            rejected.code,
-            issue.message
-        );
+    for line in config::rejected_lines(file, rejected) {
+        eprintln!("{line}");
     }
 }
 
-/// The configuration for a switch. `neutral` needs none: bringing everything
-/// back must work even when the file is missing.
-fn config_for(target: &str) -> Result<Config, u8> {
-    let neutral = target.trim().eq_ignore_ascii_case(config::NEUTRAL);
-    let empty = Config {
-        settings: config::Settings::default(),
-        profiles: Vec::new(),
+fn print_finished(finished: &Finished) -> u8 {
+    let (out, err) = finished.render();
+    print!("{out}");
+    eprint!("{err}");
+    finished.exit_code
+}
+
+/// L1: with a tray running in this session, the request goes through its
+/// pipe and queue (W3). `None` when no tray runs: the caller works
+/// in-process.
+fn through_tray(command: protocol::Command) -> Option<u8> {
+    let waits = command.waits();
+    let endpoints = match Endpoints::current() {
+        Ok(endpoints) => endpoints,
+        Err(err) => {
+            warn!("{err}; working without the tray");
+            return None;
+        }
     };
-    let Some(file) = paths::config_file() else {
-        eprintln!("error: no configuration directory (APPDATA unset)");
-        return if neutral {
-            Ok(empty)
-        } else {
-            Err(EXIT_CONFIG_INVALID)
-        };
+    let body = match client::request(&endpoints, command, || {
+        eprintln!("waiting for the tray's running switch");
+    }) {
+        Ok(None) => return None,
+        Ok(Some(body)) => body,
+        Err(err) => {
+            warn!("{err}");
+            eprintln!("error: {err}");
+            return Some(exit::UNREACHABLE);
+        }
     };
-    match config::load(&file) {
-        Ok(loaded) => {
-            for warning in &loaded.warnings {
-                eprintln!("{}: warning: {warning}", file.display());
-            }
-            Ok(loaded.config)
+    Some(match body {
+        Body::Accepted { waiting } if !waits => {
+            println!("{} by the tray", if waiting { "queued" } else { "started" });
+            exit::OK
         }
-        Err(rejected) if neutral && rejected.code == Code::ConfigRead => Ok(empty),
-        Err(rejected) => {
-            print_rejected(&file, &rejected);
-            if neutral {
-                eprintln!("warning: switching to neutral without the configuration");
-                Ok(empty)
-            } else {
-                Err(EXIT_CONFIG_INVALID)
-            }
+        Body::Done(finished) => print_finished(&finished),
+        Body::Superseded { by } => {
+            eprintln!(
+                "error: {}: superseded by a later request for \"{by}\"",
+                Code::Superseded
+            );
+            exit::SUPERSEDED
         }
-    }
+        Body::Rejected { exit_code, lines } => {
+            for line in lines {
+                eprintln!("{line}");
+            }
+            exit_code
+        }
+        Body::Status(status) => {
+            print_status(&status.state);
+            if let Some(running) = status.running {
+                println!("tray: running {running}");
+            }
+            if let Some(waiting) = status.waiting {
+                println!("tray: waiting {waiting}");
+            }
+            exit::OK
+        }
+        Body::Accepted { .. } => {
+            eprintln!(
+                "error: {}: unexpected answer from the tray",
+                Code::TrayProtocol
+            );
+            exit::UNREACHABLE
+        }
+    })
 }
 
-fn print_report(report: &Report) -> u8 {
-    for event in &report.events {
-        match event.pid {
-            Some(pid) => println!("{} {} (pid {pid})", event.step, event.program),
-            None => println!("{} {}", event.step, event.program),
-        }
+fn switch(target: &str, force: bool, wait: bool) -> u8 {
+    if let Some(code) = through_tray(protocol::Command::Switch {
+        profile: target.to_owned(),
+        force,
+        wait,
+    }) {
+        return code;
     }
-    for error in &report.errors {
-        eprintln!("error: {error}");
-    }
-    if report.errors.is_empty() {
-        0
-    } else {
-        EXIT_ERRORS
-    }
-}
-
-fn switch(target: &str, force: bool) -> u8 {
     let (store, _lock) = match locked_store() {
         Ok(locked) => locked,
         Err(code) => return code,
     };
-    let config = match config_for(target) {
-        Ok(config) => config,
-        Err(code) => return code,
+    let config = match config::for_switch(paths::config_file().as_deref(), target) {
+        Ok((config, notes)) => {
+            for note in notes {
+                eprintln!("{note}");
+            }
+            config
+        }
+        Err(lines) => {
+            for line in lines {
+                eprintln!("{line}");
+            }
+            return exit::CONFIG_INVALID;
+        }
     };
     let mut state = load_state(&store);
     let options = engine::Options { force };
-    match engine::switch(&config, target, &mut state, options, &mut |s| store.save(s)) {
-        Ok(report) => {
-            let code = print_report(&report);
-            println!("active profile: {}", state.active_profile);
-            code
-        }
-        Err(err) if err.code == Code::UnknownProfile => {
-            eprintln!("error: {err}");
-            let names: Vec<&str> = config.profiles.iter().map(|p| p.name.as_str()).collect();
-            eprintln!(
-                "profiles: neutral{}{}",
-                if names.is_empty() { "" } else { ", " },
-                names.join(", ")
-            );
-            EXIT_UNKNOWN_PROFILE
-        }
+    let finished = match engine::switch(&config, target, &mut state, options, &mut |s| {
+        store.save(s)
+    }) {
+        Ok(report) => Finished::new(true, &state.active_profile, &report.events, &report.errors),
         Err(err) => {
-            eprintln!("error: {err}");
-            EXIT_ERRORS
+            let mut finished = Finished::new(false, &state.active_profile, &[], &[err]);
+            finished.profiles = config.profiles.iter().map(|p| p.name.clone()).collect();
+            finished
         }
-    }
+    };
+    print_finished(&finished)
 }
 
-fn recover() -> u8 {
+fn recover(wait: bool) -> u8 {
+    if let Some(code) = through_tray(protocol::Command::Recover { wait }) {
+        return code;
+    }
     let (store, _lock) = match locked_store() {
         Ok(locked) => locked,
         Err(code) => return code,
     };
     let mut state = load_state(&store);
-    match engine::recover(&mut state, &mut |s| store.save(s)) {
-        Ok(report) => {
-            let code = print_report(&report);
-            println!("active profile: {}", state.active_profile);
-            code
-        }
-        Err(err) => {
-            eprintln!("error: {err}");
-            EXIT_ERRORS
-        }
-    }
+    let finished = match engine::recover(&mut state, &mut |s| store.save(s)) {
+        Ok(report) => Finished::new(true, &state.active_profile, &report.events, &report.errors),
+        Err(err) => Finished::new(false, &state.active_profile, &[], &[err]),
+    };
+    print_finished(&finished)
 }
 
 fn status() -> u8 {
+    if let Some(code) = through_tray(protocol::Command::Status) {
+        return code;
+    }
     let store = match store() {
         Ok(store) => store,
         Err(code) => return code,
     };
-    let state = load_state(&store);
+    print_status(&load_state(&store));
+    exit::OK
+}
+
+fn print_status(state: &State) {
     let snapshot = Snapshot::take().ok();
     println!("active profile: {}", state.active_profile);
     println!("frozen: {}", state.suspended.len());
@@ -273,14 +302,13 @@ fn status() -> u8 {
             }
         );
     }
-    0
 }
 
 /// Prints problems as `file:line: message`, the form editors can jump to.
 fn check_config(file: Option<PathBuf>) -> u8 {
     let Some(file) = file.or_else(paths::config_file) else {
         eprintln!("error: no configuration directory (APPDATA unset); name a file");
-        return EXIT_CONFIG_INVALID;
+        return exit::CONFIG_INVALID;
     };
     let location = |issue: &config::Issue| match issue.line {
         Some(line) => format!("{}:{line}", file.display()),
@@ -325,7 +353,7 @@ fn check_config(file: Option<PathBuf>) -> u8 {
         }
         Err(rejected) => {
             print_rejected(&file, &rejected);
-            EXIT_CONFIG_INVALID
+            exit::CONFIG_INVALID
         }
     }
 }
@@ -378,7 +406,7 @@ fn run(command: Command) -> Result<bool> {
         Command::CheckConfig { .. }
         | Command::Switch { .. }
         | Command::Status
-        | Command::Recover
+        | Command::Recover { .. }
         | Command::Tray => unreachable!("handled in main"),
     }
 }

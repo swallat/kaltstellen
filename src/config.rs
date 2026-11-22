@@ -186,6 +186,67 @@ pub fn load(path: &Path) -> Result<Loaded, Rejected> {
     parse(&text)
 }
 
+/// The lines of a rejected file as the command line prints them, in the
+/// form editors can jump to: `file:line: error KSnnn: message`.
+pub fn rejected_lines(file: &Path, rejected: &Rejected) -> Vec<String> {
+    rejected
+        .issues
+        .iter()
+        .map(|issue| {
+            let line = issue.line.map_or(String::new(), |l| format!(":{l}"));
+            format!(
+                "{}{line}: error {}: {}",
+                file.display(),
+                rejected.code,
+                issue.message
+            )
+        })
+        .collect()
+}
+
+/// The configuration a switch to `target` uses, read from `file`, and the
+/// lines to show on stderr. `neutral` needs none: bringing everything back
+/// must work even when the file is missing or invalid. `Err` carries the
+/// lines explaining why a switch to another profile cannot run (E2 exit
+/// code 2). Shared by the in-process command line and the tray's pipe, so
+/// both answer alike.
+pub fn for_switch(file: Option<&Path>, target: &str) -> Result<(Config, Vec<String>), Vec<String>> {
+    let neutral = target.trim().eq_ignore_ascii_case(NEUTRAL);
+    let empty = Config {
+        settings: Settings::default(),
+        profiles: Vec::new(),
+    };
+    let Some(file) = file else {
+        let lines = vec!["error: no configuration directory (APPDATA unset)".to_owned()];
+        return if neutral {
+            Ok((empty, lines))
+        } else {
+            Err(lines)
+        };
+    };
+    match load(file) {
+        Ok(loaded) => {
+            let notes = loaded
+                .warnings
+                .iter()
+                .map(|warning| format!("{}: warning: {warning}", file.display()))
+                .collect();
+            Ok((loaded.config, notes))
+        }
+        Err(rejected) if neutral && rejected.code == Code::ConfigRead => Ok((empty, Vec::new())),
+        Err(rejected) => {
+            log::warn!("{}: {rejected}", file.display());
+            let mut lines = rejected_lines(file, &rejected);
+            if neutral {
+                lines.push("warning: switching to neutral without the configuration".to_owned());
+                Ok((empty, lines))
+            } else {
+                Err(lines)
+            }
+        }
+    }
+}
+
 /// Validates configuration text.
 pub fn parse(text: &str) -> Result<Loaded, Rejected> {
     let raw: RawConfig = toml::from_str(text).map_err(|err| Rejected {
