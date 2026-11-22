@@ -316,7 +316,9 @@ impl Host for RealHost {
             use std::os::windows::process::CommandExt;
             let output = exe.and_then(|exe| {
                 Command::new(exe)
-                    .args(["switch", &target])
+                    // `--`: a profile name that starts with a dash is a
+                    // name, not an option.
+                    .args(["switch", "--", &target])
                     .stdin(Stdio::null())
                     .creation_flags(CREATE_NO_WINDOW)
                     .output()

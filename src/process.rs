@@ -168,7 +168,6 @@ impl Snapshot {
         self.get(pid).filter(|p| p.created == created)
     }
 
-    /// The session kaltstellen runs in; only its processes are considered.
     /// A value that is the same for every snapshot of one Windows boot and
     /// differs after a reboot: the creation time of the `System` process
     /// (S10). Zero if unknown.
@@ -176,6 +175,7 @@ impl Snapshot {
         self.get(4).map_or(0, |system| system.created)
     }
 
+    /// The session kaltstellen runs in; only its processes are considered.
     pub fn own_session(&self) -> Option<u32> {
         self.get(self.own_pid).map(|p| p.session_id)
     }

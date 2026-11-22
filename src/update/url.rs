@@ -67,9 +67,11 @@ impl Url {
 fn is_loopback(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost")
         || host == "[::1]"
+        // 127.0.0.0/8 as four numeric octets; `127.example.com.x` is a
+        // host name, not loopback.
         || host
-            .strip_prefix("127.")
-            .is_some_and(|rest| rest.split('.').count() == 3)
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 #[cfg(test)]
@@ -97,6 +99,8 @@ mod tests {
         for bad in [
             "http://example.org/x",
             "http://127.0.0.1.example.org/x",
+            "http://127.example.com.x/x",
+            "http://127.a.b.c/x",
             "ftp://example.org/x",
             "file:///C:/x",
             "https://user@example.org/",

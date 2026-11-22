@@ -39,8 +39,12 @@ fn version() -> String {
         return package;
     }
     // Re-run when HEAD moves or tags change, so the version is current.
+    // Only paths that exist: Cargo treats a missing one as always changed
+    // and would rebuild on every invocation.
     for path in ["logs/HEAD", "packed-refs", "refs/tags"] {
-        if let Some(path) = git(&["rev-parse", "--git-path", path]) {
+        if let Some(path) = git(&["rev-parse", "--git-path", path])
+            && std::path::Path::new(&path).exists()
+        {
             println!("cargo:rerun-if-changed={path}");
         }
     }
