@@ -130,6 +130,13 @@ impl Snapshot {
     }
 
     /// The session kaltstellen runs in; only its processes are considered.
+    /// A value that is the same for every snapshot of one Windows boot and
+    /// differs after a reboot: the creation time of the `System` process
+    /// (S10). Zero if unknown.
+    pub fn boot_marker(&self) -> u64 {
+        self.get(4).map_or(0, |system| system.created)
+    }
+
     pub fn own_session(&self) -> Option<u32> {
         self.get(self.own_pid).map(|p| p.session_id)
     }
@@ -234,6 +241,11 @@ fn with_extension(exe: &str) -> String {
     } else {
         format!("{exe}.exe")
     }
+}
+
+/// Whether two paths name the same file, ignoring case and slash direction.
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    normalize_path(a) == normalize_path(b)
 }
 
 fn normalize_path(path: &Path) -> String {

@@ -21,21 +21,37 @@ Start the flight simulator and its companion tools come up while the music
 software is frozen or closed; switch to the music profile and it is the other
 way round.
 
-**Status: early prototype.** Today it is a command-line tool that can freeze,
-resume and trim processes by name. Profiles, the tray icon and automatic
-switching are planned; see [docs/requirements.md](docs/requirements.md) and
+**Status: early, command line only.** Profiles work from the command line:
+`kaltstellen switch <profile>` starts, stops and freezes programs as the
+configuration says and undoes it on the next switch. The tray icon, hotkeys
+and the settings window are planned; see [docs/spec.md](docs/spec.md) and
 [docs/plan.md](docs/plan.md).
 
-## What the prototype does
+## Using it
+
+Copy [config.example.toml](config.example.toml) to
+`%APPDATA%\kaltstellen\config.toml` and describe your profiles there.
 
 ```text
+kaltstellen check-config [FILE]   validate the configuration
+kaltstellen switch PROFILE        switch to a profile; "neutral" brings
+                                  everything back
+kaltstellen status                show the active profile and what is on ice
+kaltstellen recover               resume everything frozen, e.g. after a crash
+
 kaltstellen list [FILTER]         list running processes
-kaltstellen suspend NAME [--trim] freeze a program: all processes with that
-                                  executable name and their child processes
+kaltstellen suspend NAME [--trim] freeze a program by hand: all processes with
+                                  that executable name and their children
 kaltstellen resume NAME           continue them
-kaltstellen check-config [FILE]   validate a configuration file
 ```
 
+- A switch runs in a fixed order: resume, stop, suspend, start. A step that
+  fails does not stop the rest; errors are listed at the end (exit code 1).
+- What was frozen or closed is written to
+  `%LOCALAPPDATA%\kaltstellen\state.json` before it happens. If kaltstellen
+  is killed, `kaltstellen recover` brings everything back.
+- Remote-access tools, graphics driver components, licence services,
+  security software and shells are only touched with `--force`.
 - Only processes of your own Windows session are touched.
 - A suspended process uses no CPU and keeps its state.
 - `--trim` also asks Windows to move the process's memory out of RAM. Because a
@@ -43,12 +59,12 @@ kaltstellen check-config [FILE]   validate a configuration file
 - Core system processes (`explorer.exe`, `dwm.exe`, `csrss.exe`, ...) are
   refused.
 
-The prototype keeps no state: every `suspend` needs exactly one `resume`.
-Suspending the same app twice means resuming it twice.
+`suspend` and `resume` by hand keep no state: every `suspend` needs exactly
+one `resume`. Profiles do keep state and freeze each process once.
 
 Not every app survives being frozen. Programs with live network connections,
 audio drivers or hardware access may lose their connection or hang after
-resuming. Use the prototype to find out which of your apps tolerate it.
+resuming. Give such programs `action = "stop"` in their profile.
 
 ## Testing your own apps
 

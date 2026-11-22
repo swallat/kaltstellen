@@ -57,3 +57,10 @@ name. Purpose: find out which real apps tolerate being frozen.
   A8. Still open from WP2: T15 (handle trace), T18 (elevated target), T19
   (trim measured) and T14, all on the VM; the warn list is not enforced yet
   (`--force`, WP5).
+- WP4 switch engine, WP5 command line, WP6 state file (2026-11-22):
+  `src/engine.rs` (W1 order, shared freeze kept, collected errors, second
+  pass of W6, warn list with `--force`, recovery), `src/state.rs` (atomic
+  `state.json`, lock), commands `switch`, `status`, `recover` with the exit
+  codes of E2; tests in `tests/fixtures/tests/switch.rs`. Still open for M1:
+  all VM runs of the acceptance list, T15, T18, T19; W3/T4 (request queue),
+  `--no-wait` and the Ctrl+C handler come with the tray app (M2).

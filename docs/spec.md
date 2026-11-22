@@ -49,6 +49,11 @@ Let *prev* be the set of processes recorded in state (suspended or stopped by ka
   - Stop: the close request (`WM_CLOSE`) goes to all top-level windows of the program, hidden ones included, so programs that live in the notification area can close too. A program without any window cannot be asked; `on_timeout` then applies at once instead of after `stop_timeout_s`.
   - Start: without `cwd` the program starts in the folder of its executable. It gets its own console and inherits no handles.
   - A step on a process that has exited meanwhile counts as done.
+  - State (WP6): the boot time of S10 is the creation time of the `System` process. A suspended process is recorded and the state written before it is frozen, so a crash in between leaves a record to undo, never an unknown frozen process. The in-process lock of L1 is a separate file `state.lock` opened without sharing.
+  - A program stopped by kaltstellen is restarted on `neutral` from its image path, without the arguments it originally ran with (reading another process's command line is not attempted).
+  - A suspended record whose resume fails is kept for the next switch or `recover`.
+  - Without a tray instance there is nothing to queue: W3 and exit code 3 apply to requests sent to the tray; a second command-line switch during a running one ends with exit code 5.
+  - `switch neutral` and `recover` work without a readable configuration.
 
 ## 4. Session and lifecycle
 
