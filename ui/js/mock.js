@@ -30,7 +30,7 @@ const state = {
   status: 'Mock backend: nothing is saved.',
   update: {
     version: '1.0.0', mode: 'auto', mode_locked: false, available: null,
-    blocked: null, last_check: 1795000000, error: null, checking: false,
+    blocked: null, failed: false, last_check: 1795000000, error: null, checking: false,
   },
   profiles: [
     {

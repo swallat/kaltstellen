@@ -27,6 +27,32 @@ pub struct Updates {
     started: u64,
     /// Set while a check child runs; it sends once when it ended.
     ended: Option<Receiver<()>>,
+    /// Set while an automatic install runs; it sends once when it ended
+    /// without quitting this tray.
+    installing: Option<Receiver<()>>,
+}
+
+/// Waits for `child` on a short-lived thread, then wakes the window thread.
+fn watch(mut child: std::process::Child, waker: &Waker) -> Receiver<()> {
+    let (tx, rx): (Sender<()>, Receiver<()>) = mpsc::channel();
+    let waker = waker.clone();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        let _ = tx.send(());
+        waker.wake();
+    });
+    rx
+}
+
+/// Whether the child behind `slot` ended since the last call; clears it.
+fn ended(slot: &mut Option<Receiver<()>>) -> bool {
+    let done = slot
+        .as_ref()
+        .is_some_and(|rx| !matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    if done {
+        *slot = None;
+    }
+    done
 }
 
 impl Updates {
@@ -35,6 +61,7 @@ impl Updates {
             waker,
             started: record::now(),
             ended: None,
+            installing: None,
         }
     }
 
@@ -64,7 +91,7 @@ impl Updates {
                 .creation_flags(CREATE_NO_WINDOW)
                 .spawn()
         });
-        let mut child = match child {
+        let child = match child {
             Ok(child) => child,
             Err(err) => {
                 warn!("tray: cannot start the update check: {err}");
@@ -72,28 +99,45 @@ impl Updates {
             }
         };
         info!("tray: update check started (pid {})", child.id());
-        let (tx, rx): (Sender<()>, Receiver<()>) = mpsc::channel();
-        let waker = self.waker.clone();
-        // Only while the check runs: waits for the child, then wakes the
-        // window thread.
-        std::thread::spawn(move || {
-            let _ = child.wait();
-            let _ = tx.send(());
-            waker.wake();
-        });
-        self.ended = Some(rx);
+        // Only while the check runs.
+        self.ended = Some(watch(child, &self.waker));
     }
 
     /// Whether a check child ended since the last call.
     pub fn check_ended(&mut self) -> bool {
-        let done = self
-            .ended
-            .as_ref()
-            .is_some_and(|rx| !matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
-        if done {
-            self.ended = None;
+        ended(&mut self.ended)
+    }
+
+    /// UP1 automatic install: `kaltstellen update --unattended` without a
+    /// console window; its steps go to the log. That process asks this tray
+    /// to quit only if it is idle in `neutral` at that moment
+    /// (`quit_if_idle`), then starts the new one.
+    pub fn install_unattended(&mut self) {
+        if self.installing.is_some() {
+            return;
         }
-        done
+        let started = std::env::current_exe().and_then(|exe| {
+            Command::new(exe)
+                .args(["update", "--unattended"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+        });
+        match started {
+            Ok(child) => {
+                info!("tray: automatic update started (pid {})", child.id());
+                self.installing = Some(watch(child, &self.waker));
+            }
+            Err(err) => warn!("tray: cannot start the update: {err}"),
+        }
+    }
+
+    /// Whether an automatic install ended since the last call while this
+    /// tray still runs: it gave up, or the new version did not start.
+    pub fn install_ended(&mut self) -> bool {
+        ended(&mut self.installing)
     }
 }
 
@@ -119,7 +163,12 @@ pub fn menu_state(config_dir: Option<&Path>) -> (Mode, bool, Option<UpdateOffer>
                 Err(err) => Err(err.reason),
             })
             .err();
-        Some(UpdateOffer { version, blocked })
+        let failed = rec.failed_before(&version);
+        Some(UpdateOffer {
+            version,
+            blocked,
+            failed,
+        })
     });
     (mode, locked, offer)
 }
@@ -134,25 +183,6 @@ pub fn log_result(offer: Option<&UpdateOffer>) {
             "tray: update check: {} is the newest version",
             update::CURRENT
         ),
-    }
-}
-
-/// UP1 automatic install: `kaltstellen update` without a console window;
-/// its steps go to the log. That process quits this tray and starts the new
-/// one.
-pub fn install_unattended() {
-    let started = std::env::current_exe().and_then(|exe| {
-        Command::new(exe)
-            .arg("update")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-    });
-    match started {
-        Ok(child) => info!("tray: automatic update started (pid {})", child.id()),
-        Err(err) => warn!("tray: cannot start the update: {err}"),
     }
 }
 

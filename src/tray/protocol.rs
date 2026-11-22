@@ -53,6 +53,11 @@ pub enum Command {
     /// UP1: quit as from the menu (L2: everything suspended is resumed);
     /// the reply `done` comes when that finished, then the tray ends.
     Quit,
+    /// UP1 automatic install: `quit`, but only if `neutral` is active and no
+    /// switch runs or waits at the moment the tray reads it. Otherwise the
+    /// reply is `rejected` and the tray keeps running. A tray that does not
+    /// know this command rejects it as malformed, so it never quits.
+    QuitIfIdle,
 }
 
 impl Command {
@@ -60,7 +65,7 @@ impl Command {
     pub fn waits(&self) -> bool {
         match self {
             Command::Switch { wait, .. } | Command::Recover { wait } => *wait,
-            Command::Status | Command::Quit => true,
+            Command::Status | Command::Quit | Command::QuitIfIdle => true,
         }
     }
 }
@@ -259,6 +264,10 @@ mod tests {
         assert_eq!(
             encode(&request(Command::Quit)),
             "{\"version\":1,\"command\":\"quit\"}\n"
+        );
+        assert_eq!(
+            encode(&request(Command::QuitIfIdle)),
+            "{\"version\":1,\"command\":\"quit_if_idle\"}\n"
         );
         assert_eq!(
             encode(&request(Command::Status)),

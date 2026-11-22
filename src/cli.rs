@@ -124,6 +124,10 @@ enum Command {
         /// Started from the tray menu: wait for Enter after a failure
         #[arg(long, hide = true)]
         from_tray: bool,
+        /// The tray's automatic install: quits the tray only if it is idle
+        /// in neutral, skips a version that did not start here before
+        #[arg(long, hide = true, conflicts_with_all = ["check", "force", "from_tray"])]
+        unattended: bool,
     },
 }
 
@@ -185,6 +189,7 @@ pub fn main() -> ExitCode {
             auto,
             quiet,
             from_tray,
+            unattended,
         } => {
             let mode = mode
                 .map(|m| match m {
@@ -199,7 +204,7 @@ pub fn main() -> ExitCode {
             let code = match (mode, check) {
                 (Some(mode), _) => update_mode(mode),
                 (None, true) => update_check(quiet),
-                (None, false) => update_install(force),
+                (None, false) => update_install(force, unattended),
             };
             if from_tray {
                 finish_console(code);
@@ -518,8 +523,9 @@ fn update_check(quiet: bool) -> u8 {
     exit::OK
 }
 
-/// `update [--force]` (UP1): installs the newest release.
-fn update_install(force: bool) -> u8 {
+/// `update [--force]` (UP1): installs the newest release. `unattended` is
+/// the tray's automatic install (see [`update::session::System`]).
+fn update_install(force: bool, unattended: bool) -> u8 {
     let source = update::Source::current();
     let refused = |err: Error| {
         warn!("update: {err}");
@@ -547,7 +553,20 @@ fn update_install(force: bool) -> u8 {
         println!("kaltstellen {} is the newest version", update::CURRENT);
         return exit::OK;
     }
-    let mut session = match update::session::System::current() {
+    let data_dir = paths::data_dir();
+    if unattended
+        && let Some(dir) = &data_dir
+        && update::record::load(dir).0.failed_before(&release.version)
+    {
+        return refused(Error::new(
+            Code::UpdateStart,
+            format!(
+                "version {} did not start here before; it is installed only on request",
+                release.version
+            ),
+        ));
+    }
+    let mut session = match update::session::System::current(unattended) {
         Ok(session) => session,
         Err(err) => return refused(err),
     };
@@ -584,6 +603,7 @@ fn update_install(force: bool) -> u8 {
             }
             exit::OK
         }
+        // A version that did not start was recorded by the session (UP1).
         Err(err) => refused(err),
     }
 }

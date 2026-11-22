@@ -44,6 +44,12 @@ reasoning is. Implementation choices made without the owner are marked
 10. **UP1 automatic install timing** `[assumed]`: retried when a switch ends
     with `neutral` active and after every later check; logged once per
     version while it waits; a saved `on` (earlier name) reads as `auto`.
+    The condition is checked again right before the tray quits
+    (`quit_if_idle`); a busy tray stays and the install starts again the
+    next time the tray is idle in `neutral`. A version that did not start
+    (`KS806`) is recorded in `update.json` and never installed automatically
+    again; on request it still can be. Only the last such version is
+    remembered.
 
 11. **UP1 in the main window** `[assumed]`: a section `Updates` at the bottom
     of the sidebar; the window checks by running `kaltstellen update --check

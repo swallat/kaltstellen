@@ -143,6 +143,12 @@ from there with the test variables above.
    version (`{ "latest": "9.9.9" }`), the menu shows a disabled line
    `Update 9.9.9 available: …` for a development build or a copy below
    `scoop\apps`, and `Install update 9.9.9…` for a release build.
+2a. With `{ "latest": "9.9.9", "failed": "9.9.9" }` in that file and a
+   release build (or `KALTSTELLEN_UPDATE_URL` set): the menu item reads
+   `Install update 9.9.9… (did not start last time)`, and the `Updates`
+   section of the main window says that version 9.9.9 did not start here
+   last time and is installed only on request; its `Install` button is
+   still there.
 3. Clicking `Install update…` opens a console window that runs the update;
    on a failure it stays open until Enter.
 4. After the first real release: put the previous release in a normal

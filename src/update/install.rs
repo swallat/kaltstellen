@@ -32,6 +32,10 @@ pub trait Session {
     fn start_tray(&mut self, exe: &Path) -> std::result::Result<(), String>;
     /// The first line `exe --version` prints.
     fn version_of(&self, exe: &Path) -> std::result::Result<String, String>;
+    /// `version` did not start here (KS806): it is never installed
+    /// automatically again. Called before the previous tray starts again,
+    /// so that tray already knows.
+    fn did_not_start(&mut self, version: &str);
 }
 
 /// The files of one install, all next to the running executable.
@@ -206,6 +210,7 @@ pub fn install(
                 Ok(line) => format!("it reports \"{}\" instead of \"{expected}\"", line.trim()),
                 Err(err) => err,
             };
+            session.did_not_start(&release.version);
             return Err(Error::new(
                 Code::UpdateStart,
                 format!("the new version does not start: {what}; nothing was changed"),
@@ -239,6 +244,7 @@ pub fn install(
         say("starting the new tray …".to_owned());
         if let Err(why) = session.start_tray(&files.exe) {
             roll_back(&files);
+            session.did_not_start(&release.version);
             restart_old(session, &files.exe, say);
             return Err(Error::new(
                 Code::UpdateStart,
@@ -367,6 +373,9 @@ mod tests {
                 .get(&content)
                 .cloned()
                 .ok_or_else(|| "not a program".into())
+        }
+        fn did_not_start(&mut self, version: &str) {
+            self.calls.push(format!("failed {version}"));
         }
     }
 
@@ -505,7 +514,8 @@ mod tests {
             .versions
             .insert(NEW.to_vec(), "kaltstellen 1.9.0".into());
         assert_eq!(run(&w, &mut session).unwrap_err().code, Code::UpdateStart);
-        assert!(session.calls.is_empty());
+        // The tray was not touched; the version is remembered as failed.
+        assert_eq!(session.calls, ["failed 2.0.0", "failed 2.0.0"]);
         assert_eq!(names(w.dir.path()), ["k.exe"]);
     }
 
@@ -530,7 +540,13 @@ mod tests {
         assert_eq!(fs::read(w.dir.path().join("k.failed.exe")).unwrap(), NEW);
         assert_eq!(
             session.calls,
-            ["stop", "start new executable", "start old executable"]
+            [
+                "stop",
+                "start new executable",
+                // Before the old tray runs, so it does not try again.
+                "failed 2.0.0",
+                "start old executable"
+            ]
         );
         assert!(session.tray, "the old tray runs again");
         // The next attempt cleans the failed file up first.

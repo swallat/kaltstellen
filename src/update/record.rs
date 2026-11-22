@@ -30,6 +30,17 @@ pub struct Record {
     /// Why the last check failed; absent after a successful one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// A version whose install did not start here (KS806). It is never
+    /// installed automatically again, only on request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<String>,
+}
+
+impl Record {
+    /// Whether `version` did not start here before.
+    pub fn failed_before(&self, version: &str) -> bool {
+        self.failed.as_deref() == Some(version)
+    }
 }
 
 fn file(dir: &Path) -> PathBuf {
@@ -65,6 +76,14 @@ pub fn save(dir: &Path, record: &Record) -> Result<()> {
         .map_err(|e| io_error(&file, e))
 }
 
+/// Remembers that `version` did not start here (UP1): the automatic
+/// install leaves it alone from now on.
+pub fn mark_failed(dir: &Path, version: &str) -> Result<()> {
+    let (mut record, _) = load(dir);
+    record.failed = Some(version.to_owned());
+    save(dir, &record)
+}
+
 /// Seconds since 1970.
 pub fn now() -> u64 {
     SystemTime::now()
@@ -97,9 +116,19 @@ mod tests {
             latest: Some("1.2.0".into()),
             page: Some("https://x".into()),
             error: None,
+            failed: None,
         };
         save(dir.path(), &record).unwrap();
-        assert_eq!(load(dir.path()), (record, None));
+        assert_eq!(load(dir.path()), (record.clone(), None));
+        // A failed version is added to what is there.
+        mark_failed(dir.path(), "1.2.0").unwrap();
+        let (marked, _) = load(dir.path());
+        assert!(marked.failed_before("1.2.0"));
+        assert!(!marked.failed_before("1.2.1"));
+        assert_eq!(marked.latest, record.latest);
+        // A file written before the field existed still reads.
+        fs::write(dir.path().join("update.json"), r#"{"latest":"1.0.0"}"#).unwrap();
+        assert_eq!(load(dir.path()).0.failed, None);
         fs::write(dir.path().join("update.json"), "{ broken").unwrap();
         let (record, problem) = load(dir.path());
         assert_eq!(record, Record::default());

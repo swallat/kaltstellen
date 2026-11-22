@@ -15,8 +15,8 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, HANDLE, HLOCAL,
-    INVALID_HANDLE_VALUE, LocalFree,
+    CloseHandle, DUPLICATE_HANDLE_OPTIONS, DuplicateHandle, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY,
+    ERROR_PIPE_CONNECTED, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
@@ -32,6 +32,7 @@ use windows::Win32::Storage::FileSystem::{
     FILE_GENERIC_WRITE, FILE_SHARE_NONE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
     SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
 };
+use windows::Win32::System::IO::CancelSynchronousIo;
 use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId,
     PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
@@ -39,8 +40,8 @@ use windows::Win32::System::Pipes::{
 };
 use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentProcessId, OpenProcess, OpenProcessToken,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, OpenProcess, OpenProcessToken,
+    PROCESS_QUERY_LIMITED_INFORMATION, THREAD_TERMINATE,
 };
 use windows::core::{PCWSTR, PWSTR};
 
@@ -301,6 +302,88 @@ pub fn client_pid(file: &File) -> Option<u32> {
     Some(pid)
 }
 
+/// Ends blocking pipe I/O of the thread that created it once `timeout` has
+/// passed (`CancelSynchronousIo`); the I/O then fails. Dropping it before
+/// stops the watch. For a client that connects and never sends, or never
+/// reads, so it cannot hold a thread of the tray for ever.
+pub struct Deadline {
+    shared: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    watcher: Option<std::thread::JoinHandle<()>>,
+}
+
+/// A thread handle that may be sent to the watcher.
+struct ThreadHandle(HANDLE);
+// SAFETY: a kernel handle is valid in every thread of the process.
+unsafe impl Send for ThreadHandle {}
+
+impl Drop for ThreadHandle {
+    fn drop(&mut self) {
+        // SAFETY: owned and closed once.
+        let _ = unsafe { CloseHandle(self.0) };
+    }
+}
+
+impl Deadline {
+    /// `None` if the thread handle cannot be had; the I/O then simply has
+    /// no deadline.
+    pub fn new(timeout: Duration) -> Option<Deadline> {
+        let mut thread = HANDLE::default();
+        // SAFETY: duplicates this thread's pseudo handle into a real one
+        // with only the right CancelSynchronousIo needs.
+        unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                GetCurrentThread(),
+                GetCurrentProcess(),
+                &mut thread,
+                THREAD_TERMINATE.0,
+                false,
+                DUPLICATE_HANDLE_OPTIONS(0),
+            )
+        }
+        .ok()?;
+        let thread = ThreadHandle(thread);
+        let shared = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let watch = std::sync::Arc::clone(&shared);
+        let watcher = std::thread::Builder::new()
+            .name("pipe deadline".to_owned())
+            .spawn(move || {
+                let thread = thread;
+                let (done, signal) = &*watch;
+                let guard = done
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let (guard, _) = signal
+                    .wait_timeout_while(guard, timeout, |done| !*done)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if !*guard {
+                    // Still under the lock: the watched thread cannot have
+                    // left the I/O and started other work yet.
+                    // SAFETY: a valid thread handle with THREAD_TERMINATE.
+                    let _ = unsafe { CancelSynchronousIo(thread.0) };
+                }
+            })
+            .ok()?;
+        Some(Deadline {
+            shared,
+            watcher: Some(watcher),
+        })
+    }
+}
+
+impl Drop for Deadline {
+    fn drop(&mut self) {
+        let (done, signal) = &*self.shared;
+        *done
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        signal.notify_all();
+        if let Some(watcher) = self.watcher.take() {
+            let _ = watcher.join();
+        }
+    }
+}
+
 /// The DACL of the pipe behind `file` in SDDL form, for tests and checks.
 pub fn dacl(file: &File) -> Result<String> {
     let handle = HANDLE(file.as_raw_handle());
@@ -382,6 +465,48 @@ mod tests {
         BufReader::new(&client).read_line(&mut answer).unwrap();
         assert_eq!(answer, "PING\n");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn l1_a_silent_client_cannot_hold_a_server_thread() {
+        let name = name();
+        let mut listener = Listener::bind(&name).unwrap();
+        let server = std::thread::spawn(move || {
+            let conn = listener.accept().unwrap();
+            let started = Instant::now();
+            let deadline = Deadline::new(Duration::from_millis(300)).unwrap();
+            let mut line = String::new();
+            let read = BufReader::new(&conn).read_line(&mut line);
+            drop(deadline);
+            (read.is_err(), started.elapsed())
+        });
+        // Connects and never sends.
+        let _client = connect(&name, Duration::from_secs(2)).unwrap().unwrap();
+        let (failed, took) = server.join().unwrap();
+        assert!(failed, "the read must fail at the deadline");
+        assert!(took < Duration::from_secs(5), "took {took:?}");
+
+        // A client that sends in time is not disturbed, and a deadline that
+        // was dropped does not touch later reads of the thread.
+        let name = super::tests::name();
+        let mut listener = Listener::bind(&name).unwrap();
+        let server = std::thread::spawn(move || {
+            let conn = listener.accept().unwrap();
+            let mut reader = BufReader::new(&conn);
+            let deadline = Deadline::new(Duration::from_secs(5)).unwrap();
+            let mut first = String::new();
+            reader.read_line(&mut first).unwrap();
+            drop(deadline);
+            let mut second = String::new();
+            reader.read_line(&mut second).unwrap();
+            (first, second)
+        });
+        let mut client = connect(&name, Duration::from_secs(2)).unwrap().unwrap();
+        client.write_all(b"one\n").unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        client.write_all(b"two\n").unwrap();
+        let (first, second) = server.join().unwrap();
+        assert_eq!((first.as_str(), second.as_str()), ("one\n", "two\n"));
     }
 
     #[test]

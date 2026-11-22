@@ -264,6 +264,7 @@ impl Host for RealHost {
             mode: mode.name(),
             mode_locked: locked,
             available: offer.as_ref().map(|o| o.version.clone()),
+            failed: offer.as_ref().is_some_and(|o| o.failed),
             blocked: offer.and_then(|o| o.blocked),
             last_check: record.last_check,
             error: record.error,

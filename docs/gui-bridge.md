@@ -63,7 +63,7 @@ a refused change leaves the file as it was.
 | `autostart` | `true`, `false`, or `null` when unknown. |
 | `applying` | A switch runs. |
 | `status` | The status line. |
-| `update` | `{version, mode, mode_locked, available, blocked, last_check, error, checking}`: the installed version; `auto`, `manual` or `off`; whether `KALTSTELLEN_UPDATE` decides; the newer version found by the last check or `null`; why this copy cannot install it (package manager, Program Files, development build) or `null`; seconds since 1970 of the last check or `null`; why the last check failed or `null`; whether a check started from the window runs. |
+| `update` | `{version, mode, mode_locked, available, blocked, failed, last_check, error, checking}`: the installed version; `auto`, `manual` or `off`; whether `KALTSTELLEN_UPDATE` decides; the newer version found by the last check or `null`; why this copy cannot install it (package manager, Program Files, development build) or `null`; whether that version did not start here before (then it is installed only with `install_update`, never automatically); seconds since 1970 of the last check or `null`; why the last check failed or `null`; whether a check started from the window runs. |
 
 ## Events and notices
 

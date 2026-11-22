@@ -35,7 +35,8 @@ pub const REPOSITORY: &str = "swallat/kaltstellen";
 pub const DEFAULT_SOURCE: &str = "https://api.github.com/repos/swallat/kaltstellen";
 /// Replaces [`DEFAULT_SOURCE`] (tests, a mirror).
 pub const SOURCE_ENV: &str = "KALTSTELLEN_UPDATE_URL";
-/// `on` or `off`; wins over `settings.json`.
+/// `auto`, `manual` or `off` (`on`, the earlier name, means `auto`); wins
+/// over `settings.json`.
 pub const MODE_ENV: &str = "KALTSTELLEN_UPDATE";
 
 const METADATA_LIMIT: usize = 4 << 20;

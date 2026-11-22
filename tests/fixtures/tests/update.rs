@@ -63,6 +63,12 @@ fn built_version() -> String {
 /// Serves `routes` (path to body) on loopback until the test process
 /// ends; anything else is 404.
 fn serve(routes: HashMap<String, Vec<u8>>) -> String {
+    serve_slow(routes, None)
+}
+
+/// [`serve`], but paths ending in `slow.0` wait `slow.1` before they answer
+/// (a download that takes a while).
+fn serve_slow(routes: HashMap<String, Vec<u8>>, slow: Option<(&'static str, Duration)>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {
@@ -79,6 +85,11 @@ fn serve(routes: HashMap<String, Vec<u8>>) -> String {
                 }
             }
             let path = first.split_whitespace().nth(1).unwrap_or("/");
+            if let Some((suffix, delay)) = slow
+                && path.ends_with(suffix)
+            {
+                std::thread::sleep(delay);
+            }
             let (status, body) = match routes.get(path) {
                 Some(body) => ("200 OK", body.clone()),
                 None => ("404 Not Found", Vec::new()),
@@ -98,6 +109,11 @@ fn serve(routes: HashMap<String, Vec<u8>>) -> String {
 /// A release `version` whose executable is `served`; `checksums.txt` holds
 /// the sum of `summed`. Returns the API base for `KALTSTELLEN_UPDATE_URL`.
 fn github(version: &str, served: &[u8], summed: &[u8]) -> String {
+    github_slow(version, served, summed, Duration::ZERO)
+}
+
+/// [`github`] whose executable takes `delay` to download.
+fn github_slow(version: &str, served: &[u8], summed: &[u8], delay: Duration) -> String {
     let arch = std::env::consts::ARCH;
     let name = format!("kaltstellen-{version}-windows-{arch}.exe");
     let sum = hash::hex(&hash::sha256(summed).unwrap());
@@ -109,7 +125,7 @@ fn github(version: &str, served: &[u8], summed: &[u8]) -> String {
     );
     // Two steps: start the server with the files, then add the metadata
     // that points at it.
-    let files = serve(routes);
+    let files = serve_slow(routes, (!delay.is_zero()).then_some((".exe", delay)));
     let latest = format!(
         r#"{{"tag_name":"v{version}","html_url":"{files}/page","draft":false,"prerelease":false,
             "assets":[{{"name":"{name}","browser_download_url":"{files}/dl/{name}"}},
@@ -267,6 +283,13 @@ impl Setup {
 
     /// Starts the tray from the copy and waits for its start-up recovery.
     fn start_tray(&mut self) {
+        self.start_tray_with(&[]);
+    }
+
+    /// [`Setup::start_tray`] with more environment, which the processes it
+    /// starts (the update, the next tray) inherit.
+    fn start_tray_with(&mut self, extra: &[(&str, &str)]) {
+        let before = self.log().matches("tray: recover finished").count();
         let mut command = Command::new(&self.exe);
         command
             .arg("tray")
@@ -275,8 +298,9 @@ impl Setup {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         self.env(&mut command);
+        command.envs(extra.iter().copied());
         self.tray = Some(command.spawn().unwrap());
-        self.wait_log("tray: recover finished", 1);
+        self.wait_log("tray: recover finished", before + 1);
     }
 
     fn file(&self, suffix: &str) -> Option<Vec<u8>> {
@@ -524,4 +548,88 @@ fn up1_automatic_install_waits_for_neutral_and_an_idle_tray() {
     assert_eq!(fs::read(&s.exe).unwrap(), s.original);
     assert!(s.tray.as_mut().unwrap().try_wait().unwrap().is_none());
     assert!(beating(&beat));
+}
+
+#[test]
+fn up1_automatic_install_gives_up_when_a_profile_starts_during_the_download() {
+    // A "new version" that passes the probe; the download takes a while.
+    let bad = fs::read(BAD_UPDATE).unwrap();
+    let mut s = Setup::new(github_slow("9.9.9", &bad, &bad, Duration::from_secs(6)));
+    let (_program, beat) = s.program();
+    s.start_tray_with(&[("KS_FAKE_VERSION", "9.9.9")]);
+    let pid = s.tray.as_ref().unwrap().id();
+    // Neutral and idle: the automatic install starts and downloads.
+    click(pid, ID_UPDATE_AUTO);
+    s.wait_log("tray: installing update 9.9.9 automatically", 1);
+    s.wait_log("tray: automatic update started", 1);
+    // Meanwhile a profile is switched on.
+    let (code, _, err) = s.run(&["switch", "play"], &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(frozen(&beat));
+    // When the download is done, the tray refuses to quit; the install
+    // gives up without changing anything.
+    s.wait_log("the tray is busy; it waits", 1);
+    s.wait_log("tried again later", 1);
+    assert!(s.tray.as_mut().unwrap().try_wait().unwrap().is_none());
+    assert!(frozen(&beat), "nothing was thawed");
+    assert_eq!(fs::read(&s.exe).unwrap(), s.original);
+    assert!(
+        wait_for(LONG, || s.bin_names().len() == 1),
+        "the staged file stays: {:?}",
+        s.bin_names()
+    );
+    let record = fs::read_to_string(s.data().join("update.json")).unwrap();
+    assert!(!record.contains("\"failed\""), "{record}");
+    // Back to neutral: the install runs again.
+    let (code, _, _) = s.run(&["switch", "neutral"], &[]);
+    assert_eq!(code, 0);
+    assert!(beating(&beat));
+    s.wait_log("tray: installing update 9.9.9 automatically", 2);
+    // This time the tray quits, but the new tray does not start: rolled
+    // back, and the version is remembered as failed.
+    s.wait_log("update: the previous tray runs again", 1);
+    s.wait_log("is not installed automatically again", 1);
+    assert_eq!(fs::read(&s.exe).unwrap(), s.original);
+    let record = fs::read_to_string(s.data().join("update.json")).unwrap();
+    assert!(record.contains("\"failed\": \"9.9.9\""), "{record}");
+}
+
+#[test]
+fn up1_a_version_that_did_not_start_is_never_installed_automatically_again() {
+    let bad = fs::read(BAD_UPDATE).unwrap();
+    let mut s = Setup::new(github("9.9.9", &bad, &bad));
+    let fake = [("KS_FAKE_VERSION", "9.9.9")];
+    s.start_tray_with(&fake);
+    let pid = s.tray.as_ref().unwrap().id();
+    click(pid, ID_UPDATE_AUTO);
+    // Installed, the new tray did not start, rolled back.
+    s.wait_log("update: the previous tray runs again", 1);
+    s.wait_log("is not installed automatically again", 1);
+    s.wait_log("tray: pipe ready", 2);
+    let old_tray = s.tray.as_mut().unwrap();
+    assert!(wait_for(LONG, || old_tray.try_wait().unwrap().is_some()));
+    assert_eq!(fs::read(&s.exe).unwrap(), s.original);
+    // The tray that runs again (started by the update) and any later one
+    // leave it alone, also after the next check.
+    drop(KillProgram(
+        s.exe.file_name().unwrap().to_string_lossy().into_owned(),
+    ));
+    s.start_tray_with(&fake);
+    let pid = s.tray.as_ref().unwrap().id();
+    click(pid, ID_UPDATE_AUTO);
+    s.wait_log("tray: update 9.9.9 did not start here before", 1);
+    assert_eq!(
+        s.log()
+            .matches("tray: installing update 9.9.9 automatically")
+            .count(),
+        1
+    );
+    // The automatic form refuses it too; on request it is still tried.
+    let (code, _, err) = s.run(&["update", "--unattended"], &fake);
+    assert_eq!(code, 1);
+    assert!(err.contains("did not start here before"), "{err}");
+    let (code, out, err) = s.run(&["update", "--force"], &fake);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(out.contains("downloading version 9.9.9"), "{out}");
+    assert!(err.contains("KS806"), "{err}");
 }

@@ -236,6 +236,7 @@ pub fn main() -> u8 {
             autostart_answer: None,
             update_started: None,
             update_waiting: None,
+            update_deferred: false,
         };
         app.refresh_autostart();
         app.ask_autostart_once();
@@ -299,6 +300,9 @@ struct App {
     /// already reported as waiting (each is logged once).
     update_started: Option<String>,
     update_waiting: Option<String>,
+    /// UP1: this tray refused `quit_if_idle` to the running automatic
+    /// install, which therefore gives up; it is started again later.
+    update_deferred: bool,
     /// L8: the answer to the start-at-sign-in question, while it is open.
     autostart_answer: Option<Receiver<bool>>,
 }
@@ -548,28 +552,47 @@ impl App {
         }
     }
 
+    /// UP1: `neutral` is active, no switch runs or waits, and the tray is
+    /// not quitting. Asked on this window thread, so the answer holds for
+    /// the request that is being handled.
+    fn idle_in_neutral(&self) -> bool {
+        self.status.is_neutral()
+            && self.controller.running().is_none()
+            && self.controller.pending().is_none()
+            && !self.controller.is_quitting()
+    }
+
     /// UP1: installs a found update by itself in mode `auto`, but only
     /// while `neutral` is active and no switch runs or waits, so nothing is
     /// thawed or disturbed. Otherwise it waits: it is tried again when the
-    /// tray returns to `neutral` and after every later check.
+    /// tray returns to `neutral` and after every later check. The install
+    /// itself asks again right before the tray quits (`quit_if_idle`).
+    /// A version that did not start here before is left alone.
     fn maybe_install_update(&mut self) {
         let Some(offer) = self.status.update.clone() else {
             return;
         };
-        let idle = self.controller.running().is_none()
-            && self.controller.pending().is_none()
-            && !self.controller.is_quitting();
+        if offer.failed {
+            if self.update_waiting.as_deref() != Some(offer.version.as_str()) {
+                info!(
+                    "tray: update {} did not start here before; it is not installed automatically",
+                    offer.version
+                );
+                self.update_waiting = Some(offer.version.clone());
+            }
+            return;
+        }
         let now = crate::update::may_install_now(
             self.status.update_mode,
             offer.blocked.is_none(),
             self.status.is_neutral(),
-            idle,
+            self.idle_in_neutral(),
         );
         if now {
             if self.update_started.as_deref() != Some(offer.version.as_str()) {
                 info!("tray: installing update {} automatically", offer.version);
                 self.update_started = Some(offer.version.clone());
-                update::install_unattended();
+                self.updates.install_unattended();
             }
         } else if self.status.update_mode == crate::update::Mode::Auto
             && offer.blocked.is_none()
@@ -725,7 +748,21 @@ impl App {
             reply,
             caller,
         } = incoming;
-        if command == Command::Quit {
+        if command == Command::QuitIfIdle && !self.idle_in_neutral() {
+            // UP1: a profile was switched on while the automatic install
+            // downloaded. It gives up; the tray starts it again later.
+            info!("tray: the automatic update asked to quit, but the tray is busy; it waits");
+            self.update_deferred = true;
+            let _ = reply.send(Body::Rejected {
+                exit_code: exit::ERRORS,
+                lines: vec![format!(
+                    "error: {}: a profile is active or a switch runs; the update waits for neutral",
+                    Code::UpdateTray
+                )],
+            });
+            return;
+        }
+        if matches!(command, Command::Quit | Command::QuitIfIdle) {
             // UP1: the updater quits the tray like the menu does (L2) and
             // gets the result once everything is resumed.
             info!("tray: command line asks to quit");
@@ -800,7 +837,9 @@ impl App {
                 )
             }
             Command::Recover { .. } => (Job::Recover, Vec::new()),
-            Command::Status | Command::Quit => unreachable!("answered above"),
+            Command::Status | Command::Quit | Command::QuitIfIdle => {
+                unreachable!("answered above")
+            }
         };
         info!("tray: command line asks for {job}");
         self.submit(job, Some(Waiter { reply, notes }));
@@ -864,6 +903,17 @@ impl window::Handler for App {
             update::log_result(self.status.update.as_ref());
             self.maybe_install_update();
             self.schedule_update();
+        }
+        if self.updates.install_ended() {
+            // The automatic install ended and this tray still runs: it gave
+            // up (busy, or an error), or the new version did not start and
+            // `update.json` says so now.
+            self.refresh_update();
+            if std::mem::take(&mut self.update_deferred) {
+                self.update_started = None;
+                self.update_waiting = None;
+                self.maybe_install_update();
+            }
         }
         self.redraw();
     }

@@ -34,6 +34,10 @@ fn caller_of(conn: &File) -> Option<Guest> {
     Some(Guest { pid, created })
 }
 
+/// How long a client may take to send its request, and to read the last
+/// reply. The request is one short line written right after connecting.
+pub const IDLE_CLIENT: Duration = Duration::from_secs(10);
+
 fn rejected(exit_code: u8, line: String) -> Body {
     Body::Rejected {
         exit_code,
@@ -85,9 +89,23 @@ fn send(conn: &mut File, body: Body) -> bool {
         .is_ok()
 }
 
+/// Waits until the client has read everything, then the connection closes;
+/// a client that stops reading gets [`IDLE_CLIENT`].
+fn finish(conn: &File) {
+    let _deadline = pipe::Deadline::new(IDLE_CLIENT);
+    let _ = conn.sync_all();
+}
+
 fn serve(mut conn: File, inbox: &Sender<Incoming>, wake: impl Fn()) {
     let mut line = String::new();
+    // A client that connects and never sends (or never ends its line) must
+    // not hold this thread for ever.
+    let deadline = pipe::Deadline::new(IDLE_CLIENT);
     let read = BufReader::new((&conn).take(protocol::MAX_LINE as u64)).read_line(&mut line);
+    drop(deadline);
+    if let Err(err) = &read {
+        info!("tray: pipe client sent no request: {err}");
+    }
     let request = match read {
         Ok(0) | Err(_) => return,
         Ok(_) => protocol::decode_request(line.trim_end()),
@@ -100,7 +118,7 @@ fn serve(mut conn: File, inbox: &Sender<Incoming>, wake: impl Fn()) {
                 &mut conn,
                 rejected(exit::UNREACHABLE, format!("error: {err}")),
             );
-            let _ = conn.sync_all();
+            finish(&conn);
             return;
         }
     };
@@ -123,7 +141,7 @@ fn serve(mut conn: File, inbox: &Sender<Incoming>, wake: impl Fn()) {
                 format!("error: {}: the tray is ending", Code::TrayUnreachable),
             ),
         );
-        let _ = conn.sync_all();
+        finish(&conn);
         return;
     }
     wake();
@@ -151,5 +169,5 @@ fn serve(mut conn: File, inbox: &Sender<Incoming>, wake: impl Fn()) {
         }
     }
     // Waits until the client has read everything, then the connection closes.
-    let _ = conn.sync_all();
+    finish(&conn);
 }

@@ -37,10 +37,14 @@ pub struct System {
     pub endpoints: Endpoints,
     pub data_dir: PathBuf,
     pub config_dir: Option<PathBuf>,
+    /// UP1 automatic install: the tray is asked with `quit_if_idle`, so it
+    /// quits only if it is idle in `neutral` at that moment; a refusal ends
+    /// the install at once. Without a tray nothing is recovered.
+    pub unattended: bool,
 }
 
 impl System {
-    pub fn current() -> Result<System> {
+    pub fn current(unattended: bool) -> Result<System> {
         let endpoints = Endpoints::current()?;
         let data_dir = crate::paths::data_dir()
             .ok_or_else(|| Error::new(Code::StateIo, "no data directory (LOCALAPPDATA unset)"))?;
@@ -48,6 +52,7 @@ impl System {
             endpoints,
             data_dir,
             config_dir: crate::paths::config_dir(),
+            unattended,
         })
     }
 
@@ -103,7 +108,6 @@ impl Session for System {
     }
 
     fn stop_tray(&mut self) -> Result<()> {
-        self.keep_offer();
         let refused = |why: String| {
             Error::new(
                 Code::UpdateTray,
@@ -112,6 +116,37 @@ impl Session for System {
                 ),
             )
         };
+        if self.unattended {
+            // Asked on the tray's window thread: it quits only if `neutral`
+            // is active and nothing runs or waits right now. A tray that
+            // does not know the request rejects it the same way.
+            return match client::request(&self.endpoints, PipeCommand::QuitIfIdle, || {}) {
+                Ok(Some(Body::Rejected { lines, .. })) => Err(Error::new(
+                    Code::UpdateTray,
+                    format!(
+                        "the tray stays ({}); nothing was changed, the update is tried again later",
+                        lines.join("; ")
+                    ),
+                )),
+                other => {
+                    if let Ok(Some(Body::Done(finished))) = &other {
+                        for error in &finished.errors {
+                            warn!("update: on quit: {error}");
+                        }
+                    }
+                    info!("update: tray accepted quit_if_idle: {other:?}");
+                    if self.wait_gone(QUIT_WAIT) {
+                        Ok(())
+                    } else {
+                        Err(refused(format!(
+                            "it still runs after {} s",
+                            QUIT_WAIT.as_secs()
+                        )))
+                    }
+                }
+            };
+        }
+        self.keep_offer();
         match client::request(&self.endpoints, PipeCommand::Quit, || {}) {
             Ok(Some(Body::Done(finished))) => {
                 for error in &finished.errors {
@@ -141,6 +176,14 @@ impl Session for System {
     }
 
     fn recover(&mut self) -> Result<Option<String>> {
+        if self.unattended {
+            // The tray that started this install has ended meanwhile (quit
+            // from its menu): installing is left to the next tray.
+            return Err(Error::new(
+                Code::UpdateTray,
+                "the tray has ended; the automatic update needs it and changed nothing",
+            ));
+        }
         let store = Store::new(&self.data_dir);
         let _lock = store.lock()?;
         let (mut state, _) = store.load();
@@ -190,6 +233,13 @@ impl Session for System {
                 ));
             }
             sleep(Duration::from_millis(200));
+        }
+    }
+
+    fn did_not_start(&mut self, version: &str) {
+        match crate::update::record::mark_failed(&self.data_dir, version) {
+            Ok(()) => info!("update: version {version} is not installed automatically again"),
+            Err(err) => warn!("update: {err}"),
         }
     }
 

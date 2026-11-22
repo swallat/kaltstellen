@@ -276,6 +276,8 @@ pub struct UpdateOffer {
     /// Why this copy cannot install it (package manager, folder,
     /// development build); `None` if it can.
     pub blocked: Option<String>,
+    /// It did not start here before: offered, never installed by itself.
+    pub failed: bool,
 }
 
 impl Default for Status {
@@ -530,15 +532,24 @@ impl Menu {
             Some(UpdateOffer {
                 version,
                 blocked: None,
+                failed,
             }) => menu.entry(
                 ID_UPDATE_INSTALL,
-                format!("Install &update {}…", escape(version)),
+                if *failed {
+                    format!(
+                        "Install &update {}… (did not start last time)",
+                        escape(version)
+                    )
+                } else {
+                    format!("Install &update {}…", escape(version))
+                },
                 false,
                 Command::InstallUpdate,
             ),
             Some(UpdateOffer {
                 version,
                 blocked: Some(how),
+                ..
             }) => menu.disabled(truncate(
                 &format!("Update {} available: {}", escape(version), escape(how)),
                 100,
@@ -796,6 +807,7 @@ mod tests {
             update: Some(UpdateOffer {
                 version: "1.2.0".into(),
                 blocked: None,
+                failed: false,
             }),
             ..Status::default()
         };
@@ -824,11 +836,23 @@ mod tests {
             menu.command(ID_UPDATE_OFF),
             Some(&Command::UpdateMode(crate::update::Mode::Off))
         );
+        // It did not start last time: still offered on request, and says so.
+        status.update.as_mut().unwrap().failed = true;
+        let menu = Menu::build(&[], &status);
+        assert_eq!(
+            labels(&menu)[2],
+            "Install &update 1.2.0… (did not start last time)"
+        );
+        assert_eq!(
+            menu.command(ID_UPDATE_INSTALL),
+            Some(&Command::InstallUpdate)
+        );
         // Not installable here: a disabled line that says how instead; the
         // environment fixes the mode.
         status.update = Some(UpdateOffer {
             version: "1.2.0".into(),
             blocked: Some("installed by scoop: scoop update kaltstellen".into()),
+            failed: false,
         });
         status.update_mode = crate::update::Mode::Off;
         status.update_locked = true;

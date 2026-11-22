@@ -76,6 +76,7 @@ function renderUpdate() {
   if (u.checking) text = 'Checking for a newer version…';
   else if (u.error) text = `Last check failed: ${u.error}`;
   else if (u.available && u.blocked) text = `Version ${u.available} is available; ${u.blocked}.`;
+  else if (u.available && u.failed) text = `Version ${u.available} did not start here last time; it is installed only on request.`;
   else if (u.available) text = `Version ${u.available} is available.`;
   else if (u.last_check) text = `Up to date (checked ${when(u.last_check)}).`;
   else text = 'Not checked yet.';
