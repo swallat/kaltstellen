@@ -4,6 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets the release workflow run the same checks before it builds.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -11,13 +20,35 @@ env:
 jobs:
   check:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The toolchain (version, rustfmt, clippy) is fixed in rust-toolchain.toml.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo fmt --all --check
       - name: unsafe only in src/process.rs and src/win32/ (Q4)
         shell: bash
         run: scripts/check-unsafe.sh
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: cargo test, and the tests that need a desktop really ran
+        shell: bash
+        run: |
+          # The window tests print "skipped" when no interactive desktop is
+          # there. On the runner they must run, or CI proves less than it says.
+          cargo test --workspace --locked -- --nocapture 2>&1 | tee test.log
+          if grep -n "skipped: no interactive desktop" test.log; then
+            echo "::error::window tests were skipped on this runner"
+            exit 1
+          fi
+      - name: Release build starts and reports its version
+        shell: bash
+        run: |
+          cargo build --release --locked
+          # A development build: placeholder or last tag, plus the commit hash.
+          out=$(target/release/kaltstellen.exe --version | head -n 1 | tr -d '\r')
+          echo "$out"
+          echo "$out" | grep -Eq '^kaltstellen [0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?\+[0-9a-f]{7,}$'
+          test "$(target/release/kaltstellen.exe -v | head -n 1 | tr -d '\r')" = "$out"

@@ -43,7 +43,8 @@ fn kaltstellen_exe() -> PathBuf {
     exe
 }
 
-/// The version the built executable reports.
+/// The version the built executable reports, without the build metadata
+/// (`+<commit>`) a development build appends.
 fn built_version() -> String {
     let out = Command::new(kaltstellen_exe())
         .arg("--version")
@@ -53,6 +54,9 @@ fn built_version() -> String {
         .trim()
         .strip_prefix("kaltstellen ")
         .expect("kaltstellen <version>")
+        .split('+')
+        .next()
+        .unwrap_or_default()
         .to_owned()
 }
 

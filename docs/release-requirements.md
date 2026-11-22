@@ -1,6 +1,7 @@
 # What a release must contain for the updater
 
-Input for the later CI/CD work; nothing here exists yet. The client side is
+Implemented by `.github/workflows/release.yml` (see [releasing.md](releasing.md));
+signing and the ARM64 build are still open. The client side is
 described in [spec.md](spec.md) UP1 and implemented in `src/update/`. A
 release that follows this page is picked up by every client that has the
 updater, without changing the client.
@@ -9,10 +10,11 @@ updater, without changing the client.
 
 - Tag `v<version>`, for example `v1.2.0`. `<version>` is
   `MAJOR.MINOR.PATCH`, optionally `-<pre-release>` (`v1.2.0-beta.1`).
-- The version in `Cargo.toml` must equal the tag without `v`: the updater
-  starts the downloaded file with `--version` and refuses it unless it
-  prints exactly `kaltstellen <version>`. The workflow should check this
-  before building.
+- The executable must report the version of the tag: the updater starts the
+  downloaded file with `--version` and refuses it unless the first line is
+  `kaltstellen <version>` (build metadata after a `+` is ignored). The
+  workflow writes the tag's version into `Cargo.toml` before building and
+  checks the output.
 - A tag with `-` is published as a GitHub *pre-release*. `releases/latest`
   leaves pre-releases out, so only clients that run a pre-release see them.
 - Drafts are ignored by the updater; publish the release only when all files

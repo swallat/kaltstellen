@@ -25,7 +25,7 @@ use crate::settings;
 use release::Release;
 
 /// The version of this executable.
-pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
+pub const CURRENT: &str = env!("KALTSTELLEN_VERSION");
 /// Built by the release workflow (`KALTSTELLEN_RELEASE=1`). Anything else is
 /// a development build, which does not update itself (UP1 "Versions").
 pub const RELEASE_BUILD: bool = option_env!("KALTSTELLEN_RELEASE").is_some();
@@ -102,7 +102,15 @@ impl Source {
 /// The newest release for a program of version `current`: `latest`, or
 /// for a running pre-release the highest of the recent releases.
 pub fn latest(fetch: &dyn Fetch, source: &Source, current: &str) -> Result<Release> {
-    let pre = version::Version::parse(current).is_some_and(|v| v.is_pre_release());
+    // A development build (`1.2.1-dev.5+hash`, see build.rs) is a pre-release
+    // by its version, but it follows the stable channel like the release it
+    // grew from.
+    let development = current
+        .split('+')
+        .next()
+        .and_then(|v| v.split_once('-'))
+        .is_some_and(|(_, pre)| pre.split('.').any(|id| id == "dev"));
+    let pre = !development && version::Version::parse(current).is_some_and(|v| v.is_pre_release());
     let url = if pre {
         format!("{}/releases?per_page=30", source.base)
     } else {
@@ -418,10 +426,19 @@ mod tests {
     #[test]
     fn up1_check_records_success_and_failure() {
         let dir = tempfile::tempdir().unwrap();
-        let fake = Fake(HashMap::from([(
-            "http://127.0.0.1:1/repos/o/r/releases/latest".to_owned(),
-            Ok(br#"{"tag_name":"v9.9.9","html_url":"https://page"}"#.to_vec()),
-        )]));
+        // `check` asks for this build's own version: a development build
+        // (`1.2.1-dev.5+hash`) counts as a pre-release and reads the list,
+        // a release build reads `latest`. Serve both.
+        let fake = Fake(HashMap::from([
+            (
+                "http://127.0.0.1:1/repos/o/r/releases/latest".to_owned(),
+                Ok(br#"{"tag_name":"v9.9.9","html_url":"https://page"}"#.to_vec()),
+            ),
+            (
+                "http://127.0.0.1:1/repos/o/r/releases?per_page=30".to_owned(),
+                Ok(br#"[{"tag_name":"v9.9.9","html_url":"https://page"}]"#.to_vec()),
+            ),
+        ]));
         check(&fake, &source(), Some(dir.path())).unwrap();
         let (rec, _) = record::load(dir.path());
         assert_eq!(rec.latest.as_deref(), Some("9.9.9"));

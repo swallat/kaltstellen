@@ -197,7 +197,9 @@ pub fn install(
     })?;
     let expected = format!("kaltstellen {}", release.version);
     match session.version_of(&files.new) {
-        Ok(line) if line.trim() == expected => {}
+        // Build metadata (`+<commit>`, which development builds append) is
+        // not part of the version (semver) and is ignored here.
+        Ok(line) if line.trim().split('+').next() == Some(expected.as_str()) => {}
         outcome => {
             let _ = fs::remove_file(&files.new);
             let what = match outcome {
