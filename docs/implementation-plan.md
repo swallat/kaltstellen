@@ -118,7 +118,7 @@ WP7 ─ WP10 GUI process ─ WP11 unassigned programs ─ M3 done
 
 - Services (A5): stop and start by name, via an elevated helper started on demand, never an elevated tray (decided). Needs a design note for the helper's pipe and its authentication before work starts.
 - Automatic triggers (U4): trigger processes, conflict rules (two triggers at once, manual versus automatic), and the question of whether auto-activation is wanted at all. Needs a fresh decision round.
-- Candidates after that: release builds, drag and drop, per-entry failure markers, user-extendable warn list (all post-v1, decided).
+- Candidates after that: release builds, user-extendable warn list (post-v1, decided). Drag and drop (M2) and per-entry failure markers (M5) were built early on the owner's request on 2026-11-23.
 
 ## Cross-cutting
 

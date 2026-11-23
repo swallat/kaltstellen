@@ -56,7 +56,7 @@ Every reply has `version` and `reply`.
 | `done` | yes | `exit_code`, `active_profile` (absent if nothing could be attempted), `notes`, `events` (`step`, `program`, `pid`), `errors`, `profiles` (for exit code 4) | Printed exactly like an in-process run. |
 | `superseded` | yes | `by` (profile of the later request) | Exit code 3, `KS402` (W3). |
 | `rejected` | yes | `exit_code`, `lines` | Lines on stderr, then that exit code: 2 for an invalid configuration, 5 while the tray quits or for a protocol error. |
-| `status` | yes | `state` (as in `state.json`), `running`, `waiting` | Printed like an in-process `status`, plus `tray: running …` / `tray: waiting …` lines. |
+| `status` | yes | `state` (as in `state.json`), `running`, `waiting`, `last_switch` | Printed like an in-process `status`, plus `tray: running …` / `tray: waiting …` lines. `last_switch` (added within version 1, absent when empty) is for the main window's failure markers (M5): `{profile, errors}`, the profile the last switch made active and its errors that name a program and are not resolved yet (L9; the tray checks again before it answers), each `{code, program, path?, text}`, at most 32. The command line does not print it. |
 
 ```json
 {"version":1,"reply":"accepted","waiting":true}

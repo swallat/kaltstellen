@@ -7,7 +7,28 @@ reasoning is. Implementation choices made without the owner are marked
 
 ## Open
 
-None. Everything the owner has not decided yet is deferred (below).
+Details chosen while building M2 drag and drop and M5 failure markers,
+which the owner asked for on 2026-11-23 (spec section 8):
+
+1. **M5 where the markers come from**: the tray's error state (L9) over the
+   pipe (`status` gets the field `last_switch`); no copy in `state.json`.
+   Without a running tray, no markers.
+2. **M5 when they refresh**: when the page asks for its state (start, the
+   window getting the focus again) and when a switch from the window has
+   ended; the tray re-checks L9 resolution before it answers. The window
+   waits at most 0.5 s for a busy pipe and not for a starting tray.
+3. **M5 which entries**: only the profile the last switch made active;
+   matched by executable name, and by path where both the error and the
+   entry have one (failed starts). Errors without a program or of child
+   processes under their own name get no marker.
+4. **M5 look**: a red mark with the code and a few words per error
+   (`KS110 start failed`), the full error as tooltip, a red edge on the row.
+5. **M2 drop target**: anywhere in the window while a profile is shown,
+   including the open `Add a program` dialog; nothing during other
+   dialogs; at most 64 files per drop; shortcuts (`.lnk`) are refused like
+   other non-`.exe` files instead of being resolved.
+6. **M2 navigation**: the page takes every drop, so the WebView never opens
+   a dropped file; the existing navigation guard stays as the second line.
 
 ## Deferred by the owner on 2026-11-23
 
