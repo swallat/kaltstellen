@@ -99,6 +99,12 @@ Results land in `local/compat-results/`. The whole `local/` folder is ignored
 by Git, because results, exclude lists and personal profiles describe one
 particular machine.
 
+`scripts/beta-test.ps1` guides through the beta test plan
+([docs/beta-test.md](docs/beta-test.md), "Scripted run"): it installs a
+release, backs up your configuration, prepares each test with programs you
+list, checks what can be checked automatically, asks about the rest, and
+puts everything back with `teardown`.
+
 ## Build
 
 Requires Windows and a stable Rust toolchain.
