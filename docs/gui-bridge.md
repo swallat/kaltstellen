@@ -143,9 +143,9 @@ stay. No tray running at all is an answer: no markers.
   name stay in the status line and the tray menu only.
 - Markers go when the tray drops the error: when its cause is gone (L9:
   the program runs again or no longer runs; the tray checks this before it
-  answers) or when the next switch replaces the list. An error that names
-  a path (a failed start) is not resolved by name: the snapshot has no
-  image paths (A7), so it stays until the next switch.
+  answers) or when the next switch replaces the list. A failed start
+  resolves only when the program runs from the path it was started from,
+  so a program of the same name from another folder does not clear it.
 - Without a running tray (`kaltstellen gui` alone, the switch runs
   in-process) there are no markers; the status line reports the switch as
   before.

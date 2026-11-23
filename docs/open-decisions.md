@@ -39,10 +39,6 @@ which the owner asked for on 2026-11-23 (spec section 8):
 7. **M2 status of a drop**: the summary of a drop becomes the host's
    status line (`drop_done`), so it survives a refresh; refusals the page
    shows itself stay until the next action of the user.
-8. **L9 for errors with a path**: a failed start names its path, and the
-   snapshot has no image paths (A7), so such an error is not resolved by a
-   process of the same name; it stays (with the red tray icon) until the
-   next switch.
 
 ## Deferred by the owner on 2026-11-23
 

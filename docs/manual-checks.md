@@ -116,9 +116,10 @@ main session made them; they show the views below in light and dark.
     with `KS110 start failed`; hovering it shows the whole error as in the
     tray menu; the row has a red edge. Other entries and other profiles
     show nothing. Put a program at that path and start it by hand, then
-    click into another window and back into kaltstellen: the marker stays
-    (an error with a path waits for the next switch, as in the tray's
-    menu). Apply the profile again: it is clean and the marker goes. With
+    click into another window and back into kaltstellen: the marker is
+    gone, as in the tray's error list. A program of the same name started
+    from another folder does not clear it. A clean switch removes all
+    markers. With
     a `suspend` entry whose freeze fails (an elevated program): its
     marker goes once that program is closed and the window gets the focus
     again. Switch profiles from the tray menu while the window is open but
