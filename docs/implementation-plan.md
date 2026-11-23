@@ -1,6 +1,6 @@
 # kaltstellen implementation plan (draft)
 
-Basis: [spec.md](spec.md) (v1.1). Milestones M1 to M3 are planned in detail, M4 roughly. Items marked **[assumed]** are the planner's defaults, to be confirmed.
+Basis: [spec.md](spec.md) (v1.1). Milestones M1 to M3 are planned in detail, M4 roughly. Items marked **[assumed]** are the planner's defaults from when the plan was written; they are historical, and the current status of every decision is in [spec.md](spec.md) and [open-decisions.md](open-decisions.md).
 
 Conventions: each work package (WP) lists the requirement IDs it covers, its dependencies, the acceptance tests (T-numbers from spec section 10), and concrete steps on the test VM. All `unsafe` code stays in `src/process.rs` and, since WP7, the Win32 wrapper tree `src/win32/` (Q4); other modules call their safe functions. English in code and docs, no machine-specific names in the repository.
 

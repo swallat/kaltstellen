@@ -4,7 +4,8 @@ Status: **decided** by the owner on 2026-11-23: the direction, and all open
 points of this note (section "Decided details"). To be built **after
 version 1**; nothing of this is implemented, version 1 is manual only (spec
 section 1, U5). The details the author proposed (priority form, takeover,
-debounce, poll interval) were confirmed by the owner the same day.
+equal priority keeping the first, debounce, poll interval) were confirmed
+by the owner the same day.
 
 ## Decided
 

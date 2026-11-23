@@ -22,7 +22,7 @@ Decided to be settled later, at the point named:
    to be decided in detail later.
 3. **Update signing (UP1)**: integrity by SHA-256 from `checksums.txt` only
    for now. Signing (Authenticode certificate or an own key pair) is decided
-   with the first release.
+   together with the release pipeline.
 
 ## Assumptions confirmed by the owner on 2026-11-23
 
@@ -112,7 +112,7 @@ The author's defaults, confirmed as built:
   the tray quits (`quit_if_idle`); no automatic install while the session
   ends; one install at a time. A version that could not be installed after
   it was verified is **tried again regularly**, not over and over (waits:
-  1, 2, 4, then 7 days, confirmed below): the tray's timer tries it when the
+  1, 2, 4, then 7 days, confirmed above): the tray's timer tries it when the
   wait ends; on request it can be installed at any time.
 - **UP1 in the main window**: a section `Updates` at the bottom of the
   sidebar; the window checks by running `kaltstellen update --check
