@@ -124,6 +124,72 @@ function optionsText(e) {
   return parts.join(' · ');
 }
 
+
+// Program icons (M2) ----------------------------------------------------------
+
+/** CSS pixels of a program icon; the host gets device pixels. */
+const ICON_SIZE = 20;
+/** `exe|path|size` to a `data:` URL, or null when the program has none. */
+const iconCache = new Map();
+
+function iconKey(exe, path, size) {
+  return `${exe.toLowerCase()}|${(path || '').toLowerCase()}|${size}`;
+}
+
+function iconSize() {
+  return Math.min(256, Math.max(16, Math.round(ICON_SIZE * (window.devicePixelRatio || 1))));
+}
+
+/** A placeholder of the icon's size; `loadIcons` puts the icon in. */
+function programIcon(exe, path) {
+  const holder = el('span', { class: 'icon', 'aria-hidden': 'true' });
+  holder.dataset.exe = exe;
+  if (path) holder.dataset.path = path;
+  return holder;
+}
+
+function showIcon(holder, url) {
+  if (!url) return;
+  holder.replaceChildren(el('img', { src: url, alt: '', width: ICON_SIZE, height: ICON_SIZE }));
+  holder.classList.add('loaded');
+}
+
+/** Fills every icon placeholder in `root`: known ones at once, the rest
+ * with one request. A missing icon leaves the placeholder. */
+async function loadIcons(root) {
+  const size = iconSize();
+  const waiting = [];
+  for (const holder of root.querySelectorAll('span.icon:not(.loaded)')) {
+    const key = iconKey(holder.dataset.exe, holder.dataset.path, size);
+    if (iconCache.has(key)) showIcon(holder, iconCache.get(key));
+    else waiting.push(holder);
+  }
+  if (waiting.length === 0) return;
+  const programs = [];
+  const seen = new Map();
+  for (const holder of waiting) {
+    const key = iconKey(holder.dataset.exe, holder.dataset.path, size);
+    if (seen.has(key)) continue;
+    seen.set(key, programs.length);
+    const program = { exe: holder.dataset.exe };
+    if (holder.dataset.path) program.path = holder.dataset.path;
+    programs.push(program);
+  }
+  for (let start = 0; start < programs.length; start += 256) {
+    const batch = programs.slice(start, start + 256);
+    // Not through `call`: icons change no state and report no errors.
+    const reply = await request('icons', { programs: batch, size });
+    if (!reply.ok) continue;
+    batch.forEach((program, i) => {
+      iconCache.set(iconKey(program.exe, program.path, size), reply.data[i] ?? null);
+    });
+  }
+  for (const holder of waiting) {
+    if (holder.isConnected) {
+      showIcon(holder, iconCache.get(iconKey(holder.dataset.exe, holder.dataset.path, size)));
+    }
+  }
+}
 function renderDetail() {
   const profile = current();
   $('empty').hidden = !!profile;
@@ -140,13 +206,15 @@ function renderDetail() {
   $('apply').textContent = state.applying ? 'Applying…' : 'Apply profile';
 
   const rows = profile.entries.map((e, index) => el('tr', {},
-    el('td', {}, el('span', { class: 'exe', text: e.exe }), e.path ? el('span', { class: 'path', text: e.path }) : null),
+    el('td', {}, el('div', { class: 'program' }, programIcon(e.exe, e.path),
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: e.exe }), e.path ? el('span', { class: 'path', text: e.path }) : null))),
     el('td', {}, el('span', { class: `action ${e.action}`, text: actionLabel[e.action] })),
     el('td', { class: 'opts', text: optionsText(e) }),
     el('td', {},
       el('button', { type: 'button', class: 'button small', 'aria-label': `Edit ${e.exe}`, onclick: () => editEntry(index), text: 'Edit' }),
       el('button', { type: 'button', class: 'button small danger', 'aria-label': `Remove ${e.exe}`, onclick: () => removeEntry(index), text: 'Remove' }))));
   $('entries').tBodies[0].replaceChildren(...rows);
+  loadIcons($('entries'));
   $('entries').hidden = rows.length === 0;
   $('entries-empty').hidden = rows.length !== 0;
   renderUnassigned();
@@ -154,12 +222,14 @@ function renderDetail() {
 
 function renderUnassigned() {
   const rows = unassigned.map((u) => el('tr', {},
-    el('td', {}, el('span', { class: 'exe', text: u.exe }), u.path ? el('span', { class: 'path', text: u.path }) : null),
+    el('td', {}, el('div', { class: 'program' }, programIcon(u.exe, u.path),
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: u.exe }), u.path ? el('span', { class: 'path', text: u.path }) : null))),
     el('td', {}, u.new ? el('span', { class: 'tag new', text: 'new' }) : 'earlier'),
     el('td', {},
       el('button', { type: 'button', class: 'button small', 'aria-label': `Add ${u.exe}`, onclick: () => addProgram(u.exe, null), text: 'Add' }),
       el('button', { type: 'button', class: 'button small', 'aria-label': `Dismiss ${u.exe}`, onclick: () => dismiss(u.exe), text: 'Dismiss' }))));
   $('unassigned').tBodies[0].replaceChildren(...rows);
+  loadIcons($('unassigned'));
   $('unassigned').hidden = rows.length === 0;
   $('unassigned-empty').hidden = rows.length !== 0;
 }
@@ -320,7 +390,7 @@ async function openAdd() {
   const reply = await call('running');
   const running = reply.ok ? reply.data : [];
   const rows = running.map((p) => el('tr', {},
-    el('td', { class: 'exe', text: p.exe }),
+    el('td', {}, el('div', { class: 'program' }, programIcon(p.exe, null), el('span', { class: 'exe', text: p.exe }))),
     el('td', { class: 'num', text: megabytes(p.private_bytes) }),
     el('td', { class: `protection ${p.protection}`, text: protectionText[p.protection] }),
     el('td', {}, el('button', {
@@ -330,6 +400,7 @@ async function openAdd() {
       text: 'Add',
     }))));
   $('running').tBodies[0].replaceChildren(...rows);
+  loadIcons($('running'));
   openDialog($('add-dialog'));
 }
 
@@ -413,7 +484,7 @@ globalThis.kaltstellenDrive = async (steps) => {
       event = await new Promise((resolve) => onEvent((e) => { if (e.event === 'applied') resolve(e); }));
     }
     adopt((event || reply).state);
-    results.push({ type, ok: reply.ok, error: reply.error || null, status: (event || reply).state.status });
+    results.push({ type, ok: reply.ok, error: reply.error || null, status: (event || reply).state.status, data: reply.data ?? null });
   }
   await loadUnassigned();
   await settle();

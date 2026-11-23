@@ -41,6 +41,7 @@ control characters; paths must be absolute.
 | `set_update_mode` | `mode`: `"auto"`, `"manual"` or `"off"` | Saves the update mode in `settings.json` (UP1). Refused while `KALTSTELLEN_UPDATE` decides. A mode that checks starts a check at once, as `check_updates`. |
 | `check_updates` | | Runs `kaltstellen update --check --quiet` in the background (the one network access, UP1); the end arrives as the `update_checked` event. One check at a time. |
 | `install_update` | | Opens a console window with `kaltstellen update`, as the tray's `Install update…`. Refused when no newer version is known or this copy cannot update itself. |
+| `icons` | `programs`: up to 256 `{exe, path?}`; `size`: 16 to 256 device pixels | `data`: one PNG `data:` URL or `null` per program, in the same order (M2). The file is the image of a running process of that name in this session (read with `PROCESS_QUERY_LIMITED_INFORMATION` only), else `path`; its icon resource is read as data (`SHDefExtractIconW`), no code of the file runs. Kept per file and size while the window is open. `null` (no file, no icon, not readable) is never an error; the page shows a placeholder of the same size. The page asks for its icon size times `devicePixelRatio`, so icons are sharp at every scaling; the CSP needs nothing beyond `img-src data:`. |
 
 Every change is validated with `config::parse` and saved atomically at once;
 a refused change leaves the file as it was. A change that the configuration

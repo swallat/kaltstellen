@@ -11,6 +11,7 @@ pub mod console;
 pub mod dialog;
 pub mod hash;
 pub mod http;
+pub mod icon;
 pub mod instance;
 pub mod pipe;
 pub mod registry;

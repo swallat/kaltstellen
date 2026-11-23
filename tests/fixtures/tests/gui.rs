@@ -185,15 +185,27 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
     let _a = Fixture::spawn(str_of(&exe), &[str_of(&beat)]);
     assert!(beating(&beat));
 
-    let steps = r#"[
-        {"type": "create_profile", "name": "play"},
-        {"type": "add_entry", "profile": "play", "exe": "ks-wv-a.exe"},
-        {"type": "set_hotkey", "profile": "play", "hotkey": "Ctrl+Alt+Banana"},
-        {"type": "set_update_mode", "mode": "off"},
-        {"type": "install_update"},
-        {"type": "apply", "profile": "play"},
-        {"type": "add_entry", "profile": "play", "exe": "explorer.exe"}
-    ]"#;
+    // M2: icons through the real host: one from a system program, none for
+    // a name that neither runs nor has a path.
+    let notepad = std::path::Path::new(&std::env::var("SystemRoot").unwrap())
+        .join("System32")
+        .join("notepad.exe");
+    let notepad = serde_json::to_string(notepad.to_str().unwrap()).unwrap();
+    let steps = format!(
+        r#"[
+        {{"type": "create_profile", "name": "play"}},
+        {{"type": "add_entry", "profile": "play", "exe": "ks-wv-a.exe"}},
+        {{"type": "set_hotkey", "profile": "play", "hotkey": "Ctrl+Alt+Banana"}},
+        {{"type": "set_update_mode", "mode": "off"}},
+        {{"type": "install_update"}},
+        {{"type": "apply", "profile": "play"}},
+        {{"type": "add_entry", "profile": "play", "exe": "explorer.exe"}},
+        {{"type": "icons", "size": 32, "programs": [
+            {{"exe": "notepad.exe", "path": {notepad}}},
+            {{"exe": "ks-no-such-program.exe"}}
+        ]}}
+    ]"#
+    );
     fs::write(world.path("steps.json"), steps).unwrap();
     let png = world.path("after.png");
     let (output, webview) = run_window(
@@ -225,7 +237,7 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
         .collect();
     assert_eq!(
         ok,
-        vec![true, true, false, true, false, true, false],
+        vec![true, true, false, true, false, true, false, true],
         "{results}"
     );
     assert!(
@@ -244,6 +256,13 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
         "{results}"
     );
     assert_eq!(results[5]["status"], "Applied \"play\".", "{results}");
+    assert!(
+        results[7]["data"][0]
+            .as_str()
+            .is_some_and(|u| u.starts_with("data:image/png;base64,")),
+        "{results}"
+    );
+    assert!(results[7]["data"][1].is_null(), "{results}");
 
     let config = world.config();
     assert!(config.starts_with("# Owner's notes stay."), "{config}");
@@ -300,7 +319,8 @@ fn wp10_screenshot_views_render_in_both_themes() {
             image.starts_with(b"\x89PNG") && image.len() > 10_000,
             "{view}-{theme}"
         );
-        assert!(wait_for(Duration::from_secs(15), || alive(&webview).is_empty()));
+        // Three windows of the parallel tests may share the machine.
+        assert!(wait_for(Duration::from_secs(30), || alive(&webview).is_empty()));
     }
 }
 
