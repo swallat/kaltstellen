@@ -92,7 +92,10 @@ cover. Each is marked `[assumed]` in spec L12 or C9:
    after the time Windows shows a notification plus 60 s without an event.
    Known limits: the count can still be off when the shell drops messages,
    and a user who closes the newer of two stacked notifications leaves the
-   older one counted as the only one; the menu item is the reliable path.
+   older one counted as the only one; a notification that stays on screen
+   longer than that time (or across sleep) is no longer counted, so its
+   click does nothing; the duration is read when the tray starts. The menu
+   item is the reliable path.
 9. **S5 offer** (L12, L7): an automatic switch does not use up the offer;
    when the profile from before the trigger was `neutral`, the earlier
    offer stays.

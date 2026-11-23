@@ -588,7 +588,12 @@ $('new-profile').addEventListener('click', () => nameDialog('New profile', '', a
 $('rename').addEventListener('click', () => {
   const from = current().name;
   nameDialog('Rename profile', from, async (to) => {
+    // An unsaved trigger edit moves with the profile to its new name.
+    if (triggerDraft && triggerDraft.profile.toLowerCase() === from.toLowerCase()) {
+      triggerDraft.profile = to.trim();
+    }
     const reply = await call('rename_profile', { from, to });
+    if (!reply.ok && triggerDraft && triggerDraft.profile === to.trim()) triggerDraft.profile = from;
     if (reply.ok) await select(to.trim());
     return reply;
   });
@@ -640,13 +645,18 @@ $('triggers-form').addEventListener('submit', async (event) => {
   const triggers = $('triggers').value.split(/\r?\n/).map((t) => t.trim()).filter(Boolean);
   // Kept while the request runs: the reply re-renders the fields.
   keepTriggerDraft();
-  const reply = await call('set_triggers', { profile: current().name, triggers, priority });
+  const profile = current().name;
+  const reply = await call('set_triggers', { profile, triggers, priority });
+  // Another profile may be shown by now: its fields are not touched.
+  if (current()?.name !== profile) return;
   if (reply.ok) {
     triggerDraft = null;
     renderDetail();
   } else {
-    keepTriggerDraft('triggers');
-    $('triggers').setAttribute('aria-invalid', 'true');
+    // The field the refusal is about.
+    const field = /priority/i.test(reply.error || '') ? 'priority' : 'triggers';
+    keepTriggerDraft(field);
+    $(field).setAttribute('aria-invalid', 'true');
   }
 });
 
