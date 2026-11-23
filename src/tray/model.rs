@@ -561,8 +561,9 @@ pub enum Command {
     InstallUpdate,
     /// U4: pauses or resumes all triggers.
     ToggleAutomatic,
-    /// U4: `Back to <previous>` after an automatic switch.
-    BackTo,
+    /// U4: `Back to <previous>` after an automatic switch, with the
+    /// target the menu showed.
+    BackTo(String),
     Quit,
 }
 
@@ -621,9 +622,9 @@ impl Menu {
         if let Some(previous) = &status.back_to {
             menu.entry(
                 ID_BACK,
-                format!("&Back to {}", escape(previous)),
+                truncate(&format!("&Back to {}", escape(previous)), 100),
                 false,
-                Command::BackTo,
+                Command::BackTo(previous.clone()),
             );
             menu.items.push(Item::Separator);
         }
@@ -819,6 +820,76 @@ impl Menu {
 /// A `&` in a menu label marks the access key; show a literal one.
 fn escape(label: &str) -> String {
     label.replace('&', "&&")
+}
+
+/// U4: the profile `Back to` switches to. `current` is the way back of the
+/// last automatic switch now; `shown` the target the menu item showed when
+/// it was chosen (`None` for the notification click, which always means
+/// the current one). A menu chosen while a later automatic switch changed
+/// the way back does nothing, so the switch never differs from its label.
+pub fn back_target(current: Option<&str>, shown: Option<&str>) -> Option<String> {
+    let current = current?;
+    match shown {
+        Some(shown) if !same_profile(shown, current) => None,
+        _ => Some(current.to_owned()),
+    }
+}
+
+/// U4: how many notifications of the tray are on screen, from the shell's
+/// `NIN_BALLOONSHOW` (+1) and `NIN_BALLOONTIMEOUT`, `NIN_BALLOONHIDE` or a
+/// click (-1). The order of these messages for stacked notifications is
+/// not documented, so the count heals itself: when the last of them is
+/// older than `stale` (longer than any notification stays), a new one
+/// starts from 0.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Balloons {
+    count: u32,
+    last: Option<std::time::Instant>,
+}
+
+impl Balloons {
+    fn heal(&mut self, now: std::time::Instant, stale: std::time::Duration) {
+        if self
+            .last
+            .is_some_and(|last| now.saturating_duration_since(last) > stale)
+        {
+            self.count = 0;
+        }
+        self.last = Some(now);
+    }
+
+    /// `NIN_BALLOONSHOW`.
+    pub fn shown(&mut self, now: std::time::Instant, stale: std::time::Duration) {
+        self.heal(now, stale);
+        self.count = self.count.saturating_add(1);
+    }
+
+    /// `NIN_BALLOONTIMEOUT` or `NIN_BALLOONHIDE`. True when the last one
+    /// left just now.
+    pub fn gone(&mut self, now: std::time::Instant) -> bool {
+        self.last = Some(now);
+        let was = self.count;
+        self.count = was.saturating_sub(1);
+        was == 1
+    }
+
+    /// A click: whether exactly one notification was on screen (the click
+    /// can only mean that one). The clicked notification is dismissed.
+    pub fn clicked(&mut self, now: std::time::Instant, stale: std::time::Duration) -> bool {
+        self.heal(now, stale);
+        let alone = self.count == 1;
+        self.count = self.count.saturating_sub(1);
+        alone
+    }
+
+    /// Explorer restarted: none of the old notifications is on screen.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn count(&self) -> u32 {
+        self.count
+    }
 }
 
 #[cfg(test)]
@@ -1253,7 +1324,19 @@ mod tests {
             state: crate::state::State::default(),
             running: Some(long.clone()),
             waiting: None,
-            automation: None,
+            // U4 at its worst: long names (the window allows 4096
+            // characters) and many waiting profiles, cut to the budget.
+            automation: Some(
+                super::super::protocol::AutomationStatus {
+                    paused: false,
+                    held: false,
+                    trigger: Some("ü".repeat(130)),
+                    returns_to: Some("ü€".repeat(800)),
+                    waiting: vec!["ü€".repeat(800); 64],
+                    waiting_for: Some("ü€".repeat(800)),
+                }
+                .bounded(),
+            ),
             last_switch: Some(last),
         })));
         assert!(line.len() < MAX_LINE, "{}", line.len());
@@ -1356,7 +1439,8 @@ mod tests {
             labels(&menu)[..2],
             ["&Back to R&&D".to_owned(), "-".to_owned()]
         );
-        assert_eq!(menu.command(ID_BACK), Some(&Command::BackTo));
+        // The command carries the target as shown (not as escaped).
+        assert_eq!(menu.command(ID_BACK), Some(&Command::BackTo("R&D".into())));
         status.back_to = None;
         let view = status.automation.as_mut().unwrap();
         view.paused = true;
@@ -1375,6 +1459,46 @@ mod tests {
             all.iter().any(|l| l.starts_with("Triggers wait")),
             "{all:?}"
         );
+    }
+
+    #[test]
+    fn u4_back_to_acts_only_on_the_target_shown() {
+        assert_eq!(
+            back_target(Some("neutral"), Some("Neutral")),
+            Some("neutral".into())
+        );
+        // The way back changed while the menu was open: nothing.
+        assert_eq!(back_target(Some("flight"), Some("neutral")), None);
+        assert_eq!(back_target(None, Some("neutral")), None);
+        // The notification click means the current one.
+        assert_eq!(back_target(Some("flight"), None), Some("flight".into()));
+    }
+
+    #[test]
+    fn u4_balloons_are_counted_and_heal_themselves() {
+        let t0 = std::time::Instant::now();
+        let s = std::time::Duration::from_secs(1);
+        let stale = s * 60;
+        let mut b = Balloons::default();
+        b.shown(t0, stale);
+        assert!(b.clicked(t0 + s, stale), "the only one");
+        assert_eq!(b.count(), 0);
+        // Two stacked: a click cannot tell which.
+        b.shown(t0 + s * 2, stale);
+        b.shown(t0 + s * 3, stale);
+        assert!(!b.clicked(t0 + s * 4, stale));
+        assert!(b.gone(t0 + s * 5), "the other one left");
+        assert!(!b.gone(t0 + s * 6), "never below 0");
+        assert_eq!(b.count(), 0);
+        // A SHOW without its TIMEOUT: counted on, until it is stale.
+        b.shown(t0 + s * 10, stale);
+        assert_eq!(b.count(), 1);
+        b.shown(t0 + s * 200, stale);
+        assert_eq!(b.count(), 1, "the old one is forgotten");
+        assert!(!b.clicked(t0 + s * 400, stale), "stale: refused");
+        b.shown(t0 + s * 401, stale);
+        b.reset();
+        assert_eq!(b, Balloons::default());
     }
 
     #[test]

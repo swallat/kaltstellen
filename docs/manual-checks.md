@@ -202,7 +202,11 @@ trigger = ["notepad.exe"]
    switches follow each other (or use two trigger programs with different
    priorities). While both are on screen a click does nothing; the menu
    item `Back to …` names the profile of the latest one and works. Note
-   the order in which the toasts appear and leave.
+   the order in which the toasts appear and leave, and whether a toast
+   that a newer one replaces is reported as hidden (the log of the tray
+   shows `notification gone` only when the count reaches 0; a click on the
+   remaining one afterwards should say whether it was taken as the only
+   one).
 4b. Do Not Disturb (Focus) on, or a full-screen game running: start
    Notepad. The profile is applied, no notification appears, the menu
    item `Back to neutral` works.

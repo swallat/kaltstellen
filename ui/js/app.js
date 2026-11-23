@@ -10,6 +10,8 @@ const params = new URLSearchParams(location.search);
 let state = null;
 let selected = null;
 let unassigned = [];
+/** U4: unsaved input of the trigger fields, `{profile, triggers, priority, invalid}`. */
+let triggerDraft = null;
 
 const actionLabel = { start: 'Start', stop: 'Stop', suspend: 'Suspend', ignore: 'Ignore' };
 
@@ -275,13 +277,19 @@ function renderDetail() {
   const hotkey = $('hotkey');
   if (document.activeElement !== hotkey) hotkey.value = profile.hotkey || '';
   hotkey.removeAttribute('aria-invalid');
-  // U4: trigger programs, one per line, and the priority.
+  // U4: trigger programs, one per line, and the priority. Values the user
+  // typed and has not saved (a refused Set, or typing while the state is
+  // refreshed) stay until they are saved or another profile is shown.
   const triggers = $('triggers');
   const priority = $('priority');
-  if (document.activeElement !== triggers) triggers.value = (profile.triggers || []).join('\n');
-  if (document.activeElement !== priority) priority.value = String(profile.priority || 0);
-  triggers.removeAttribute('aria-invalid');
-  priority.removeAttribute('aria-invalid');
+  const draft = triggerDraft && triggerDraft.profile.toLowerCase() === profile.name.toLowerCase() ? triggerDraft : null;
+  if (!draft) triggerDraft = null;
+  if (document.activeElement !== triggers) triggers.value = draft ? draft.triggers : (profile.triggers || []).join('\n');
+  if (document.activeElement !== priority) priority.value = draft ? draft.priority : String(profile.priority || 0);
+  for (const field of [triggers, priority]) {
+    if (draft && draft.invalid === field.id) field.setAttribute('aria-invalid', 'true');
+    else field.removeAttribute('aria-invalid');
+  }
   $('apply').disabled = state.applying;
   $('apply').textContent = state.applying ? 'Applying…' : 'Apply profile';
 
@@ -613,17 +621,33 @@ $('hotkey-form').addEventListener('submit', async (event) => {
   if (!reply.ok) $('hotkey').setAttribute('aria-invalid', 'true');
 });
 
+/** U4: what was typed into the trigger fields and not saved yet. */
+function keepTriggerDraft(invalid = null) {
+  triggerDraft = { profile: current().name, triggers: $('triggers').value, priority: $('priority').value, invalid };
+}
+$('triggers').addEventListener('input', () => keepTriggerDraft());
+$('priority').addEventListener('input', () => keepTriggerDraft());
+
 $('triggers-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const priority = Number($('priority').value.trim() || '0');
   if (!Number.isInteger(priority)) {
+    keepTriggerDraft('priority');
     $('priority').setAttribute('aria-invalid', 'true');
-    setStatus('The priority is a whole number.', true);
+    notice('The priority is a whole number.');
     return;
   }
   const triggers = $('triggers').value.split(/\r?\n/).map((t) => t.trim()).filter(Boolean);
+  // Kept while the request runs: the reply re-renders the fields.
+  keepTriggerDraft();
   const reply = await call('set_triggers', { profile: current().name, triggers, priority });
-  if (!reply.ok) $('triggers').setAttribute('aria-invalid', 'true');
+  if (reply.ok) {
+    triggerDraft = null;
+    renderDetail();
+  } else {
+    keepTriggerDraft('triggers');
+    $('triggers').setAttribute('aria-invalid', 'true');
+  }
 });
 
 $('add-program').addEventListener('click', openAdd);

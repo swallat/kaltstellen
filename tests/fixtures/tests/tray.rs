@@ -1234,7 +1234,7 @@ fn u4_manual_switch_and_the_notification_click_hold_automation() {
     // nothing either; the menu item stays.
     t.notification_timed_out();
     t.notification_timed_out();
-    t.wait_log("tray: notification gone; Back to stays in the menu", 2);
+    t.wait_log("tray: notification gone; Back to stays in the menu", 1);
     t.click_notification();
     t.wait_log("tray: notification clicked; nothing to go back to", 3);
     assert!(t.is_frozen("ks-trig2-a.exe"));

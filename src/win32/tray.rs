@@ -32,8 +32,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, GetSystemMetrics, HICON, IDI_APPLICATION, IMAGE_ICON, KillTimer,
     LR_DEFAULTCOLOR, LoadIconW, LoadImageW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
     PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SM_CXSMICON,
-    SM_CYSMICON, SM_MENUDROPALIGNMENT, SetForegroundWindow, SetTimer, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenuEx,
+    SM_CYSMICON, SM_MENUDROPALIGNMENT, SPI_GETMESSAGEDURATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    SetForegroundWindow, SetTimer, SystemParametersInfoW, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenuEx,
     TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
     WM_ENDSESSION, WM_HOTKEY, WM_NULL, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER,
     WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
@@ -154,6 +155,24 @@ pub fn set_recheck(interval: Option<std::time::Duration>) {
 /// could not be set.
 pub fn set_poll(interval: Option<std::time::Duration>) -> bool {
     repeat(POLL_ID, interval, "trigger poll")
+}
+
+/// U4: how long Windows shows a notification (`SPI_GETMESSAGEDURATION`,
+/// the accessibility setting "Show notifications for"); `None` if it
+/// cannot be read.
+pub fn message_duration() -> Option<std::time::Duration> {
+    let mut seconds = 0u32;
+    // SAFETY: `seconds` is a valid out pointer for this action.
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETMESSAGEDURATION,
+            0,
+            Some((&raw mut seconds).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .ok()
+    .map(|()| std::time::Duration::from_secs(u64::from(seconds)))
 }
 
 /// Copies `text` into a NUL-terminated fixed buffer, cut at a character

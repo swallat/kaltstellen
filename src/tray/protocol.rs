@@ -186,7 +186,23 @@ pub struct AutomationStatus {
     pub waiting_for: Option<String>,
 }
 
+/// U4: the names of waiting profiles a `status` reply carries at most, in
+/// bytes, so the reply stays below [`MAX_LINE`] with the other fields.
+pub const WAITING_BUDGET: usize = 8 * 1024;
+
 impl AutomationStatus {
+    /// Keeps the waiting profiles within [`WAITING_BUDGET`]; the rest are
+    /// left out (a configuration with that many triggers running at once
+    /// is not expected).
+    pub fn bounded(mut self) -> Self {
+        let mut used = 0;
+        self.waiting.retain(|name| {
+            used += name.len() + 3;
+            used <= WAITING_BUDGET
+        });
+        self
+    }
+
     /// The lines `kaltstellen status` prints after `tray: …`.
     pub fn lines(&self, active: &str) -> Vec<String> {
         let mut lines = Vec::new();

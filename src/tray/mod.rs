@@ -250,7 +250,9 @@ pub fn main() -> u8 {
             polling: false,
             images: HashMap::new(),
             notice: None,
-            balloons: 0,
+            balloons: model::Balloons::default(),
+            balloons_stale: window::message_duration()
+                .map_or(BALLOON_STALE_FALLBACK, |d| d + BALLOON_STALE_MARGIN),
             polls: 0,
             shown_tip: String::new(),
         };
@@ -349,7 +351,10 @@ struct App {
     /// U4: notifications of this tray on screen, from `NIN_BALLOONSHOW`
     /// and `NIN_BALLOONTIMEOUT`/`NIN_BALLOONHIDE`; never below 0, reset
     /// when Explorer restarts.
-    balloons: u32,
+    balloons: model::Balloons,
+    /// U4: after this long without a notification event the count above
+    /// starts afresh.
+    balloons_stale: Duration,
     /// The tooltip last drawn; an unchanged icon and tooltip are not sent
     /// to the shell again (the poll redraws every few seconds).
     shown_tip: String,
@@ -380,6 +385,12 @@ struct ImageFailure {
 
 /// U4: how often reading the image path of a process is tried.
 const IMAGE_ATTEMPTS: u8 = 3;
+
+/// U4: margin over the time Windows shows a notification before the
+/// count of notifications on screen starts afresh, and the time used when
+/// that setting cannot be read.
+const BALLOON_STALE_MARGIN: Duration = Duration::from_secs(60);
+const BALLOON_STALE_FALLBACK: Duration = Duration::from_secs(300);
 
 /// Test only: `log` writes the notification to the log instead of showing
 /// it, so tests leave nothing in the notification centre.
@@ -786,9 +797,9 @@ impl App {
             }
             Some(MenuCommand::ToggleAutostart) => self.toggle_autostart(),
             Some(MenuCommand::ToggleAutomatic) => self.toggle_automatic(),
-            Some(MenuCommand::BackTo) => {
-                info!("tray: menu asks to go back");
-                self.go_back();
+            Some(MenuCommand::BackTo(shown)) => {
+                info!("tray: menu asks to go back to \"{shown}\"");
+                self.go_back(Some(&shown));
             }
             Some(MenuCommand::OpenWindow) => open_window(),
             Some(MenuCommand::UpdateMode(mode)) => self.set_update_mode(mode),
@@ -839,14 +850,17 @@ impl App {
             None => (None, None),
         };
         let waiting_for = view.waiting.first().map(|(_, winner)| winner.clone());
-        Some(AutomationStatus {
-            paused: view.paused,
-            held: view.held,
-            trigger,
-            returns_to,
-            waiting: view.waiting.into_iter().map(|(p, _)| p).collect(),
-            waiting_for,
-        })
+        Some(
+            AutomationStatus {
+                paused: view.paused,
+                held: view.held,
+                trigger,
+                returns_to,
+                waiting: view.waiting.into_iter().map(|(p, _)| p).collect(),
+                waiting_for,
+            }
+            .bounded(),
+        )
     }
 
     /// `profile` if the configuration in effect has it (or it is
@@ -1038,15 +1052,17 @@ impl App {
         if back {
             text.push_str(&format!(" Click here: Back to {}", automatic.previous));
         }
+        // Set before the notification goes out, in case the shell reports
+        // it on screen at once.
+        self.set_notice(back.then(|| Notice {
+            back_to: automatic.previous.clone(),
+            shown: false,
+        }));
         info!("tray: notification: {title}: {text}");
         let logged_only = std::env::var(NOTIFY_ENV).is_ok_and(|v| v.trim() == "log");
         if !logged_only && !window::balloon(&title, &text) {
             warn!("tray: the notification could not be shown");
         }
-        self.set_notice(back.then(|| Notice {
-            back_to: automatic.previous.clone(),
-            shown: false,
-        }));
     }
 
     /// U4: the way back of the last automatic switch, for the menu item
@@ -1059,8 +1075,12 @@ impl App {
     /// U4, decided detail 1: `Back to <previous>` from the menu or the
     /// notification. A manual switch: it holds automation like any other;
     /// a profile that left the file meanwhile becomes neutral.
-    fn go_back(&mut self) {
-        let Some(previous) = self.notice.as_ref().map(|n| n.back_to.clone()) else {
+    /// `shown`: the target the menu item showed; `None` for the
+    /// notification click. A way back that changed meanwhile (the menu was
+    /// open while another automatic switch ended) does nothing.
+    fn go_back(&mut self, shown: Option<&str>) {
+        let current = self.notice.as_ref().map(|n| n.back_to.as_str());
+        let Some(previous) = model::back_target(current, shown) else {
             info!("tray: nothing to go back to");
             return;
         };
@@ -1446,28 +1466,27 @@ impl window::Handler for App {
         // The click does not say which notification was clicked (U4): it
         // is honoured only while the latest one is on screen and no other
         // notification of the tray is. The menu item always works.
-        let valid = self.balloons == 1 && self.notice.as_ref().is_some_and(|n| n.shown);
         // The clicked notification is dismissed; the shell reports no
         // timeout for it.
-        self.balloon_gone();
-        if !valid {
+        let alone = self.balloons.clicked(Instant::now(), self.balloons_stale);
+        let shown = self.notice.as_ref().is_some_and(|n| n.shown);
+        if !(alone && shown) {
             info!("tray: notification clicked; nothing to go back to");
             return;
         }
         info!("tray: notification clicked");
-        self.go_back();
+        self.go_back(None);
     }
 
     fn balloon_shown(&mut self) {
-        self.balloons = self.balloons.saturating_add(1);
+        self.balloons.shown(Instant::now(), self.balloons_stale);
         if let Some(notice) = &mut self.notice {
             notice.shown = true;
         }
     }
 
     fn balloon_gone(&mut self) {
-        self.balloons = self.balloons.saturating_sub(1);
-        if self.balloons == 0
+        if self.balloons.gone(Instant::now())
             && let Some(notice) = &mut self.notice
             && std::mem::take(&mut notice.shown)
         {
@@ -1477,7 +1496,7 @@ impl window::Handler for App {
 
     fn taskbar_created(&mut self) {
         // Explorer restarted: no notification of the old one is on screen.
-        self.balloons = 0;
+        self.balloons.reset();
         if let Some(notice) = &mut self.notice {
             notice.shown = false;
         }
