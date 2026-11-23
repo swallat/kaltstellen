@@ -223,7 +223,10 @@ trigger = ["notepad.exe"]
 9. In the main window, the profile shows the section `Triggers` with
    `notepad.exe` and priority `0`; change the priority to `5`, `Set`: the
    file has `priority = 5` and keeps its comments; enter the program the
-   profile freezes as a trigger: refused with the reason.
+   profile freezes as a trigger: refused with the reason. The typed text
+   stays in the field and the field is marked; click into another window
+   and back: the text and the mark are still there. Enter `x` as the
+   priority, `Set`: the message stays after clicking away and back.
 10. Rename the profile in the main window while Notepad has applied it.
     The old name stays active (C4) until the next poll sees the trigger
     under the new name and applies the renamed profile, with a
