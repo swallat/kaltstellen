@@ -307,7 +307,7 @@ hotkey = "Ctrl+Shift+Alt+F1"
 
 ## 12. Confirmation status
 
-All eight points of the round 2 review were confirmed by the owner on 2026-11-21 and are marked **[decided]**. The remaining **[assumed]** items (not raised in round 2) were confirmed by the owner on 2026-11-23, except those listed as open or deferred in [open-decisions.md](open-decisions.md). On 2026-11-22 the owner confirmed the implementation details A8, C8 and L4, the widened Q4, the C2 exception for entries with paths, restart arguments on stop entries (C6) and `confirmed` for warn-list entries (P6).
+All eight points of the round 2 review were confirmed by the owner on 2026-11-21 and are marked **[decided]**. The remaining **[assumed]** items (not raised in round 2) were confirmed by the owner on 2026-11-23, except those listed as deferred in [open-decisions.md](open-decisions.md). On 2026-11-22 the owner confirmed the implementation details A8, C8 and L4, the widened Q4, the C2 exception for entries with paths, restart arguments on stop entries (C6) and `confirmed` for warn-list entries (P6).
 
 The items confirmed on 2026-11-23 include the ones with most impact: the resume-except-still-suspended optimisation (W1), re-applying the active profile (W4), the single-instance and pipe design (L1), the config file as source of truth, and the main window as a separate process with its content and layout.
 
