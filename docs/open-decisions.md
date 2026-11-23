@@ -7,9 +7,7 @@ reasoning is. Implementation choices made without the owner are marked
 
 ## Open
 
-1. **P5 programs started by a profile** `[assumed]`: a switch to `neutral`
-   does not stop programs that kaltstellen started (spec P5, last sentence).
-   Not yet put to the owner.
+None. Everything the owner has not decided yet is deferred (below).
 
 ## Deferred by the owner on 2026-11-23
 
@@ -28,6 +26,8 @@ Decided to be settled later, at the point named:
 
 The author's defaults, confirmed as built:
 
+- **P5 programs started by a profile**: a switch to `neutral` does not stop
+  programs that kaltstellen started (confirmed separately the same day).
 - **UP1 retry waits**: a version that could not be installed is tried again
   1 day after the first failure, 2 after the second, 4 after the third, 7
   after every later one in a row (the rhythm was left to the author).
