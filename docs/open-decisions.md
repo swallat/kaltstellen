@@ -14,21 +14,35 @@ which the owner asked for on 2026-11-23 (spec section 8):
    pipe (`status` gets the field `last_switch`); no copy in `state.json`.
    Without a running tray, no markers.
 2. **M5 when they refresh**: when the page asks for its state (start, the
-   window getting the focus again) and when a switch from the window has
-   ended; the tray re-checks L9 resolution before it answers. The window
-   waits at most 0.5 s for a busy pipe and not for a starting tray.
+   window getting the focus again, at most every 2 s) and when a switch
+   from the window has ended; the tray re-checks L9 resolution before it
+   answers. The window does not wait for a starting tray, waits at most
+   0.5 s for a busy pipe and 1 s for the answer (about 1.5 s at worst).
+   When the tray does not answer in time, the last known markers stay;
+   only an answer replaces them. A switch from the tray menu or a hotkey
+   while the window is open but not focused shows up when it gets the
+   focus again (no timer).
 3. **M5 which entries**: only the profile the last switch made active;
    matched by executable name, and by path where both the error and the
-   entry have one (failed starts). Errors without a program or of child
-   processes under their own name get no marker.
+   entry have one (failed starts). Errors without a program, failed
+   resumes (`KS106`, programs of the profile left behind) and errors of
+   child processes under their own name get no marker.
 4. **M5 look**: a red mark with the code and a few words per error
    (`KS110 start failed`), the full error as tooltip, a red edge on the row.
 5. **M2 drop target**: anywhere in the window while a profile is shown,
    including the open `Add a program` dialog; nothing during other
    dialogs; at most 64 files per drop; shortcuts (`.lnk`) are refused like
-   other non-`.exe` files instead of being resolved.
+   other non-`.exe` files instead of being resolved; only files on a fixed
+   local disk (as for icons), checked before any file access.
 6. **M2 navigation**: the page takes every drop, so the WebView never opens
    a dropped file; the existing navigation guard stays as the second line.
+7. **M2 status of a drop**: the summary of a drop becomes the host's
+   status line (`drop_done`), so it survives a refresh; refusals the page
+   shows itself stay until the next action of the user.
+8. **L9 for errors with a path**: a failed start names its path, and the
+   snapshot has no image paths (A7), so such an error is not resolved by a
+   process of the same name; it stays (with the red tray icon) until the
+   next switch.
 
 ## Deferred by the owner on 2026-11-23
 

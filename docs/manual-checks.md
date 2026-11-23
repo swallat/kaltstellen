@@ -116,10 +116,15 @@ main session made them; they show the views below in light and dark.
     with `KS110 start failed`; hovering it shows the whole error as in the
     tray menu; the row has a red edge. Other entries and other profiles
     show nothing. Put a program at that path and start it by hand, then
-    click into another window and back into kaltstellen: the marker is
-    gone, as in the tray's error list. A clean switch removes all
-    markers. Without a tray (`kaltstellen gui` alone) there are no markers;
-    the status line still reports the switch. Check in light and dark mode.
+    click into another window and back into kaltstellen: the marker stays
+    (an error with a path waits for the next switch, as in the tray's
+    menu). Apply the profile again: it is clean and the marker goes. With
+    a `suspend` entry whose freeze fails (an elevated program): its
+    marker goes once that program is closed and the window gets the focus
+    again. Switch profiles from the tray menu while the window is open but
+    in the background: the window shows the change when you click into it.
+    Without a tray (`kaltstellen gui` alone) there are no markers; the
+    status line still reports the switch. Check in light and dark mode.
 13d. Drag and drop (M2): drag one `.exe` from Explorer onto the open profile:
     while dragging, the program table gets a dashed outline; on drop the
     program is added with the default action, exactly as with `Choose
@@ -128,9 +133,12 @@ main session made them; they show the views below in light and dark.
     reason in the status line; a program already in the profile is refused
     as a duplicate). Drop three `.exe` files at once: all three are added.
     Drop a `.txt` file, a shortcut (`.lnk`) and a folder together with one
-    `.exe`: the `.exe` is added, the status line names each refused item
-    and why. Drop onto the open `Add a program` dialog: the same, and the
-    dialog closes. Drop anywhere else in the window (the sidebar, the
+    `.exe`: the `.exe` is added, the status line says `1 of 4 added …
+    Not added: …` and names each refused item and why; click into another
+    window and back: the summary is still there. Drop an `.exe` from a
+    network share or a USB stick: refused as not on a local disk. Drop
+    onto the open `Add a program` dialog: the same, and the dialog
+    closes. Drop anywhere else in the window (the sidebar, the
     header): no page change, nothing opens, the window stays on its page.
     Drop a link or selected text from a browser: nothing happens. Start
     the window elevated (`Run as administrator`) and drag from the normal

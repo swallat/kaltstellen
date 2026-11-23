@@ -33,7 +33,8 @@ control characters; paths must be absolute.
 | `update_entry` | `profile`, `index`, `entry` | Replace the options of entry `index`: `entry` has `exe`, `path`, `action`, `args`, `cwd`, `on_timeout`, `restart_on_neutral`, `trim`, `confirmed`. Options the action does not take are dropped (C6). |
 | `remove_entry` | `profile`, `index` | Remove the entry. |
 | `pick_executable` | | Opens the file dialog; `data`: `{exe, path, protection}` or `null`. |
-| `drop_files` | (files attached, see below) | M2: `.exe` files dropped from Explorer. `data`: `{files: [{exe, path, protection}], refused: [reason]}`. Nothing is added yet: the page adds each file with `add_entry` exactly as after `pick_executable` (warn list asks, hard-protected and duplicates are refused there). Refused here: more than 64 files, a name without a full path, a folder, a file that is not `.exe` (also shortcuts), a file that does not exist; a `drop_files` without files. |
+| `drop_files` | (files attached, see below) | M2: `.exe` files dropped from Explorer. `data`: `{files: [{exe, path, protection}], refused: [reason]}`. Nothing is added yet: the page adds each file with `add_entry` exactly as after `pick_executable` (warn list asks, hard-protected and duplicates are refused there). Refused here: more than 64 files, an item that is not a file, a name without a full path, a file not on a fixed local disk, a folder, a file that is not `.exe` (also shortcuts), a file that does not exist; a `drop_files` without files. |
+| `drop_done` | `profile`, `added`, `not_added` (reasons) | M2: the summary of a drop becomes the status line. |
 | `running` | | `data`: running programs `{exe, private_bytes, protection}`, largest first. |
 | `unassigned` | `profile` | `data`: `{exe, path, new}` (N1). |
 | `dismiss` | `profile`, `exe` | Hide an unassigned program for this profile. |
@@ -86,11 +87,24 @@ reads the path of each attached object
 message. The message itself cannot carry paths (unknown fields are
 refused), and only `drop_files` may have attached files; any other request
 with files is refused. The paths are untrusted like every other input:
-text limits, a full path, an existing file, the `.exe` extension, at most
-64 per drop, then the same checks as for a chosen file when each is added.
-An attached object that is not a file, or has no path, counts as a file
-without a full path. A runtime without `AdditionalObjects` hands over no
-files, and the drop is refused with a message.
+text limits, a full path, on a fixed local disk, not a folder, the `.exe`
+extension, an existing file, at most 64 per drop, then the same checks as
+for a chosen file when each is added. The local-disk check comes first and
+needs no file access (`[assumed]`, the rule of `icons`): a share, a mapped
+or removable drive or a device path (`\\?\`, `\\.\`) is refused before
+anything is read. An attached object that is not a file, or has no path,
+is refused as "an item that is not a file". A runtime without
+`AdditionalObjects` hands over no files, and the drop is refused with a
+message.
+
+The page then adds the files one after the other and sends
+`drop_done` (`profile`, `added`, `not_added`: the reasons, at most 64) so
+that the summary (`1 of 3 added to "focus". Not added: …`) becomes the
+host's status line and survives a refresh of the state. If another profile
+is selected while a drop is being added, the remaining files are not added
+and are named in the summary. A refusal the page shows itself (a
+protected program, a failed request) stays in the status line until the
+next action of the user; a refresh on focus does not replace it.
 
 `[assumed]`: the page takes every drag and drop (`dragover` and `drop`
 call `preventDefault`), so a drop anywhere in the window never makes the
@@ -109,8 +123,12 @@ and when the window gets the focus again) and when a switch started from
 the window has ended, the host asks the running tray for its `status` over
 the pipe ([pipe-protocol.md](pipe-protocol.md), field `last_switch`); every
 other reply reuses that answer, so a reply never waits for the tray. The
-host does not wait for a tray that is still starting and waits at most
-0.5 s for a busy pipe; without an answer there are no markers.
+host does not wait for a tray that is still starting, waits at most 0.5 s
+for a busy pipe and at most 1 s for the answer: at worst about 1.5 s on a
+`get_state`, which the page sends at start, on focus at most every 2 s, and
+after each switch from the window. `[assumed]`: only an answer replaces
+the markers; when the tray does not answer in time the last known ones
+stay. No tray running at all is an answer: no markers.
 
 `[assumed]` rules:
 
@@ -120,13 +138,20 @@ host does not wait for a tray that is still starting and waits at most
   Where both the error and the entry have a path (a failed start knows its
   path), the paths must be the same too, so of two entries of one name with
   different paths (C2) only the failed one is marked. Errors without a
-  program (state file, snapshot) and errors that name a child process
-  under its own name stay in the status line and the tray menu only.
+  program (state file, snapshot), failed resumes (`KS106`: programs of the
+  profile left behind) and errors that name a child process under its own
+  name stay in the status line and the tray menu only.
 - Markers go when the tray drops the error: when its cause is gone (L9:
   the program runs again or no longer runs; the tray checks this before it
-  answers) or when the next switch replaces the list. Without a running
-  tray (`kaltstellen gui` alone, the switch runs in-process) there are no
-  markers; the status line reports the switch as before.
+  answers) or when the next switch replaces the list. An error that names
+  a path (a failed start) is not resolved by name: the snapshot has no
+  image paths (A7), so it stays until the next switch.
+- Without a running tray (`kaltstellen gui` alone, the switch runs
+  in-process) there are no markers; the status line reports the switch as
+  before.
+- While the window is open but not focused, a switch from the tray menu or
+  a hotkey does not reach it: markers and the active profile are brought
+  up to date when the window gets the focus again (no timer).
 
 ## Events and notices
 
@@ -146,9 +171,13 @@ page with WebView2's own capture once it is ready and exits; `--view
 entry|add|confirm|new` opens that dialog first; `--theme light|dark` sets
 the colour scheme; `--drive FILE.json` runs the JSON array of requests in
 the file through the page's own bridge client (apply waits for its event;
-a step `{"type": "drop", "names": [...]}` sends a drop event with files
-made up in the page through the page's drop handler; WebView2 refuses to
-attach such files, as they are not on disk, so a real drop stays a manual
-check)
-and `--drive-out FILE.json` receives the replies with the state after each. Review runs show the
-window without taking the focus and end after at most 90 s.
+a step `{"type": "drop_real", "paths": [...]}` makes the host drop those
+files from disk onto the page through the DevTools protocol
+(`Input.dispatchDragEvent`: drag enter, over, drop), so the whole path of a
+real drop runs; the paths are taken from the drive file read at start,
+never from the page, which only names the step and the point, and only
+while `--drive` runs. A step `{"type": "drop", "names": [...]}` sends a
+drop event with files made up in the page, which WebView2 refuses to
+attach as they are not on disk) and `--drive-out FILE.json` receives the
+replies with the state after each. Review runs show the window without
+taking the focus and end after at most 90 s.
