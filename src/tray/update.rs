@@ -169,10 +169,12 @@ pub fn menu_state(config_dir: Option<&Path>) -> (Mode, bool, Option<UpdateOffer>
             })
             .err();
         let failed = rec.failed_before(&version);
+        let retry_at = rec.retry_at(&version, record::now());
         Some(UpdateOffer {
             version,
             blocked,
             failed,
+            retry_at,
         })
     });
     (mode, locked, offer)

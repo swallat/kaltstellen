@@ -564,12 +564,14 @@ fn update_install(force: bool, unattended: bool) -> u8 {
     let data_dir = paths::data_dir();
     if unattended
         && let Some(dir) = &data_dir
-        && update::record::load(dir).0.failed_before(&release.version)
+        && update::record::load(dir)
+            .0
+            .held_back(&release.version, update::record::now())
     {
         return refused(Error::new(
             Code::UpdateStart,
             format!(
-                "version {} could not be installed here before; it is installed only on request",
+                "version {} could not be installed here recently; it is tried again later, or now on request",
                 release.version
             ),
         ));

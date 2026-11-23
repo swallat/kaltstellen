@@ -34,8 +34,9 @@ pub trait Session {
     fn version_of(&self, exe: &Path) -> std::result::Result<String, Probe>;
     /// Installing `version` failed after it was downloaded and verified: it
     /// did not start here (KS806), or it could not be put in place
-    /// (KS805). It is never installed automatically again. Called before
-    /// the previous tray starts again, so that tray already knows.
+    /// (KS805). The automatic install leaves it alone for a while (UP1,
+    /// `record::retry_wait`). Called before the previous tray starts
+    /// again, so that tray already knows.
     fn install_failed(&mut self, version: &str);
 }
 

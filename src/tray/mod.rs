@@ -236,6 +236,7 @@ pub fn main() -> u8 {
             autostart_answer: None,
             update_started: None,
             update_waiting: None,
+            update_held: None,
             update_deferred: false,
             shown_menu: None,
             session_ending: false,
@@ -302,6 +303,9 @@ struct App {
     /// already reported as waiting (each is logged once).
     update_started: Option<String>,
     update_waiting: Option<String>,
+    /// The failed version the automatic install leaves alone, and until
+    /// when; logged once.
+    update_held: Option<(String, u64)>,
     /// UP1: this tray refused `quit_if_idle` to the running automatic
     /// install, which therefore gives up; it is started again later.
     update_deferred: bool,
@@ -575,18 +579,25 @@ impl App {
     /// thawed or disturbed. Otherwise it waits: it is tried again when the
     /// tray returns to `neutral` and after every later check. The install
     /// itself asks again right before the tray quits (`quit_if_idle`).
-    /// A version that could not be installed here before is left alone.
+    /// A version that could not be installed here is left alone for a
+    /// while (1, 2, 4, then 7 days), then tried again.
     fn maybe_install_update(&mut self) {
         let Some(offer) = self.status.update.clone() else {
             return;
         };
-        if offer.failed {
-            if self.update_waiting.as_deref() != Some(offer.version.as_str()) {
+        if let Some(retry_at) = offer
+            .retry_at
+            .filter(|&at| crate::update::record::now() < at)
+        {
+            if self.update_held.as_ref() != Some(&(offer.version.clone(), retry_at)) {
                 info!(
-                    "tray: update {} could not be installed here before; it is not installed automatically",
-                    offer.version
+                    "tray: update {} could not be installed here recently; it is tried again automatically in {} h",
+                    offer.version,
+                    retry_at
+                        .saturating_sub(crate::update::record::now())
+                        .div_ceil(3600)
                 );
-                self.update_waiting = Some(offer.version.clone());
+                self.update_held = Some((offer.version.clone(), retry_at));
             }
             return;
         }

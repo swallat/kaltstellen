@@ -257,8 +257,12 @@ impl Session for System {
     }
 
     fn install_failed(&mut self, version: &str) {
-        match crate::update::record::mark_failed(&self.data_dir, version) {
-            Ok(()) => info!("update: version {version} is not installed automatically again"),
+        let now = crate::update::record::now();
+        match crate::update::record::mark_failed(&self.data_dir, version, now) {
+            Ok(failures) => info!(
+                "update: version {version} could not be installed ({failures} time(s) in a row); the automatic install tries it again in {} day(s)",
+                crate::update::record::retry_wait(failures).as_secs() / (24 * 60 * 60)
+            ),
             Err(err) => warn!("update: {err}"),
         }
     }

@@ -596,14 +596,14 @@ fn up1_automatic_install_gives_up_when_a_profile_starts_during_the_download() {
     // This time the tray quits, but the new tray does not start: rolled
     // back, and the version is remembered as failed.
     s.wait_log("update: the previous tray runs again", 1);
-    s.wait_log("is not installed automatically again", 1);
+    s.wait_log("the automatic install tries it again in 1 day(s)", 1);
     assert_eq!(fs::read(&s.exe).unwrap(), s.original);
     let record = fs::read_to_string(s.data().join("update.json")).unwrap();
     assert!(record.contains("\"failed\": \"9.9.9\""), "{record}");
 }
 
 #[test]
-fn up1_a_version_that_did_not_start_is_never_installed_automatically_again() {
+fn up1_a_version_that_did_not_start_waits_and_is_tried_again_later() {
     let bad = fs::read(BAD_UPDATE).unwrap();
     let mut s = Setup::new(github("9.9.9", &bad, &bad));
     let fake = [("KS_FAKE_VERSION", "9.9.9")];
@@ -612,7 +612,7 @@ fn up1_a_version_that_did_not_start_is_never_installed_automatically_again() {
     click(pid, ID_UPDATE_AUTO);
     // Installed, the new tray did not start, rolled back.
     s.wait_log("update: the previous tray runs again", 1);
-    s.wait_log("is not installed automatically again", 1);
+    s.wait_log("the automatic install tries it again in 1 day(s)", 1);
     s.wait_log("tray: pipe ready", 2);
     let old_tray = s.tray.as_mut().unwrap();
     assert!(wait_for(LONG, || old_tray.try_wait().unwrap().is_some()));
@@ -627,7 +627,7 @@ fn up1_a_version_that_did_not_start_is_never_installed_automatically_again() {
     // Logged once by each tray after its start-up recovery: the one the
     // update started again, and this one. This one's start-up schedule
     // line is in the log by then.
-    s.wait_log("tray: update 9.9.9 could not be installed here before", 2);
+    s.wait_log("tray: update 9.9.9 could not be installed here recently", 2);
     // The check that the click starts has run and been decided on: the
     // tray schedules the next one right after deciding.
     let scheduled = s.log().matches("tray: next update check in").count();
@@ -642,9 +642,37 @@ fn up1_a_version_that_did_not_start_is_never_installed_automatically_again() {
     // The automatic form refuses it too; on request it is still tried.
     let (code, _, err) = s.run(&["update", "--unattended"], &fake);
     assert_eq!(code, 1);
-    assert!(err.contains("could not be installed here before"), "{err}");
+    assert!(
+        err.contains("could not be installed here recently"),
+        "{err}"
+    );
     let (code, out, err) = s.run(&["update", "--force"], &fake);
     assert_eq!(code, 1, "{out}{err}");
     assert!(out.contains("downloading version 9.9.9"), "{out}");
     assert!(err.contains("KS806"), "{err}");
+    // That was the second failure in a row: two days now.
+    s.wait_log(
+        "(2 time(s) in a row); the automatic install tries it again in 2 day(s)",
+        1,
+    );
+    // Two days later the automatic install tries it again by itself.
+    let file = s.data().join("update.json");
+    let mut record: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(record["failures"], 2, "{record}");
+    let at = record["failed_at"].as_u64().unwrap();
+    record["failed_at"] = (at - 2 * 24 * 60 * 60).into();
+    fs::write(&file, record.to_string()).unwrap();
+    drop(KillProgram(
+        s.exe.file_name().unwrap().to_string_lossy().into_owned(),
+    ));
+    s.start_tray_with(&fake);
+    let pid = s.tray.as_ref().unwrap().id();
+    click(pid, ID_UPDATE_AUTO);
+    s.wait_log("tray: installing update 9.9.9 automatically", 2);
+    s.wait_log(
+        "(3 time(s) in a row); the automatic install tries it again in 4 day(s)",
+        1,
+    );
+    assert_eq!(fs::read(&s.exe).unwrap(), s.original);
 }

@@ -283,8 +283,11 @@ pub struct UpdateOffer {
     /// Why this copy cannot install it (package manager, folder,
     /// development build); `None` if it can.
     pub blocked: Option<String>,
-    /// It could not be installed here before: offered, never installed by itself.
+    /// It could not be installed here last time; still offered on request.
     pub failed: bool,
+    /// After a failed install: when the automatic install may try it again
+    /// (seconds since 1970); `None` if it may now.
+    pub retry_at: Option<u64>,
 }
 
 impl Default for Status {
@@ -540,6 +543,7 @@ impl Menu {
                 version,
                 blocked: None,
                 failed,
+                ..
             }) => menu.entry(
                 ID_UPDATE_INSTALL,
                 if *failed {
@@ -824,6 +828,7 @@ mod tests {
                 version: "1.2.0".into(),
                 blocked: None,
                 failed: false,
+                retry_at: None,
             }),
             ..Status::default()
         };
@@ -869,6 +874,7 @@ mod tests {
             version: "1.2.0".into(),
             blocked: Some("installed by scoop: scoop update kaltstellen".into()),
             failed: false,
+            retry_at: None,
         });
         status.update_mode = crate::update::Mode::Off;
         status.update_locked = true;
