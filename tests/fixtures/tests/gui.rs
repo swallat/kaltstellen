@@ -469,7 +469,7 @@ fn u4_up1_settings_from_the_window_reach_the_running_tray_at_once() {
     let automation = |i: usize| results[i]["state"]["automation"].clone();
     assert_eq!(
         automation(0),
-        serde_json::json!({"on": true, "triggers": true}),
+        serde_json::json!({"on": true, "triggers": true, "note": null}),
         "{results}"
     );
     assert_eq!(results[1]["ok"], true, "{results}");

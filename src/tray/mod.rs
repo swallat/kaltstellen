@@ -596,7 +596,9 @@ impl App {
                     let yes = crate::win32::dialog::ask_yes_no(
                         "kaltstellen",
                         "Start kaltstellen automatically when you sign in to Windows?\n\n\
-                         You can change this later with \"Start at sign-in\" in the tray menu.",
+                         You can change this later with \"Start at sign-in\" in the main window \
+                         (\"Open kaltstellen…\" in the tray menu) or with \
+                         \"kaltstellen autostart on|off\".",
                     );
                     let _ = tx.send(yes);
                     waker.wake();
@@ -850,6 +852,7 @@ impl App {
             waiting: self.controller.pending().map(ToString::to_string),
             automation: self.automation_status(),
             last_switch: self.status.last_switch(),
+            notes: Vec::new(),
         }
     }
 
@@ -1354,24 +1357,39 @@ impl App {
         let changed = match &command {
             Command::SetAutomation { paused } => {
                 info!("tray: asked over the pipe to set automatic switching");
-                Some(self.set_automatic(*paused))
+                // Taken over in any case; a file that could not be written
+                // is said in a note, so the caller does not write it again
+                // and claim that the tray takes it at its next start.
+                let notes = match self.set_automatic(*paused) {
+                    Ok(()) => Vec::new(),
+                    Err(reason) => vec![format!(
+                        "warning: taken over by the tray for this session, but not saved: {reason}"
+                    )],
+                };
+                Some(Ok(notes))
             }
             Command::SetUpdateMode { mode } => {
                 info!("tray: asked over the pipe to set the update mode");
+                // The tray reads the mode from the file, so a mode that
+                // could not be saved is not taken over either: refused.
                 Some(
                     crate::update::Mode::parse(mode)
                         .filter(|m| m.name() == mode.trim())
                         .ok_or_else(|| {
                             format!("{}: unknown update mode \"{mode}\"", Code::TrayProtocol)
                         })
-                        .and_then(|m| self.set_update_mode(m)),
+                        .and_then(|m| self.set_update_mode(m))
+                        .map(|()| Vec::new()),
                 )
             }
             _ => None,
         };
         if let Some(changed) = changed {
             respond(match changed {
-                Ok(()) => Body::Status(self.tray_status()),
+                Ok(notes) => Body::Status(TrayStatus {
+                    notes,
+                    ..self.tray_status()
+                }),
                 Err(reason) => Body::Rejected {
                     exit_code: exit::ERRORS,
                     lines: vec![format!("error: {reason}")],

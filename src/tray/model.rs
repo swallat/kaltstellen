@@ -1297,6 +1297,7 @@ mod tests {
                 .bounded(),
             ),
             last_switch: Some(last),
+            notes: Vec::new(),
         })));
         assert!(line.len() < MAX_LINE, "{}", line.len());
     }

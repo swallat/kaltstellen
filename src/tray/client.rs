@@ -56,23 +56,30 @@ const QUICK: Duration = Duration::from_millis(500);
 /// when no tray has a pipe (none runs, or it is still starting and knows
 /// no switch yet); `Err` when a tray did not answer that way.
 pub fn status_now(endpoints: &Endpoints) -> Result<Option<protocol::TrayStatus>> {
-    match request_now(endpoints, Command::Status)? {
+    match request_now(endpoints, Command::Status, ANSWER)? {
         None => Ok(None),
         Some(Body::Status(status)) => Ok(Some(status)),
         Some(_) => Err(unreachable("the tray did not answer the status request")),
     }
 }
 
-/// [`request`] with the short waits of [`status_now`], for the main window.
-fn request_now(endpoints: &Endpoints, command: Command) -> Result<Option<Body>> {
+/// [`request`] with the short waits of [`status_now`], for the main window:
+/// no wait for a starting tray, [`QUICK`] for a busy pipe, at most `answer`
+/// for the reply.
+fn request_now(endpoints: &Endpoints, command: Command, answer: Duration) -> Result<Option<Body>> {
     let Some(conn) = pipe::connect(&endpoints.pipe, QUICK)? else {
         return Ok(None);
     };
-    pipe::with_deadline(ANSWER, || converse(conn, command, &mut || {})).map(Some)
+    pipe::with_deadline(answer, || converse(conn, command, &mut || {})).map(Some)
 }
 
 /// How long [`status_now`] waits for the tray's answer once connected.
 const ANSWER: Duration = Duration::from_secs(1);
+/// How long the main window waits for the answer to `set_automation` and
+/// `set_update_mode`: longer than for `status`, so a tray that is busy for a
+/// moment is not reported as one that takes the setting only at its next
+/// start (the window waits for it on its own thread only on a click).
+const SET_ANSWER: Duration = Duration::from_secs(3);
 
 /// How a setting that moved from the tray menu to the main window (owner,
 /// 2026-11-23) took effect.
@@ -115,7 +122,7 @@ pub fn deliver(
 ) -> Result<Delivery> {
     let sent = super::Endpoints::current().and_then(|endpoints| {
         if quick {
-            request_now(&endpoints, command)
+            request_now(&endpoints, command, SET_ANSWER)
         } else {
             request(&endpoints, command, || {})
         }
@@ -126,6 +133,12 @@ pub fn deliver(
             save()?;
             return Ok(Delivery::Saved);
         }
+        // The tray refused it for a reason of its own (an unknown mode, a
+        // mode that could not be saved): reported, nothing written here.
+        Ok(Some(Body::Rejected { exit_code, lines })) if exit_code == crate::exit::ERRORS => {
+            return Err(Error::new(Code::SettingsIo, lines.join(" ")));
+        }
+        // An older tray (`KS505`, unknown command) or one that quits.
         Ok(Some(Body::Rejected { lines, .. })) => lines.join(" "),
         Ok(Some(other)) => format!("unexpected answer from the tray: {other:?}"),
         Err(err) => err.to_string(),

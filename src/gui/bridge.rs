@@ -247,7 +247,7 @@ pub struct StateView {
 }
 
 /// U4 in the main window (moved from the tray menu, owner 2026-11-23).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AutomationView {
     /// Not paused: what the running tray reported at the last refresh,
     /// else what `settings.json` says.
@@ -255,6 +255,9 @@ pub struct AutomationView {
     /// Some profile of the file names triggers; without one the switch
     /// does nothing yet and the page shows it disabled with a hint.
     pub triggers: bool,
+    /// Set while a running tray did not take the value shown (an older
+    /// tray): it keeps its own until it restarts.
+    pub note: Option<String>,
 }
 
 fn protection_name(exe: &str) -> &'static str {
@@ -326,11 +329,17 @@ fn check_text(texts: &[&str]) -> Result<(), String> {
 
 /// The end of the status line for a setting (U4, UP1): when it takes
 /// effect.
-fn later(delivery: &Delivery) -> &'static str {
+fn later(delivery: &Delivery) -> String {
     match delivery {
-        Delivery::Tray(_) => ".",
-        Delivery::Saved => "; saved. The tray uses it when it starts.",
-        Delivery::SavedForLater(_) => "; saved. The running tray takes it over at its next start.",
+        // The tray's notes: taken over, but for example not saved.
+        Delivery::Tray(status) if !status.notes.is_empty() => {
+            format!(". {}", status.notes.join(" "))
+        }
+        Delivery::Tray(_) => ".".to_owned(),
+        Delivery::Saved => "; saved. The tray uses it when it starts.".to_owned(),
+        Delivery::SavedForLater(_) => {
+            "; saved. The running tray keeps its own setting until it restarts.".to_owned()
+        }
     }
 }
 
@@ -376,6 +385,10 @@ pub struct Bridge<H: Host> {
     /// last refresh; `None` without a tray or while it has no triggers
     /// (then `settings.json` is shown).
     tray_paused: Option<bool>,
+    /// U4: the value saved for a running tray that did not take it (an
+    /// older tray); shown, with a note, until no tray runs or the tray
+    /// reports it.
+    held_back: Option<bool>,
     /// M2: the paths of the files attached to the message being handled.
     dropped: Vec<PathBuf>,
 }
@@ -393,6 +406,7 @@ impl<H: Host> Bridge<H> {
             snapshot: None,
             last_switch: None,
             tray_paused: None,
+            held_back: None,
             dropped: Vec::new(),
         }
     }
@@ -436,8 +450,12 @@ impl<H: Host> Bridge<H> {
             autostart: self.host.autostart(),
             automation: AutomationView {
                 on: !self
-                    .tray_paused
+                    .held_back
+                    .or(self.tray_paused)
                     .unwrap_or_else(|| self.host.triggers_paused()),
+                note: self.held_back.map(|_| {
+                    "Saved; the running tray keeps its own setting until it restarts.".to_owned()
+                }),
                 triggers: config.profiles.iter().any(|p| !p.triggers.is_empty()),
             },
             applying: self.applying,
@@ -856,6 +874,13 @@ impl<H: Host> Bridge<H> {
                     Delivery::Tray(_) => Some(!on),
                     Delivery::Saved | Delivery::SavedForLater(_) => None,
                 };
+                // An older tray keeps its own state: the window goes on
+                // showing what was saved, with a note, instead of flipping
+                // back at the next refresh. [assumed]
+                self.held_back = match &delivery {
+                    Delivery::SavedForLater(_) => Some(!on),
+                    Delivery::Tray(_) | Delivery::Saved => None,
+                };
                 self.status = format!(
                     "Automatic switching {}{}",
                     if on { "on" } else { "paused" },
@@ -962,6 +987,11 @@ impl<H: Host> Bridge<H> {
             self.tray_paused = status
                 .as_ref()
                 .and_then(|s| s.automation.as_ref().map(|a| a.paused));
+            // The saved value counts again once no tray runs or the tray
+            // reports it.
+            if status.is_none() || self.tray_paused == self.held_back {
+                self.held_back = None;
+            }
             self.last_switch = status.and_then(|s| s.last_switch);
         }
     }
@@ -1010,7 +1040,7 @@ mod tests {
         /// `triggers_paused` in `settings.json`.
         saved_paused: Rc<std::cell::Cell<bool>>,
         /// How a setting arrives: 0 the tray takes it, 1 no tray, 2 a tray
-        /// that does not take it.
+        /// that does not take it, 3 the tray takes it but cannot save it.
         delivery: Rc<std::cell::Cell<u8>>,
     }
 
@@ -1022,6 +1052,16 @@ mod tests {
                     Delivery::Tray(Box::default())
                 }
                 1 => Delivery::Saved,
+                3 => {
+                    tray_takes();
+                    Delivery::Tray(Box::new(TrayStatus {
+                        notes: vec![
+                            "warning: taken over by the tray for this session, but not saved: disk full"
+                                .into(),
+                        ],
+                        ..TrayStatus::default()
+                    }))
+                }
                 _ => Delivery::SavedForLater("KS505 unknown command".into()),
             }
         }
@@ -1079,8 +1119,10 @@ mod tests {
         }
         fn set_automation(&self, paused: bool) -> Result<Delivery, String> {
             // The tray writes the file itself, the others here: the file
-            // has it either way.
-            self.saved_paused.set(paused);
+            // has it either way, except when the tray could not save it.
+            if self.delivery.get() != 3 {
+                self.saved_paused.set(paused);
+            }
             Ok(self.deliver(|| {
                 if self.tray_paused.get().is_some() {
                     self.tray_paused.set(Some(paused));
@@ -1123,6 +1165,7 @@ mod tests {
                     }
                 }),
                 last_switch: self.last_switch.borrow().clone(),
+                notes: Vec::new(),
             }))
         }
     }
@@ -1635,7 +1678,7 @@ mod tests {
         );
         assert_eq!(
             later["state"]["status"],
-            "Update mode auto; saved. The running tray takes it over at its next start."
+            "Update mode auto; saved. The running tray keeps its own setting until it restarts."
         );
         assert_eq!(*fake.checks.borrow(), 2);
     }
@@ -1647,7 +1690,10 @@ mod tests {
         let automation = |reply: &Value| reply["state"]["automation"].clone();
         // No profile has triggers: shown (on), the page disables it.
         let reply = send(&mut b, json!({"v": 1, "id": 1, "type": "get_state"}));
-        assert_eq!(automation(&reply), json!({"on": true, "triggers": false}));
+        assert_eq!(
+            automation(&reply),
+            json!({"on": true, "triggers": false, "note": null})
+        );
         // Strict input: a bool named `on`, nothing else.
         for bad in [
             json!({"v": 1, "id": 2, "type": "set_automation"}),
@@ -1672,7 +1718,10 @@ mod tests {
             json!({"v": 1, "id": 4, "type": "set_automation", "on": false}),
         );
         assert_eq!(reply["ok"], true);
-        assert_eq!(automation(&reply), json!({"on": false, "triggers": true}));
+        assert_eq!(
+            automation(&reply),
+            json!({"on": false, "triggers": true, "note": null})
+        );
         assert_eq!(reply["state"]["status"], "Automatic switching paused.");
         assert_eq!(fake.tray_paused.get(), Some(true));
         assert!(fake.saved_paused.get(), "persisted");
@@ -1702,8 +1751,10 @@ mod tests {
             reply["state"]["status"],
             "Automatic switching on; saved. The tray uses it when it starts."
         );
-        // An older tray that does not know the command: saved here, and
-        // the window says when it counts.
+        // An older tray that does not know the command (it is on): saved
+        // here, and the window says when it counts.
+        fake.no_tray.set(false);
+        fake.tray_paused.set(Some(false));
         fake.delivery.set(2);
         let reply = send(
             &mut b,
@@ -1713,8 +1764,36 @@ mod tests {
         assert!(fake.saved_paused.get());
         assert_eq!(
             reply["state"]["status"],
-            "Automatic switching paused; saved. The running tray takes it over at its next start."
+            "Automatic switching paused; saved. The running tray keeps its own setting until it restarts."
         );
+        let note = json!("Saved; the running tray keeps its own setting until it restarts.");
+        assert_eq!(
+            automation(&reply),
+            json!({"on": false, "triggers": true, "note": note})
+        );
+        // A refresh does not flip it back to the old tray's state.
+        let reply = send(&mut b, json!({"v": 1, "id": 10, "type": "get_state"}));
+        assert_eq!(automation(&reply)["on"], false);
+        assert_eq!(automation(&reply)["note"], note);
+        // Restarted, the tray has it: the note goes.
+        fake.tray_paused.set(Some(true));
+        let reply = send(&mut b, json!({"v": 1, "id": 11, "type": "get_state"}));
+        assert_eq!(
+            automation(&reply),
+            json!({"on": false, "triggers": true, "note": null})
+        );
+        // Taken over but not saved: the tray's note is in the status line,
+        // and nothing is written here.
+        fake.delivery.set(3);
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 12, "type": "set_automation", "on": true}),
+        );
+        assert_eq!(
+            reply["state"]["status"],
+            "Automatic switching on. warning: taken over by the tray for this session, but not saved: disk full"
+        );
+        assert_eq!(automation(&reply)["on"], true);
     }
 
     #[test]

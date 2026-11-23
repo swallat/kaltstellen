@@ -138,17 +138,29 @@ actions only", section 12):
     re-reading the file (no watcher, immediate effect). Without a tray the
     caller writes the file; a tray that does not take it (an older tray
     rejects the unknown command with `KS505`, a quitting one with `KS501`,
-    or no answer in time) gets the file written by the caller and uses it
-    from its next start; the window and the command line say so, exit
-    code 0. Until then such an older tray keeps its own state, and the
-    window shows that state again at its next refresh.
+    or no answer in time: the window waits 3 s for the answer to these
+    commands) gets the file written by the caller; that tray keeps its own
+    setting until it restarts. The window and the command line say so,
+    exit code 0, and the window keeps showing the saved value with that
+    note rather than flipping back to the older tray's state. A tray that
+    took `set_automation` but could not save it answers with a note
+    (`taken over … but not saved`); a `set_update_mode` it could not save
+    is refused. In both cases the caller writes nothing. Every edit of
+    `settings.json` holds `settings.lock` (no lost updates between tray,
+    window and command line) and writes through a temporary file of its
+    own process.
 21. **Two checks when a checking mode is chosen in the window** (UP1): the
     tray checks (its result decides on an automatic install) and the window
     runs its own check so it can show the result; both write `update.json`
-    atomically.
+    atomically. That is two requests to the GitHub API per choice;
+    unauthenticated the API allows 60 per hour per address, and a mode is
+    chosen by hand, so this is kept rather than having the window wait for
+    the tray's result.
 22. **`kaltstellen automation [on|off]`** (L12): shows (from the running
     tray, else from `settings.json`), resumes or pauses automatic switching;
-    through the tray like the window.
+    through the tray like the window. When no profile has triggers it adds
+    `note: no profile has triggers yet; automatic switching does nothing
+    until one has`.
 23. **The switch in the window** (M6 Content): `Automatic switching` in the
     header next to `Start at sign-in`, always shown; while no profile has
     triggers it is disabled, dimmed, with the hint `No profile has triggers

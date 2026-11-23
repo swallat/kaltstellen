@@ -291,6 +291,35 @@ impl Drop for Tray {
     }
 }
 
+/// A slow-stop window (`ks-window --close-when`): its stop ends only once
+/// [`Gate::open`] is called (at the latest after 60 s), so a test decides
+/// exactly how long a switch runs instead of racing a timer.
+struct Gate(PathBuf);
+
+impl Gate {
+    fn new(t: &Tray, name: &str) -> Gate {
+        Gate(t.dir.path().join(format!("{name}.gate")))
+    }
+
+    fn args(&self) -> [&str; 2] {
+        ["--close-when", str_of(&self.0)]
+    }
+
+    fn open(&self) {
+        fs::write(&self.0, b"").unwrap();
+    }
+
+    /// Waits until the window got `WM_CLOSE`: the stop step runs.
+    fn wait_closing(&self) {
+        let marker = ks_fixtures::window::closing_marker(&self.0);
+        assert!(wait_for(LONG, || marker.exists()), "the stop never began");
+    }
+}
+
+/// `[settings]` for tests with a gated stop: a stop timeout well above the
+/// time the test holds the gate.
+const SLOW_SETTINGS: &str = "[settings]\nstop_timeout_s = 30\n\n";
+
 fn profile(name: &str, apps: &[(&str, &str)]) -> String {
     let mut text = format!("[[profile]]\nname = \"{name}\"\n");
     for (exe, action) in apps {
@@ -446,13 +475,14 @@ fn t4_w3_requests_during_a_slow_switch_run_only_the_latest() {
     let mut t = Tray::new();
     t.cleanup.push(KillProgram("ks-tray5-slow.exe".to_owned()));
     let slow = copy_fixture(WINDOW, t.dir.path(), "ks-tray5-slow.exe");
-    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "2000"]) else {
+    let gate = Gate::new(&t, "tray5");
+    let Some(_slow) = window_fixture(str_of(&slow), &gate.args()) else {
         return;
     };
     let _x = t.program("ks-tray5-x.exe");
     let _y = t.program("ks-tray5-y.exe");
     t.config(&format!(
-        "{}{}{}",
+        "{SLOW_SETTINGS}{}{}{}",
         profile("slow", &[("ks-tray5-slow.exe", "stop")]),
         profile("x", &[("ks-tray5-x.exe", "suspend")]),
         profile("y", &[("ks-tray5-y.exe", "suspend")]),
@@ -461,6 +491,9 @@ fn t4_w3_requests_during_a_slow_switch_run_only_the_latest() {
     t.click(ID_PROFILE_BASE);
     t.click(ID_PROFILE_BASE + 1);
     t.click(ID_PROFILE_BASE + 2);
+    // Both later clicks wait behind the slow stop, which ends only now.
+    t.wait_log("tray: switch to \"y\" waits", 1);
+    gate.open();
     t.wait_log("tray: switch to \"y\" finished", 1);
     let log = t.log();
     assert!(log.contains("tray: switch to \"slow\" finished"), "{log}");
@@ -571,13 +604,14 @@ fn t4_w3_through_the_pipe_the_superseded_request_ends_with_code_3() {
     let mut t = Tray::new();
     t.cleanup.push(KillProgram("ks-pipe2-slow.exe".to_owned()));
     let slow = copy_fixture(WINDOW, t.dir.path(), "ks-pipe2-slow.exe");
-    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "3000"]) else {
+    let gate = Gate::new(&t, "pipe2");
+    let Some(_slow) = window_fixture(str_of(&slow), &gate.args()) else {
         return;
     };
     let _x = t.program("ks-pipe2-x.exe");
     let _y = t.program("ks-pipe2-y.exe");
     t.config(&format!(
-        "{}{}{}",
+        "{SLOW_SETTINGS}{}{}{}",
         profile("slow", &[("ks-pipe2-slow.exe", "stop")]),
         profile("x", &[("ks-pipe2-x.exe", "suspend")]),
         profile("y", &[("ks-pipe2-y.exe", "suspend")]),
@@ -589,6 +623,9 @@ fn t4_w3_through_the_pipe_the_superseded_request_ends_with_code_3() {
     let second = t.cli(&["switch", "x"]).spawn().unwrap();
     t.wait_log("tray: switch to \"x\" waits", 1);
     let third = t.cli(&["switch", "y"]).spawn().unwrap();
+    // Both wait behind the slow stop, which ends only now.
+    t.wait_log("tray: switch to \"y\" waits", 1);
+    gate.open();
 
     let (code, _, err) = finish(second);
     assert_eq!(code, 3, "the waiting request is superseded: {err}");
@@ -614,14 +651,25 @@ fn l1_a_request_equal_to_the_running_switch_shares_its_result() {
     let mut t = Tray::new();
     t.cleanup.push(KillProgram("ks-pipe3-slow.exe".to_owned()));
     let slow = copy_fixture(WINDOW, t.dir.path(), "ks-pipe3-slow.exe");
-    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "2000"]) else {
+    let gate = Gate::new(&t, "pipe3");
+    let Some(_slow) = window_fixture(str_of(&slow), &gate.args()) else {
         return;
     };
-    t.config(&profile("slow", &[("ks-pipe3-slow.exe", "stop")]));
+    t.config(&format!(
+        "{SLOW_SETTINGS}{}",
+        profile("slow", &[("ks-pipe3-slow.exe", "stop")])
+    ));
     t.start(1);
     let first = t.cli(&["switch", "slow"]).spawn().unwrap();
     t.wait_log("tray: running switch to \"slow\"", 1);
-    let (code, out, err) = t.run(&["switch", "slow"]);
+    let second = t.cli(&["switch", "slow"]).spawn().unwrap();
+    // It joins the running switch, which ends only now.
+    t.wait_log(
+        "tray: switch to \"slow\" dropped, the running job leads there",
+        1,
+    );
+    gate.open();
+    let (code, out, err) = finish(second);
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("stop ks-pipe3-slow.exe"), "same result: {out}");
     assert_eq!(finish(first).0, 0);
@@ -636,13 +684,14 @@ fn s5_ctrl_break_during_an_in_process_switch_leaves_nothing_frozen() {
     let mut t = Tray::new();
     t.cleanup.push(KillProgram("ks-ctrl-slow.exe".to_owned()));
     let slow = copy_fixture(WINDOW, t.dir.path(), "ks-ctrl-slow.exe");
-    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "3000"]) else {
+    let gate = Gate::new(&t, "ctrl");
+    let Some(_slow) = window_fixture(str_of(&slow), &gate.args()) else {
         return;
     };
     let _a = t.program("ks-ctrl-a.exe");
     let _b = t.program("ks-ctrl-b.exe");
     t.config(&format!(
-        "{}{}",
+        "{SLOW_SETTINGS}{}{}",
         profile("first", &[("ks-ctrl-a.exe", "suspend")]),
         profile(
             "second",
@@ -662,13 +711,18 @@ fn s5_ctrl_break_during_an_in_process_switch_leaves_nothing_frozen() {
         .creation_flags(CREATE_NEW_PROCESS_GROUP)
         .spawn()
         .unwrap();
-    // The slow stop runs for 3 s; interrupt in the middle of it. The Ctrl
-    // handler is in place before the switch logs its start.
+    // Interrupt in the middle of the slow stop, which lasts until the gate
+    // opens. The Ctrl handler is in place before the switch logs its start.
     t.wait_log("switch from \"first\" to \"second\"", 1);
-    std::thread::sleep(Duration::from_millis(500));
+    gate.wait_closing();
     // SAFETY: sends Ctrl+Break to the child's own process group on the
     // console this test shares with it.
-    if let Err(err) = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) } {
+    let sent = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) };
+    // The handler leaves no trace of its own; a Ctrl event arrives within
+    // milliseconds, so the stop is held a generous second longer.
+    std::thread::sleep(Duration::from_secs(1));
+    gate.open();
+    if let Err(err) = sent {
         eprintln!("skipped: cannot send Ctrl+Break here ({err})");
         let _ = finish(child);
         return;
@@ -1343,9 +1397,9 @@ fn u4_an_automatic_request_does_not_replace_a_waiting_manual_one() {
     let mut t = Tray::new();
     t.cleanup.push(KillProgram("ks-trig8-slow.exe".to_owned()));
     let slow = copy_fixture(WINDOW, t.dir.path(), "ks-trig8-slow.exe");
-    // Long enough for the steps below also on a slow runner; the switch
-    // to "slow" waits for it.
-    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "10000"]) else {
+    // The switch to "slow" lasts until the gate opens.
+    let gate = Gate::new(&t, "trig8");
+    let Some(_slow) = window_fixture(str_of(&slow), &gate.args()) else {
         return;
     };
     let _b = t.program("ks-trig8-b.exe");
@@ -1354,7 +1408,7 @@ fn u4_an_automatic_request_does_not_replace_a_waiting_manual_one() {
     let sim_exe = copy_fixture(HEARTBEAT, t.dir.path(), "ks-trig8-sim.exe");
     let sim_beat = t.beat_file("ks-trig8-sim.exe");
     t.config(&format!(
-        "{}{}{}",
+        "{SLOW_SETTINGS}{}{}{}",
         profile("slow", &[("ks-trig8-slow.exe", "stop")]),
         profile("work", &[("ks-trig8-b.exe", "suspend")]),
         triggered("flight", 0, &["ks-trig8-sim.exe"], &[]),
@@ -1370,6 +1424,7 @@ fn u4_an_automatic_request_does_not_replace_a_waiting_manual_one() {
         "tray: automatic switch to \"flight\" ignored, a manual request waits",
         1,
     );
+    gate.open();
     t.wait_log("tray: switch to \"work\" finished", 1);
     assert!(t.is_frozen("ks-trig8-b.exe"));
     // Automation owns nothing: the end of the trigger changes nothing.
@@ -1588,4 +1643,25 @@ fn u4_check_config_refuses_a_trigger_its_own_profile_freezes() {
         out.contains("profile \"flight\": 1 program(s), trigger ks-trig6-sim.exe (priority 7)"),
         "{out}"
     );
+}
+
+#[test]
+fn u4_automation_from_the_command_line_without_triggers_says_so() {
+    // No tray: the command line writes settings.json itself.
+    let t = Tray::new();
+    t.config(&profile("plain", &[("ks-auto0-a.exe", "suspend")]));
+    let (code, out, err) = t.run(&["automation", "off"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out.lines().collect::<Vec<_>>(),
+        [
+            "automatic switching: paused",
+            "note: no profile has triggers yet; automatic switching does nothing until one has"
+        ]
+    );
+    assert!(t.settings().contains("\"triggers_paused\": true"));
+    let (code, out, _) = t.run(&["automation", "on"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("automatic switching: on\n"), "{out}");
+    assert!(!t.settings().contains("triggers_paused"));
 }

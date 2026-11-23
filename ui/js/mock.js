@@ -26,7 +26,7 @@ const state = {
   default_action: 'suspend',
   default_trim: true,
   autostart: false,
-  automation: { on: true, triggers: true },
+  automation: { on: true, triggers: true, note: null },
   applying: false,
   status: 'Mock backend: nothing is saved.',
   update: {

@@ -75,7 +75,9 @@ function render() {
   $('autostart').checked = !!state.autostart;
   // U4: moved here from the tray menu; without triggers it does nothing yet.
   const automation = state.automation || { on: true, triggers: false };
-  const hint = automation.triggers ? '' : 'No profile has triggers yet; set them under Triggers of a profile.';
+  // An older tray that did not take a change keeps its own until it restarts.
+  const hint = automation.note
+    || (automation.triggers ? '' : 'No profile has triggers yet; set them under Triggers of a profile.');
   $('automation').checked = automation.on;
   $('automation').disabled = !automation.triggers;
   $('automation-wrap').classList.toggle('unused', !automation.triggers);

@@ -178,6 +178,11 @@ pub struct TrayStatus {
     /// from a tray that does not know the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_switch: Option<LastSwitch>,
+    /// Lines for the caller of `set_automation` (for example that the
+    /// setting was taken over but could not be saved). Added within
+    /// version 1; absent when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// U4: what automatic switching does, for `kaltstellen status`.
@@ -501,6 +506,7 @@ mod tests {
                         text: "KS110 [start] t.exe: missing".into(),
                     }],
                 }),
+                notes: vec!["warning: not saved".into()],
             }),
         ];
         for body in bodies {
@@ -524,6 +530,7 @@ mod tests {
             waiting: None,
             automation: None,
             last_switch: None,
+            notes: Vec::new(),
         })));
         assert!(!line.contains("last_switch"), "{line}");
         let Body::Status(status) = decode_reply(line.trim_end()).unwrap().body else {

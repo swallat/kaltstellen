@@ -525,14 +525,24 @@ fn autostart(switch: Option<OnOff>) -> u8 {
     exit::OK
 }
 
-/// A note for a setting the running tray did not take over at once.
+/// A note for a setting the running tray did not take over at once, or
+/// took over with a note of its own (not saved).
 fn delivery_note(delivery: &client::Delivery) -> Option<String> {
     match delivery {
+        client::Delivery::Tray(status) if !status.notes.is_empty() => Some(status.notes.join(" ")),
         client::Delivery::Tray(_) | client::Delivery::Saved => None,
         client::Delivery::SavedForLater(reason) => Some(format!(
-            "saved, but the running tray did not take it over ({reason}); it uses it from its next start"
+            "saved, but the running tray did not take it over ({reason}); it keeps its own setting until it restarts"
         )),
     }
+}
+
+/// U4: whether some profile of the configuration in effect names triggers;
+/// `None` when the file cannot be read (then nothing is said about it).
+fn triggers_configured() -> Option<bool> {
+    config::for_switch(paths::config_file().as_deref(), config::NEUTRAL)
+        .ok()
+        .map(|(config, _)| config.profiles.iter().any(|p| !p.triggers.is_empty()))
 }
 
 /// `update --mode auto|manual|off` (UP1). With a tray running, the tray
@@ -598,6 +608,11 @@ fn automation(switch: Option<OnOff>) -> u8 {
     );
     if let Some(note) = note {
         println!("note: {note}");
+    }
+    if triggers_configured() == Some(false) {
+        println!(
+            "note: no profile has triggers yet; automatic switching does nothing until one has"
+        );
     }
     exit::OK
 }
