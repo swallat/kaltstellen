@@ -139,16 +139,18 @@ actions only", section 12):
     caller writes the file; a tray that does not take it (an older tray
     rejects the unknown command with `KS505`, a quitting one with `KS501`,
     or no answer in time: the window waits 3 s for the answer to these
-    commands) gets the file written by the caller; that tray keeps its own
-    setting until it restarts. The window and the command line say so,
-    exit code 0, and the window keeps showing the saved value with that
-    note rather than flipping back to the older tray's state. A tray that
+    commands) gets the file written by the caller, exit code 0. Only for an
+    older tray (`KS505`) do the window and the command line say that it
+    keeps its own setting until it restarts, and the window keeps showing
+    the saved value with that note rather than flipping back to the older
+    tray's state; for a quitting tray or no answer in time they say that
+    the value was saved but the tray did not answer in time. A tray that
     took `set_automation` but could not save it answers with a note
     (`taken over … but not saved`); a `set_update_mode` it could not save
     is refused. In both cases the caller writes nothing. Every edit of
     `settings.json` holds `settings.lock` (no lost updates between tray,
-    window and command line) and writes through a temporary file of its
-    own process.
+    window and command line) and writes through `settings.json.tmp` under
+    that lock (a crash leaves at most that file, overwritten next time).
 21. **Two checks when a checking mode is chosen in the window** (UP1): the
     tray checks (its result decides on an automatic install) and the window
     runs its own check so it can show the result; both write `update.json`

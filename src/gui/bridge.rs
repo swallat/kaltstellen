@@ -337,8 +337,11 @@ fn later(delivery: &Delivery) -> String {
         }
         Delivery::Tray(_) => ".".to_owned(),
         Delivery::Saved => "; saved. The tray uses it when it starts.".to_owned(),
-        Delivery::SavedForLater(_) => {
+        Delivery::OlderTray(_) => {
             "; saved. The running tray keeps its own setting until it restarts.".to_owned()
+        }
+        Delivery::Unanswered(_) => {
+            "; saved, but the running tray did not answer in time.".to_owned()
         }
     }
 }
@@ -872,14 +875,15 @@ impl<H: Host> Bridge<H> {
                 // not take it), the file just written is shown.
                 self.tray_paused = match &delivery {
                     Delivery::Tray(_) => Some(!on),
-                    Delivery::Saved | Delivery::SavedForLater(_) => None,
+                    Delivery::Saved | Delivery::OlderTray(_) | Delivery::Unanswered(_) => None,
                 };
                 // An older tray keeps its own state: the window goes on
                 // showing what was saved, with a note, instead of flipping
-                // back at the next refresh. [assumed]
+                // back at the next refresh. [assumed] A tray that did not
+                // answer in time may well have it; the next refresh says.
                 self.held_back = match &delivery {
-                    Delivery::SavedForLater(_) => Some(!on),
-                    Delivery::Tray(_) | Delivery::Saved => None,
+                    Delivery::OlderTray(_) => Some(!on),
+                    Delivery::Tray(_) | Delivery::Saved | Delivery::Unanswered(_) => None,
                 };
                 self.status = format!(
                     "Automatic switching {}{}",
@@ -1039,8 +1043,9 @@ mod tests {
         tray_paused: Rc<std::cell::Cell<Option<bool>>>,
         /// `triggers_paused` in `settings.json`.
         saved_paused: Rc<std::cell::Cell<bool>>,
-        /// How a setting arrives: 0 the tray takes it, 1 no tray, 2 a tray
-        /// that does not take it, 3 the tray takes it but cannot save it.
+        /// How a setting arrives: 0 the tray takes it, 1 no tray, 2 an
+        /// older tray that does not know the command, 3 the tray takes it but
+        /// cannot save it, 4 the tray does not answer in time.
         delivery: Rc<std::cell::Cell<u8>>,
     }
 
@@ -1062,7 +1067,8 @@ mod tests {
                         ..TrayStatus::default()
                     }))
                 }
-                _ => Delivery::SavedForLater("KS505 unknown command".into()),
+                2 => Delivery::OlderTray("KS505 unknown command".into()),
+                _ => Delivery::Unanswered("KS501 no answer".into()),
             }
         }
     }
@@ -1794,6 +1800,20 @@ mod tests {
             "Automatic switching on. warning: taken over by the tray for this session, but not saved: disk full"
         );
         assert_eq!(automation(&reply)["on"], true);
+        // No answer in time: saved here, and said so; not the older-tray
+        // wording, and no note (the next refresh shows what the tray does).
+        fake.delivery.set(4);
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 13, "type": "set_automation", "on": false}),
+        );
+        assert_eq!(reply["ok"], true);
+        assert!(fake.saved_paused.get());
+        assert_eq!(
+            reply["state"]["status"],
+            "Automatic switching paused; saved, but the running tray did not answer in time."
+        );
+        assert_eq!(automation(&reply)["note"], Value::Null);
     }
 
     #[test]

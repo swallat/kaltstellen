@@ -91,11 +91,14 @@ pub enum Delivery {
     /// No tray runs: written to `settings.json` here; a tray reads it when
     /// it starts.
     Saved,
-    /// A tray runs but did not take it (an older tray that does not know
-    /// the command, one that is quitting or does not answer): written to
-    /// `settings.json` here; that tray takes it over at its next start.
-    /// The reason, for the log and the caller.
-    SavedForLater(String),
+    /// An older tray that does not know the command (`KS505`): written to
+    /// `settings.json` here; that tray keeps its own setting until it
+    /// restarts. The reason, for the log.
+    OlderTray(String),
+    /// A tray runs but did not answer in time, or refused it because it is
+    /// quitting: written to `settings.json` here; whether that tray took
+    /// it is not known. The reason, for the log and the caller.
+    Unanswered(String),
 }
 
 impl Delivery {
@@ -104,8 +107,11 @@ impl Delivery {
         match self {
             Delivery::Tray(_) => "taken over by the tray".to_owned(),
             Delivery::Saved => "saved, no tray runs".to_owned(),
-            Delivery::SavedForLater(reason) => {
-                format!("saved, the tray takes it at its next start: {reason}")
+            Delivery::OlderTray(reason) => {
+                format!("saved, the older tray keeps its own until it restarts: {reason}")
+            }
+            Delivery::Unanswered(reason) => {
+                format!("saved, the tray did not answer in time: {reason}")
             }
         }
     }
@@ -138,14 +144,25 @@ pub fn deliver(
         Ok(Some(Body::Rejected { exit_code, lines })) if exit_code == crate::exit::ERRORS => {
             return Err(Error::new(Code::SettingsIo, lines.join(" ")));
         }
-        // An older tray (`KS505`, unknown command) or one that quits.
+        // An older tray: it does not know the command (`KS505`).
+        Ok(Some(Body::Rejected { lines, .. }))
+            if lines
+                .iter()
+                .any(|l| l.contains(&Code::TrayProtocol.to_string())) =>
+        {
+            let reason = lines.join(" ");
+            log::warn!("an older tray did not take the setting: {reason}");
+            save()?;
+            return Ok(Delivery::OlderTray(reason));
+        }
+        // One that quits (`KS501`).
         Ok(Some(Body::Rejected { lines, .. })) => lines.join(" "),
         Ok(Some(other)) => format!("unexpected answer from the tray: {other:?}"),
         Err(err) => err.to_string(),
     };
-    log::warn!("the tray did not take the setting: {reason}");
+    log::warn!("the tray did not take the setting in time: {reason}");
     save()?;
-    Ok(Delivery::SavedForLater(reason))
+    Ok(Delivery::Unanswered(reason))
 }
 
 fn converse(mut conn: File, command: Command, on_waiting: &mut dyn FnMut()) -> Result<Body> {

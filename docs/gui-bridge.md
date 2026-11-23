@@ -41,7 +41,7 @@ control characters; paths must be absolute.
 | `dismiss` | `profile`, `exe` | Hide an unassigned program for this profile. |
 | `apply` | `profile` | Start `kaltstellen switch PROFILE`; the result arrives as the `applied` event. One switch at a time. |
 | `set_autostart` | `on` | Start at sign-in on or off (L8). |
-| `set_automation` | `on` (bool) | U4: `Automatic switching` on or paused (moved from the tray menu, owner 2026-11-23). With a tray running, the host hands it over the pipe (`set_automation`), the tray takes it over at once and writes `triggers_paused` to `settings.json`; without one, or when the tray does not take it (an older tray, one that is quitting or does not answer), the host writes `settings.json` and the status line ends with `saved. The tray uses it when it starts.` or `saved. The running tray keeps its own setting until it restarts.`; the window then keeps showing the saved value with `automation.note`. A tray that took it but could not save it answers with a note, which ends the status line; the host writes nothing then. See "Settings and the running tray". |
+| `set_automation` | `on` (bool) | U4: `Automatic switching` on or paused (moved from the tray menu, owner 2026-11-23). With a tray running, the host hands it over the pipe (`set_automation`), the tray takes it over at once and writes `triggers_paused` to `settings.json`; without one, or when the tray does not take it (an older tray, one that is quitting or does not answer), the host writes `settings.json` and the status line ends with `saved. The tray uses it when it starts.` or `saved. The running tray keeps its own setting until it restarts.` (an older tray, `KS505`) or `saved, but the running tray did not answer in time.`; after the older-tray case the window keeps showing the saved value with `automation.note`. A tray that took it but could not save it answers with a note, which ends the status line; the host writes nothing then. See "Settings and the running tray". |
 | `set_update_mode` | `mode`: `"auto"`, `"manual"` or `"off"` | The update mode (UP1). Refused while `KALTSTELLEN_UPDATE` decides. Handed to the running tray like `set_automation` (pipe `set_update_mode`: the tray writes it and checks at once if the mode checks), else written to `settings.json` here, with the same endings of the status line. A mode that checks also starts the window's own check at once, as `check_updates` `[assumed]`, so the window can say what it found. |
 | `check_updates` | | Runs `kaltstellen update --check --quiet` in the background (the one network access, UP1); the end arrives as the `update_checked` event. One check at a time. |
 | `install_update` | | Opens a console window with `kaltstellen update`, as the tray's `Install update…`. Refused when no newer version is known or this copy cannot update itself. |
@@ -130,7 +130,9 @@ takes them over at once and writes the file, so it stays their one writer
 while it runs. Without a tray the host writes the file. A tray that does
 not take the setting (one from before these commands rejects them as
 unknown) gets the file written by the host and keeps its own setting until
-it restarts; the status line says so. The host waits as for `status` below,
+it restarts; the status line says so. A tray that quits or does not answer
+in time also gets the file written by the host; the status line then says
+that the value was saved but the tray did not answer in time. The host waits as for `status` below,
 but up to 3 s for the answer to these two commands.
 `[assumed]` (the mechanism; chosen over the tray re-reading the file,
 because the effect is immediate and needs no watcher).

@@ -718,15 +718,15 @@ fn s5_ctrl_break_during_an_in_process_switch_leaves_nothing_frozen() {
     // SAFETY: sends Ctrl+Break to the child's own process group on the
     // console this test shares with it.
     let sent = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) };
-    // The handler leaves no trace of its own; a Ctrl event arrives within
-    // milliseconds, so the stop is held a generous second longer.
-    std::thread::sleep(Duration::from_secs(1));
-    gate.open();
     if let Err(err) = sent {
         eprintln!("skipped: cannot send Ctrl+Break here ({err})");
+        gate.open();
         let _ = finish(child);
         return;
     }
+    // The stop ends only once the handler has taken the interrupt.
+    t.wait_log("console: interrupt requested", 1);
+    gate.open();
     let (code, out, err) = finish(child);
     assert_eq!(code, 1, "{out}\n{err}");
     assert!(err.contains("KS403"), "{err}");

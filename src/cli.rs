@@ -531,8 +531,11 @@ fn delivery_note(delivery: &client::Delivery) -> Option<String> {
     match delivery {
         client::Delivery::Tray(status) if !status.notes.is_empty() => Some(status.notes.join(" ")),
         client::Delivery::Tray(_) | client::Delivery::Saved => None,
-        client::Delivery::SavedForLater(reason) => Some(format!(
-            "saved, but the running tray did not take it over ({reason}); it keeps its own setting until it restarts"
+        client::Delivery::OlderTray(reason) => Some(format!(
+            "saved, but the running tray is older and did not take it over ({reason}); it keeps its own setting until it restarts"
+        )),
+        client::Delivery::Unanswered(reason) => Some(format!(
+            "saved, but the running tray did not answer in time ({reason})"
         )),
     }
 }

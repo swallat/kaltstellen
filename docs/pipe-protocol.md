@@ -55,9 +55,11 @@ these keys while it runs. Without a tray, the caller writes `settings.json`
 itself and the next tray reads it at its start. When a tray runs but does
 not take the setting (an older tray rejects the unknown command with
 `rejected`, `KS505`; a tray that is quitting rejects it with `KS501`; or it
-does not answer), the caller also writes `settings.json` itself and says
-that the running tray keeps its own setting until it restarts; the command
-line prints that as a `note:` line and ends with exit code 0. A `rejected`
+does not answer), the caller also writes `settings.json` itself and ends
+with exit code 0. For an older tray (`KS505`) it says that the running tray
+keeps its own setting until it restarts; for a quitting tray or no answer in
+time it says that the value was saved but the tray did not answer in time.
+The command line prints that as a `note:` line. A `rejected`
 with exit code 1 is the tray's own refusal (an unknown mode, a mode it
 could not save): the caller reports it and writes nothing. A tray that
 took `set_automation` but could not save it answers `status` with `notes`

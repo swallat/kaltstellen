@@ -75,6 +75,8 @@ unsafe extern "system" fn handler(event: u32) -> BOOL {
     match event {
         CTRL_C_EVENT | CTRL_BREAK_EVENT => {
             INTERRUPTED.store(true, Ordering::SeqCst);
+            // Tests wait for this line before they let the step end.
+            log::info!("console: interrupt requested (Ctrl+C or Ctrl+Break)");
             // Handled: the process goes on and winds the switch down.
             true.into()
         }
