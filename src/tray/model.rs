@@ -4,9 +4,16 @@
 
 use std::sync::{Arc, Mutex};
 
+use super::protocol::{ErrorLine, LastSwitch};
 use crate::config::NEUTRAL;
 use crate::error::{Code, Error, Step};
 use crate::process::Guest;
+
+/// M5: most errors the status reply carries, and the longest text of one;
+/// keeps the reply far below the pipe's line limit whatever a profile
+/// holds.
+const MAX_ERROR_LINES: usize = 32;
+const MAX_ERROR_TEXT: usize = 300;
 
 /// Profile names compare like `Config::profile` does: trimmed, any case.
 fn same_profile(a: &str, b: &str) -> bool {
@@ -225,6 +232,10 @@ pub struct SwitchError {
     /// `None`: nothing observable resolves it; it stays until the next
     /// switch.
     pub resolution: Option<Resolution>,
+    /// What the main window needs to put a marker on the entry (M5).
+    pub code: Option<Code>,
+    pub program: Option<String>,
+    pub path: Option<String>,
 }
 
 impl SwitchError {
@@ -239,20 +250,25 @@ impl SwitchError {
     /// - Everything else (state or log I/O, warn list, resume, snapshot):
     ///   stays until the next switch.
     pub fn of(error: &Error) -> Self {
-        let program = error.program.clone();
-        let resolution = program.and_then(|exe| match (error.code, error.step) {
-            (Code::StartFailed | Code::ElevationRequired, _) => Some(Resolution::Runs(exe)),
-            (Code::CloseTimeout | Code::TerminateFailed | Code::SuspendFailed, _) => {
-                Some(Resolution::Gone(exe))
-            }
-            (Code::NeedsAdmin | Code::Protected, Some(Step::Stop | Step::Suspend)) => {
-                Some(Resolution::Gone(exe))
-            }
-            _ => None,
-        });
+        let resolution = error
+            .program
+            .clone()
+            .and_then(|exe| match (error.code, error.step) {
+                (Code::StartFailed | Code::ElevationRequired, _) => Some(Resolution::Runs(exe)),
+                (Code::CloseTimeout | Code::TerminateFailed | Code::SuspendFailed, _) => {
+                    Some(Resolution::Gone(exe))
+                }
+                (Code::NeedsAdmin | Code::Protected, Some(Step::Stop | Step::Suspend)) => {
+                    Some(Resolution::Gone(exe))
+                }
+                _ => None,
+            });
         Self {
             text: error.to_string(),
             resolution,
+            code: Some(error.code),
+            program: error.program.clone(),
+            path: error.path.clone(),
         }
     }
 
@@ -272,6 +288,9 @@ impl From<&str> for SwitchError {
         Self {
             text: text.to_owned(),
             resolution: None,
+            code: None,
+            program: None,
+            path: None,
         }
     }
 }
@@ -346,6 +365,31 @@ impl Status {
             .partition(|e| e.resolved(running));
         self.switch_errors = kept;
         gone
+    }
+
+    /// M5: the errors of the last switch that name a program, for the
+    /// markers of the main window; `None` when there are none. They belong
+    /// to the profile that switch made active.
+    pub fn last_switch(&self) -> Option<LastSwitch> {
+        let errors: Vec<ErrorLine> = self
+            .switch_errors
+            .iter()
+            .filter_map(|e| {
+                Some(ErrorLine {
+                    code: e.code?.to_string(),
+                    program: e.program.clone()?,
+                    // A path too long to send is left out; the marker then
+                    // goes by name only.
+                    path: e.path.clone().filter(|p| p.len() <= MAX_ERROR_TEXT),
+                    text: e.text.chars().take(MAX_ERROR_TEXT).collect(),
+                })
+            })
+            .take(MAX_ERROR_LINES)
+            .collect();
+        (!errors.is_empty()).then(|| LastSwitch {
+            profile: self.active.clone(),
+            errors,
+        })
     }
 
     /// Whether a later check could still resolve an error (the re-check
@@ -890,6 +934,44 @@ mod tests {
         );
         assert_eq!(menu.command(ID_UPDATE_INSTALL), None);
         assert_eq!(menu.command(ID_UPDATE_AUTO), None);
+    }
+
+    #[test]
+    fn m5_last_switch_lists_program_errors_of_the_active_profile() {
+        let mut status = Status::default();
+        assert_eq!(status.last_switch(), None);
+        let start = Error::new(Code::StartFailed, "missing")
+            .program("tool.exe")
+            .path("C:\\t\\tool.exe")
+            .step(Step::Start);
+        let io = Error::new(Code::StateIo, "disk full");
+        status.finished(
+            "focus".into(),
+            vec![
+                SwitchError::of(&start),
+                SwitchError::of(&io),
+                "plain".into(),
+            ],
+        );
+        let last = status.last_switch().unwrap();
+        assert_eq!(last.profile, "focus");
+        // Only errors that name a program can become markers.
+        assert_eq!(
+            last.errors,
+            vec![ErrorLine {
+                code: "KS110".into(),
+                program: "tool.exe".into(),
+                path: Some("C:\\t\\tool.exe".into()),
+                text: "KS110 [start] tool.exe: missing".into(),
+            }]
+        );
+        // Resolved (L9) or replaced by a clean switch: nothing to mark.
+        status.resolve(&|exe: &str| exe == "tool.exe");
+        assert_eq!(status.last_switch(), None);
+        status.finished("focus".into(), vec![SwitchError::of(&start)]);
+        assert!(status.last_switch().is_some());
+        status.finished("focus".into(), vec![]);
+        assert_eq!(status.last_switch(), None);
     }
 
     #[test]

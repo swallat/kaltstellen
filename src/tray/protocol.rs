@@ -151,6 +151,32 @@ pub struct TrayStatus {
     pub running: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<String>,
+    /// M5: the errors of the last switch that are not resolved yet (L9),
+    /// for the markers of the main window. Absent when there are none, and
+    /// from a tray that does not know the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_switch: Option<LastSwitch>,
+}
+
+/// M5: the open errors of the last switch and the profile it made active.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastSwitch {
+    pub profile: String,
+    pub errors: Vec<ErrorLine>,
+}
+
+/// One error of the last switch that names a program.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ErrorLine {
+    /// `KS110`.
+    pub code: String,
+    /// The executable name.
+    pub program: String,
+    /// The full path, where the step knew it (a start).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// As the menu shows it: `KS110 [start] tool.exe: reason`.
+    pub text: String,
 }
 
 impl Finished {
@@ -318,6 +344,15 @@ mod tests {
                 state: State::default(),
                 running: Some("switch to \"a\"".into()),
                 waiting: None,
+                last_switch: Some(LastSwitch {
+                    profile: "a".into(),
+                    errors: vec![ErrorLine {
+                        code: "KS110".into(),
+                        program: "t.exe".into(),
+                        path: Some("C:\\t\\t.exe".into()),
+                        text: "KS110 [start] t.exe: missing".into(),
+                    }],
+                }),
             }),
         ];
         for body in bodies {
@@ -330,6 +365,22 @@ mod tests {
             done,
             "{\"version\":1,\"reply\":\"superseded\",\"by\":\"b\"}\n"
         );
+    }
+
+    #[test]
+    fn m5_a_status_without_last_switch_still_decodes() {
+        // A tray from before M5 sends no `last_switch`; no error is shown.
+        let line = encode(&reply(Body::Status(TrayStatus {
+            state: State::default(),
+            running: None,
+            waiting: None,
+            last_switch: None,
+        })));
+        assert!(!line.contains("last_switch"), "{line}");
+        let Body::Status(status) = decode_reply(line.trim_end()).unwrap().body else {
+            panic!("not a status");
+        };
+        assert_eq!(status.last_switch, None);
     }
 
     #[test]

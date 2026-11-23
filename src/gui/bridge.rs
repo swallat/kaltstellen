@@ -14,9 +14,10 @@ use serde_json::{Value, json};
 
 use super::document::{Document, EntryEdit, action_name};
 pub use super::icons::Wanted;
-use super::model::{self, AddCheck, Candidate};
+use super::model::{self, AddCheck, Candidate, Failure};
 use crate::config::{App, AppAction, Config, NEUTRAL, OnTimeout};
 use crate::protection::{self, Protection};
+use crate::tray::protocol::LastSwitch;
 use crate::unassigned::Unassigned;
 
 pub const VERSION: u64 = 1;
@@ -51,10 +52,15 @@ pub trait Host {
     /// M2: the icon of each program as a PNG `data:` URL, `None` where
     /// there is none, in the order asked.
     fn icons(&self, wanted: &[Wanted], size: u32) -> Vec<Option<String>>;
+    /// M5: the open errors of the last switch, from the running tray;
+    /// `None` without a tray or without errors.
+    fn last_switch(&self) -> Option<LastSwitch>;
 }
 
 /// Most programs one `icons` request may name.
 const MAX_ICONS: usize = 256;
+/// M2: most files one drop may bring.
+const MAX_DROPPED: usize = 64;
 
 /// One program of an `icons` request.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -136,6 +142,9 @@ pub enum Request {
         index: usize,
     },
     PickExecutable,
+    /// M2: files dropped onto the window. Their paths are not in the
+    /// message: the host reads them from the dropped file objects.
+    DropFiles,
     Running,
     Unassigned {
         profile: String,
@@ -176,6 +185,8 @@ pub struct EntryView {
     pub confirmed: bool,
     /// `none`, `warn` or `hard`.
     pub protection: &'static str,
+    /// M5: markers for errors of the last switch.
+    pub errors: Vec<Failure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -207,7 +218,7 @@ fn protection_name(exe: &str) -> &'static str {
     }
 }
 
-fn entry_view(app: &App) -> EntryView {
+fn entry_view(app: &App, errors: Vec<Failure>) -> EntryView {
     let path_text = |p: &Option<PathBuf>| p.as_ref().map(|p| p.to_string_lossy().into_owned());
     let mut view = EntryView {
         exe: app.exe.clone(),
@@ -220,6 +231,7 @@ fn entry_view(app: &App) -> EntryView {
         trim: None,
         confirmed: app.confirmed,
         protection: protection_name(&app.exe),
+        errors,
     };
     match &app.action {
         AppAction::Start { args, cwd } => {
@@ -299,6 +311,11 @@ pub struct Bridge<H: Host> {
     checking: bool,
     /// The document before the edit that is being handled.
     snapshot: Option<Document>,
+    /// M5: the open errors of the last switch as the tray reported them
+    /// at the last refresh (`get_state`, the end of a switch).
+    last_switch: Option<LastSwitch>,
+    /// M2: the paths of the files attached to the message being handled.
+    dropped: Vec<PathBuf>,
 }
 
 impl<H: Host> Bridge<H> {
@@ -312,6 +329,8 @@ impl<H: Host> Bridge<H> {
             applying: false,
             checking: false,
             snapshot: None,
+            last_switch: None,
+            dropped: Vec::new(),
         }
     }
 
@@ -333,7 +352,19 @@ impl<H: Host> Bridge<H> {
                     name: p.name.clone(),
                     hotkey: p.hotkey.map(|h| h.to_string()),
                     active: p.name.eq_ignore_ascii_case(&active),
-                    entries: p.apps.iter().map(entry_view).collect(),
+                    entries: p
+                        .apps
+                        .iter()
+                        .map(|app| {
+                            let errors = model::failures(
+                                self.last_switch.as_ref(),
+                                &p.name,
+                                &app.exe,
+                                app.path.as_deref(),
+                            );
+                            entry_view(app, errors)
+                        })
+                        .collect(),
                 })
                 .collect(),
             active,
@@ -349,7 +380,21 @@ impl<H: Host> Bridge<H> {
 
     /// Handles one raw message from the page and returns the reply.
     pub fn handle(&mut self, raw: &str) -> String {
-        let (id, result) = match self.parse(raw) {
+        self.handle_with_files(raw, Vec::new())
+    }
+
+    /// [`Bridge::handle`] for a message that came with files (M2): the
+    /// host read `files` from the file objects the page attached. Only
+    /// `drop_files` may carry them.
+    pub fn handle_with_files(&mut self, raw: &str, files: Vec<PathBuf>) -> String {
+        let parsed = self.parse(raw).and_then(|(id, request)| {
+            if !files.is_empty() && request != Request::DropFiles {
+                return Err((id, "only drop_files may carry files".to_owned()));
+            }
+            Ok((id, request))
+        });
+        self.dropped = files;
+        let (id, result) = match parsed {
             Ok((id, request)) => {
                 // An edit whose save fails is taken back (see `saved`).
                 self.snapshot = is_edit(&request).then(|| self.document.clone());
@@ -441,7 +486,12 @@ impl<H: Host> Bridge<H> {
             ));
         }
         match request {
-            Request::GetState => Ok(None),
+            Request::GetState => {
+                // M5: asked here and when a switch ends, not with every
+                // reply: it is a round trip to the tray.
+                self.last_switch = self.host.last_switch();
+                Ok(None)
+            }
             Request::CreateProfile { name } => {
                 check_text(&[&name])?;
                 let result = self.document.add_profile(&name);
@@ -589,6 +639,30 @@ impl<H: Host> Bridge<H> {
                     }))
                 });
                 Ok(Some(picked.unwrap_or(Value::Null)))
+            }
+            Request::DropFiles => {
+                // M2: like `pick_executable` for each file; the page then
+                // adds them with `add_entry`, which checks everything again.
+                let dropped = std::mem::take(&mut self.dropped);
+                if dropped.is_empty() {
+                    return Err("no file was dropped (drop files from Explorer)".to_owned());
+                }
+                if dropped.len() > MAX_DROPPED {
+                    return Err(format!("at most {MAX_DROPPED} files at once"));
+                }
+                let mut files = Vec::new();
+                let mut refused = Vec::new();
+                for path in dropped {
+                    match model::check_dropped(&path, MAX_TEXT) {
+                        Ok(exe) => files.push(json!({
+                            "path": path.to_string_lossy(),
+                            "protection": protection_name(&exe),
+                            "exe": exe,
+                        })),
+                        Err(reason) => refused.push(reason),
+                    }
+                }
+                Ok(Some(json!({"files": files, "refused": refused})))
             }
             Request::Running => {
                 let list: Vec<Value> = self
@@ -744,6 +818,7 @@ impl<H: Host> Bridge<H> {
     pub fn applied(&mut self, target: &str, code: u8, stderr: &str) -> String {
         self.applying = false;
         self.status = model::applied(target, code, stderr);
+        self.last_switch = self.host.last_switch();
         if let Some(name) = self.pending_delete.take() {
             if target == NEUTRAL && code <= crate::exit::ERRORS {
                 self.snapshot = Some(self.document.clone());
@@ -774,6 +849,7 @@ mod tests {
         update: Rc<RefCell<UpdateInfo>>,
         checks: Rc<RefCell<usize>>,
         installs: Rc<RefCell<usize>>,
+        last_switch: Rc<RefCell<Option<LastSwitch>>>,
     }
 
     impl Host for Fake {
@@ -841,6 +917,119 @@ mod tests {
                 })
                 .collect()
         }
+        fn last_switch(&self) -> Option<LastSwitch> {
+            self.last_switch.borrow().clone()
+        }
+    }
+
+    #[test]
+    fn m2_dropped_files_are_checked_and_added_like_chosen_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        let file = |name: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, b"MZ").unwrap();
+            path
+        };
+        let tool = file("tool.exe");
+        let any = file("anydesk.exe");
+        let notes = file("notes.txt");
+        std::fs::create_dir(dir.path().join("folder")).unwrap();
+        let drop = |b: &mut Bridge<Fake>, files: Vec<PathBuf>| -> Value {
+            let raw = json!({"v": 1, "id": 1, "type": "drop_files"}).to_string();
+            serde_json::from_str(&b.handle_with_files(&raw, files)).unwrap()
+        };
+        let reply = drop(
+            &mut b,
+            vec![
+                tool.clone(),
+                any.clone(),
+                notes,
+                dir.path().join("folder"),
+                PathBuf::from("relative.exe"),
+            ],
+        );
+        assert_eq!(reply["ok"], true, "{reply}");
+        let files = reply["data"]["files"].as_array().unwrap();
+        assert_eq!(files.len(), 2, "{reply}");
+        assert_eq!(files[0]["exe"], "tool.exe");
+        assert_eq!(files[0]["path"], tool.to_str().unwrap());
+        assert_eq!(files[0]["protection"], "none");
+        assert_eq!(files[1]["protection"], "warn");
+        let refused = reply["data"]["refused"].as_array().unwrap();
+        assert_eq!(refused.len(), 3, "{reply}");
+        assert!(refused[0].as_str().unwrap().contains("not a program"));
+        assert!(refused[1].as_str().unwrap().contains("folder"));
+        assert!(refused[2].as_str().unwrap().contains("full path"));
+        // Nothing is added by the drop itself: the page adds each file with
+        // `add_entry`, which checks protection, C1 to C8 and duplicates.
+        assert_eq!(b.document().config().profiles[0].apps.len(), 1);
+        let add = |b: &mut Bridge<Fake>, exe: &str, path: &Path, confirmed: bool| {
+            send(
+                b,
+                json!({"v": 1, "id": 2, "type": "add_entry", "profile": "focus",
+                       "exe": exe, "path": path, "confirmed": confirmed}),
+            )["ok"]
+                == true
+        };
+        assert!(add(&mut b, "tool.exe", &tool, false));
+        assert!(!add(&mut b, "tool.exe", &tool, false), "a duplicate (C2)");
+        assert!(!add(&mut b, "anydesk.exe", &any, false), "warn list");
+        assert!(add(&mut b, "anydesk.exe", &any, true));
+
+        // The page cannot name paths itself, and only a drop carries files.
+        let named = send(
+            &mut b,
+            json!({"v": 1, "id": 3, "type": "drop_files", "paths": ["C:\\x.exe"]}),
+        );
+        assert_eq!(named["ok"], false);
+        assert!(
+            drop(&mut b, Vec::new())["error"]
+                .as_str()
+                .unwrap()
+                .contains("no file")
+        );
+        let raw = json!({"v": 1, "id": 4, "type": "create_profile", "name": "x"}).to_string();
+        let smuggled: Value =
+            serde_json::from_str(&b.handle_with_files(&raw, vec![tool.clone()])).unwrap();
+        assert_eq!(smuggled["ok"], false);
+        assert!(b.document().config().profile("x").is_none());
+        let many = vec![tool; MAX_DROPPED + 1];
+        assert_eq!(drop(&mut b, many)["ok"], false);
+    }
+
+    #[test]
+    fn m5_markers_follow_the_trays_errors_at_each_refresh() {
+        use crate::tray::protocol::ErrorLine;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, fake) = bridge(&dir);
+        *fake.active.borrow_mut() = "focus".into();
+        *fake.last_switch.borrow_mut() = Some(LastSwitch {
+            profile: "focus".into(),
+            errors: vec![ErrorLine {
+                code: "KS105".into(),
+                program: "browser.exe".into(),
+                path: None,
+                text: "KS105 [suspend] browser.exe: access denied".into(),
+            }],
+        });
+        let errors = |reply: &Value| reply["state"]["profiles"][0]["entries"][0]["errors"].clone();
+        // Not asked yet: other replies do not go to the tray.
+        let reply = send(&mut b, json!({"v": 1, "id": 1, "type": "running"}));
+        assert_eq!(errors(&reply), json!([]));
+        let reply = send(&mut b, json!({"v": 1, "id": 2, "type": "get_state"}));
+        assert_eq!(
+            errors(&reply),
+            json!([{"code": "KS105", "label": "freeze failed",
+                    "text": "KS105 [suspend] browser.exe: access denied"}])
+        );
+        // Kept until the next refresh...
+        *fake.last_switch.borrow_mut() = None;
+        let reply = send(&mut b, json!({"v": 1, "id": 3, "type": "running"}));
+        assert_eq!(errors(&reply).as_array().unwrap().len(), 1);
+        // ...which the end of a switch is too.
+        let event: Value = serde_json::from_str(&b.applied("focus", 0, "")).unwrap();
+        assert_eq!(errors(&event), json!([]));
     }
 
     #[test]

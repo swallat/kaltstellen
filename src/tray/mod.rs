@@ -869,10 +869,14 @@ impl App {
             let _ = reply.send(body);
         };
         if let Command::Status = command {
+            // M5: errors whose cause is gone drop out first (L9), so the
+            // main window marks only what is still wrong.
+            self.recheck_errors();
             respond(Body::Status(TrayStatus {
                 state: self.store.peek().unwrap_or_default(),
                 running: self.controller.running().map(ToString::to_string),
                 waiting: self.controller.pending().map(ToString::to_string),
+                last_switch: self.status.last_switch(),
             }));
             return;
         }

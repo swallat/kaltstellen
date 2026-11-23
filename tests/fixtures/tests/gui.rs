@@ -356,6 +356,155 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
     assert!(beating(&beat));
 }
 
+/// Runs the JSON array `steps` through the page (`--drive`) and returns
+/// the results; checks that no WebView2 process stays behind.
+fn drive(world: &World, name: &str, steps: &str) -> serde_json::Value {
+    let input = world.path(&format!("{name}.json"));
+    let output_file = world.path(&format!("{name}-results.json"));
+    fs::write(&input, steps).unwrap();
+    let (output, webview) = run_window(
+        world,
+        &[
+            "gui",
+            "--drive",
+            input.to_str().unwrap(),
+            "--drive-out",
+            output_file.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_no_webview_left(world, &webview, name);
+    serde_json::from_str(&fs::read_to_string(output_file).unwrap()).unwrap()
+}
+
+/// A tray for a test world; ended (killed) when dropped.
+struct TrayOf(std::process::Child);
+
+impl TrayOf {
+    fn start(world: &World) -> TrayOf {
+        let child = world
+            .command(&["tray"])
+            // Never ask about start at sign-in in tests (L8).
+            .env("KALTSTELLEN_AUTOSTART_PROMPT", "skip")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let tray = TrayOf(child);
+        let log = world.path("data").join("kaltstellen.log");
+        assert!(
+            wait_for(LONG, || fs::read_to_string(&log)
+                .is_ok_and(|l| l.contains("tray: recover finished"))),
+            "the tray did not start"
+        );
+        tray
+    }
+}
+
+impl Drop for TrayOf {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn m5_failure_markers_come_from_the_trays_error_state_and_clear_when_resolved() {
+    // A start entry whose file is missing (KS110) beside one that works.
+    let world = World::new("");
+    let missing = world.path("ks-wv-m5.exe");
+    let _cleanup = KillProgram("ks-wv-m5.exe".to_owned());
+    let config = format!(
+        "[[profile]]\nname = \"broken\"\n\n  [[profile.app]]\n  exe = \"ks-wv-m5.exe\"\n  \
+         path = '{}'\n  action = \"start\"\n\n  [[profile.app]]\n  exe = \"ks-wv-m5-other.exe\"\n  \
+         action = \"ignore\"\n",
+        missing.display()
+    );
+    fs::write(world.path("config").join("config.toml"), config).unwrap();
+    let _tray = TrayOf::start(&world);
+
+    let results = drive(
+        &world,
+        "m5-fail",
+        r#"[{"type": "get_state"}, {"type": "apply", "profile": "broken"}]"#,
+    );
+    let entries = |result: &serde_json::Value| result["state"]["profiles"][0]["entries"].clone();
+    assert_eq!(entries(&results[0])[0]["errors"], serde_json::json!([]));
+    assert!(
+        results[1]["status"]
+            .as_str()
+            .unwrap()
+            .contains("with errors"),
+        "{results}"
+    );
+    // The switch went through the tray; its error is on the entry only.
+    let errors = &entries(&results[1])[0]["errors"];
+    assert_eq!(errors[0]["code"], "KS110", "{results}");
+    assert_eq!(errors[0]["label"], "start failed", "{results}");
+    assert!(
+        errors[0]["text"].as_str().unwrap().contains("ks-wv-m5.exe"),
+        "{results}"
+    );
+    assert_eq!(entries(&results[1])[1]["errors"], serde_json::json!([]));
+
+    // L9: started by hand, the error resolves; the next refresh shows no
+    // marker, without a switch.
+    copy_fixture(HEARTBEAT, world.dir.path(), "ks-wv-m5.exe");
+    let beat = world.path("m5.beat");
+    let _program = Fixture::spawn(str_of(&missing), &[str_of(&beat)]);
+    assert!(beating(&beat));
+    let results = drive(&world, "m5-resolved", r#"[{"type": "get_state"}]"#);
+    assert_eq!(
+        entries(&results[0])[0]["errors"],
+        serde_json::json!([]),
+        "{results}"
+    );
+}
+
+#[test]
+fn m2_a_drop_goes_through_the_page_handler_and_the_host_without_navigating() {
+    // A real drop from Explorer cannot be automated (docs/manual-checks.md
+    // 13d), and WebView2 hands over only files on disk: files made up in
+    // the page are refused by `postMessageWithAdditionalObjects` itself.
+    // This drives the page's own drop handler with such files: the refusal
+    // reaches the status line, nothing is added and the page stays. A
+    // `drop_files` without attached files is refused by the host: the page
+    // cannot name paths itself. The checks of real paths are unit tests of
+    // the bridge.
+    let world = World::new(CONFIG);
+    let results = drive(
+        &world,
+        "m2-drop",
+        r#"[
+            {"type": "drop", "names": ["ks-made-up.exe", "notes.txt"]},
+            {"type": "drop_files"},
+            {"type": "get_state"}
+        ]"#,
+    );
+    let drop = &results[0];
+    assert_eq!(drop["ok"], false, "{results}");
+    assert!(
+        drop["status"]
+            .as_str()
+            .unwrap()
+            .contains("could not be handed over"),
+        "{results}"
+    );
+    assert_eq!(results[1]["ok"], false, "{results}");
+    assert!(
+        results[1]["error"].as_str().unwrap().contains("no file"),
+        "{results}"
+    );
+    // Still the page (it answered), and the file is unchanged.
+    assert_eq!(results[2]["ok"], true, "{results}");
+    assert_eq!(world.config(), CONFIG);
+}
+
 #[test]
 fn wp10_screenshot_views_render_in_both_themes() {
     let world = World::new(CONFIG);

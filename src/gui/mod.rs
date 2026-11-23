@@ -253,6 +253,13 @@ impl Host for RealHost {
         found
     }
 
+    fn last_switch(&self) -> Option<crate::tray::protocol::LastSwitch> {
+        // M5: the tray keeps the error state (L9); without a tray there is
+        // none, and the status line alone reports a switch.
+        let endpoints = crate::tray::Endpoints::current().ok()?;
+        crate::tray::client::status_now(&endpoints)?.last_switch
+    }
+
     fn unassigned(&self, config: &Config, profile: &str) -> Vec<Unassigned> {
         crate::unassigned::refresh(&self.data, config, profile)
     }
@@ -392,7 +399,7 @@ impl GuiPage {
 }
 
 impl Page for GuiPage {
-    fn message(&mut self, json: &str) -> Answer {
+    fn message(&mut self, json: &str, files: Vec<PathBuf>) -> Answer {
         // Two notices of the page itself; everything else is a request.
         let notice = serde_json::from_str::<Value>(json)
             .ok()
@@ -433,7 +440,7 @@ impl Page for GuiPage {
                 Answer::Nothing
             }
             Some(_) => Answer::Nothing,
-            None => Answer::Reply(self.bridge.handle(json)),
+            None => Answer::Reply(self.bridge.handle_with_files(json, files)),
         }
     }
 

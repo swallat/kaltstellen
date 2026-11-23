@@ -2,7 +2,7 @@
 // gets and sends intents; the Rust side validates and saves. All text from
 // the state goes into the DOM as text, never as markup.
 
-import { connect, request, notify, onEvent } from './bridge.js';
+import { connect, request, requestWithFiles, notify, onEvent } from './bridge.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -239,6 +239,15 @@ function watchScale() {
   }, { once: true });
 }
 
+/** M5: an error of the last switch on its entry: code and a few words,
+ * the whole error as tooltip. It goes when the tray no longer reports it
+ * (resolved, or the next switch went well) at the next state refresh. */
+function failureMarker(f) {
+  return el('span', { class: 'failure', title: f.text, 'aria-label': f.text },
+    el('span', { class: 'failure-mark', 'aria-hidden': 'true', text: '!' }),
+    `${f.code} ${f.label}`);
+}
+
 function renderDetail() {
   const profile = current();
   $('empty').hidden = !!profile;
@@ -254,9 +263,10 @@ function renderDetail() {
   $('apply').disabled = state.applying;
   $('apply').textContent = state.applying ? 'Applying…' : 'Apply profile';
 
-  const rows = profile.entries.map((e, index) => el('tr', {},
+  const rows = profile.entries.map((e, index) => el('tr', { class: e.errors.length ? 'failed' : null },
     el('td', {}, el('div', { class: 'program' }, programIcon(e.exe, e.path),
-      el('span', { class: 'names' }, el('span', { class: 'exe', text: e.exe }), e.path ? el('span', { class: 'path', text: e.path }) : null))),
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: e.exe }), e.path ? el('span', { class: 'path', text: e.path }) : null,
+        ...e.errors.map(failureMarker)))),
     el('td', {}, el('span', { class: `action ${e.action}`, text: actionLabel[e.action] })),
     el('td', { class: 'opts', text: optionsText(e) }),
     el('td', {},
@@ -408,14 +418,19 @@ async function removeEntry(index) {
 
 // Adding programs ---------------------------------------------------------
 
-/** M4: protected programs are refused, warn-list programs need a yes. */
-async function addProgram(exe, path) {
+/** M4: protected programs are refused, warn-list programs need a yes.
+ * Why a program was not added goes to `problems` when given (M2 drops). */
+async function addProgram(exe, path, problems = null) {
   const check = await call('check_program', { exe });
-  if (!check.ok) return false;
+  if (!check.ok) {
+    problems?.push(check.error);
+    return false;
+  }
   let confirmed = false;
   if (check.data.protection === 'hard') {
     $('add-error').textContent = check.data.message;
     setStatus(check.data.message, true);
+    problems?.push(check.data.message);
     return false;
   }
   if (check.data.protection === 'warn') {
@@ -424,8 +439,70 @@ async function addProgram(exe, path) {
   }
   const reply = await call('add_entry', { profile: current().name, exe, path, confirmed });
   if (reply.ok) await loadUnassigned();
-  else $('add-error').textContent = reply.error;
+  else {
+    $('add-error').textContent = reply.error;
+    problems?.push(reply.error);
+  }
   return reply.ok;
+}
+
+// Drag and drop (M2) ---------------------------------------------------------
+
+/** The promise of the drop being handled (the test driver waits for it). */
+let dropping = null;
+
+function hasFiles(event) {
+  return !!event.dataTransfer && [...event.dataTransfer.types].includes('Files');
+}
+
+/** Files can be dropped while a profile is shown and no dialog other than
+ * `Add a program` is open. */
+function canDrop() {
+  return !!state && !!current() && !document.querySelector('dialog[open]:not(#add-dialog)');
+}
+
+// The page takes every drag and drop, so the WebView never opens a dropped
+// file (the host cancels such a navigation as well).
+addEventListener('dragover', (event) => {
+  event.preventDefault();
+  const ok = hasFiles(event) && canDrop();
+  event.dataTransfer.dropEffect = ok ? 'copy' : 'none';
+  $('detail').classList.toggle('dropping', ok);
+});
+addEventListener('dragleave', (event) => {
+  if (!event.relatedTarget) $('detail').classList.remove('dropping');
+});
+addEventListener('drop', (event) => {
+  event.preventDefault();
+  $('detail').classList.remove('dropping');
+  if (!hasFiles(event) || !canDrop() || event.dataTransfer.files.length === 0) return;
+  dropping = dropFiles(event.dataTransfer.files);
+});
+
+/** Adds the dropped files to the selected profile as `Choose executable…`
+ * would, one after the other; refused files are named in the status line. */
+async function dropFiles(files) {
+  const profile = current().name;
+  const reply = await requestWithFiles('drop_files', {}, files);
+  if (reply.state) adopt(reply.state);
+  if (!reply.ok) {
+    setStatus(reply.error, true);
+    return reply;
+  }
+  const problems = [...reply.data.refused];
+  let added = 0;
+  for (const file of reply.data.files) {
+    if (current()?.name !== profile) break;
+    if (await addProgram(file.exe, file.path, problems)) added++;
+  }
+  if (added > 0 && $('add-dialog').open) $('add-dialog').close();
+  const total = reply.data.files.length + reply.data.refused.length;
+  if (problems.length > 0) {
+    setStatus(`${added} of ${total} added to "${profile}". Not added: ${problems.join('; ')}`, true);
+  } else if (added > 1) {
+    setStatus(`${added} programs added to "${profile}"; saved.`);
+  }
+  return reply;
 }
 
 function megabytes(bytes) {
@@ -514,6 +591,17 @@ $('update-mode').addEventListener('change', (event) => call('set_update_mode', {
 $('check-updates').addEventListener('click', () => call('check_updates'));
 $('install-update').addEventListener('click', () => call('install_update'));
 
+/** M5: back in the window, the state is asked for again, so markers of
+ * errors that resolved meanwhile go (and the active profile is current).
+ * Not while a dialog is open, at most every two seconds. */
+let lastRefresh = 0;
+addEventListener('focus', async () => {
+  if (!state || document.querySelector('dialog[open]') || Date.now() - lastRefresh < 2000) return;
+  lastRefresh = Date.now();
+  const reply = await request('get_state');
+  if (reply.ok && !document.querySelector('dialog[open]')) adopt(reply.state);
+});
+
 onEvent(async (event) => {
   if (event.event === 'applied') {
     adopt(event.state);
@@ -527,13 +615,25 @@ globalThis.kaltstellenDrive = async (steps) => {
   const results = [];
   for (const step of steps) {
     const { type, ...fields } = step;
+    if (type === 'drop') {
+      // M2: a drop event as Explorer's would arrive, with files made up in
+      // the page (they have names, no paths), through the real handler.
+      const transfer = new DataTransfer();
+      for (const name of fields.names) transfer.items.add(new File(['MZ'], name));
+      dropping = null;
+      $('entries').dispatchEvent(new DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true }));
+      const reply = dropping ? await dropping : { ok: false, error: 'the drop was not taken', state };
+      results.push({ type, ok: reply.ok, error: reply.error || null, status: $('status').textContent, data: reply.data ?? null, state: reply.state || state });
+      continue;
+    }
     const reply = await request(type, fields);
     let event = null;
     if (type === 'apply' && reply.ok) {
       event = await new Promise((resolve) => onEvent((e) => { if (e.event === 'applied') resolve(e); }));
     }
     adopt((event || reply).state);
-    results.push({ type, ok: reply.ok, error: reply.error || null, status: (event || reply).state.status, data: reply.data ?? null });
+    const after = (event || reply).state;
+    results.push({ type, ok: reply.ok, error: reply.error || null, status: after.status, data: reply.data ?? null, state: after });
   }
   await loadUnassigned();
   await settle();

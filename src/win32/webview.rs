@@ -8,7 +8,9 @@
 //! windows are refused, every web request outside the origin is answered
 //! with 403 (no network at all), permission requests are denied, default
 //! script dialogs are off, and in release builds dev tools, the context
-//! menu and browser accelerator keys are off.
+//! menu and browser accelerator keys are off. A file dropped onto the
+//! window (M2) never navigates to it: the page handles every drop, and the
+//! navigation guard would cancel the `file:` URL anyway.
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -94,8 +96,9 @@ pub enum Answer {
 
 /// The safe side of the window.
 pub trait Page {
-    /// A message from the page, as JSON text.
-    fn message(&mut self, json: &str) -> Answer;
+    /// A message from the page, as JSON text, with the paths of the files
+    /// it attached (M2: files dropped from Explorer; usually none).
+    fn message(&mut self, json: &str, files: Vec<PathBuf>) -> Answer;
     /// A [`Waker`] fired; returns what to do (events for the page, close).
     fn wake(&mut self) -> Vec<Answer>;
     /// The user closes the window; true to let it close.
@@ -605,6 +608,48 @@ fn create_controller(
         .map_err(|e| fail("create the WebView", e))
 }
 
+/// Most attached objects read from one message; the bridge allows fewer.
+const MAX_ATTACHED: u32 = 1024;
+
+/// M2: the paths of the files the page attached to a message with
+/// `chrome.webview.postMessageWithAdditionalObjects` (files dropped from
+/// Explorer: the page itself only sees their names). An object that is not
+/// a file, or a file without a path, gives an empty path, which the bridge
+/// refuses. Needs a runtime with `ICoreWebView2WebMessageReceivedEventArgs2`;
+/// an older one gives none.
+fn attached_files(args: &ICoreWebView2WebMessageReceivedEventArgs) -> Vec<PathBuf> {
+    use windows::core::Interface;
+    let Ok(args) = args.cast::<ICoreWebView2WebMessageReceivedEventArgs2>() else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    // SAFETY: COM calls on objects of this thread; strings from WebView2
+    // are freed by `take_string`.
+    unsafe {
+        let Ok(objects) = args.AdditionalObjects() else {
+            return files;
+        };
+        let mut count = 0u32;
+        if objects.Count(&mut count).is_err() {
+            return files;
+        }
+        for index in 0..count.min(MAX_ATTACHED) {
+            let path = objects
+                .GetValueAtIndex(index)
+                .ok()
+                .and_then(|object| object.cast::<ICoreWebView2File>().ok())
+                .and_then(|file| {
+                    let mut path = PWSTR::null();
+                    file.Path(&mut path).ok()?;
+                    (!path.is_null()).then(|| take_string(path))
+                })
+                .unwrap_or_default();
+            files.push(PathBuf::from(path));
+        }
+    }
+    files
+}
+
 /// # Safety
 /// COM objects of this thread.
 unsafe fn install_handlers(
@@ -691,7 +736,8 @@ unsafe fn install_handlers(
                     json.chars().take(200).collect::<String>()
                 );
             }
-            if let Some(answer) = with_page(|page| page.message(&json)) {
+            let files = attached_files(&args);
+            if let Some(answer) = with_page(|page| page.message(&json, files)) {
                 act(HWND(HWND_OF.get() as *mut _), answer);
             }
             Ok(())
