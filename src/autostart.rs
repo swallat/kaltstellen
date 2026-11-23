@@ -1,6 +1,6 @@
 //! Start at sign-in (plan WP7, opt-in): a value in the per-user Run key that
 //! starts `kaltstellen tray`. Switched on and off with `kaltstellen
-//! autostart on|off` or from the tray menu.
+//! autostart on|off` or from the main window (`Start at sign-in`).
 
 use std::path::Path;
 

@@ -43,6 +43,8 @@ p { margin: 0; }
 .active-badge strong { color: var(--brand-orange); font-weight: 600; }
 .autostart { display: flex; align-items: center; gap: var(--space-1); font-size: 0.875rem; }
 .autostart :focus-visible { outline-color: var(--color-on-topbar); }
+/* U4: no profile has triggers yet; the switch does nothing. */
+.autostart.unused { opacity: 0.6; }
 
 /* Main layout */
 .layout { display: grid; grid-template-columns: var(--sidebar) 1fr; min-height: 0; overflow: hidden; }

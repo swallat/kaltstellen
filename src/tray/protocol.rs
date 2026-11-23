@@ -58,6 +58,20 @@ pub enum Command {
     /// reply is `rejected` and the tray keeps running. A tray that does not
     /// know this command rejects it as malformed, so it never quits.
     QuitIfIdle,
+    /// U4, from the main window and `kaltstellen automation on|off`:
+    /// pauses or resumes automatic switching at once; the tray writes
+    /// `triggers_paused` to `settings.json`. The final reply is `status`.
+    /// A tray that does not know it rejects it as malformed (`KS505`); the
+    /// caller then writes `settings.json` itself and the tray takes it
+    /// over at its next start.
+    SetAutomation { paused: bool },
+    /// UP1, from the main window and `kaltstellen update --mode`: sets the
+    /// update mode (`auto`, `manual`, `off`) as the tray's menu once did:
+    /// the tray writes `update` to `settings.json` and, if the mode in
+    /// effect checks, checks at once. The final reply is `status`; an
+    /// unknown mode is `rejected` (exit code 1). An older tray rejects the
+    /// command as malformed; the caller then writes the file itself.
+    SetUpdateMode { mode: String },
 }
 
 impl Command {
@@ -65,7 +79,11 @@ impl Command {
     pub fn waits(&self) -> bool {
         match self {
             Command::Switch { wait, .. } | Command::Recover { wait } => *wait,
-            Command::Status | Command::Quit | Command::QuitIfIdle => true,
+            Command::Status
+            | Command::Quit
+            | Command::QuitIfIdle
+            | Command::SetAutomation { .. }
+            | Command::SetUpdateMode { .. } => true,
         }
     }
 }
@@ -143,7 +161,7 @@ impl From<&Event> for EventLine {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrayStatus {
     pub state: State,
     /// The job that runs right now, as text (`switch to "focus"`).
@@ -160,12 +178,17 @@ pub struct TrayStatus {
     /// from a tray that does not know the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_switch: Option<LastSwitch>,
+    /// Lines for the caller of `set_automation` (for example that the
+    /// setting was taken over but could not be saved). Added within
+    /// version 1; absent when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// U4: what automatic switching does, for `kaltstellen status`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutomationStatus {
-    /// `Automatic switching` is off in the tray menu.
+    /// `Automatic switching` is off (main window, `kaltstellen automation`).
     #[serde(default)]
     pub paused: bool,
     /// A manual switch holds automation until a trigger program starts or
@@ -407,6 +430,24 @@ mod tests {
             encode(&request(Command::Status)),
             "{\"version\":1,\"command\":\"status\"}\n"
         );
+        assert_eq!(
+            encode(&request(Command::SetAutomation { paused: true })),
+            "{\"version\":1,\"command\":\"set_automation\",\"paused\":true}\n"
+        );
+        assert_eq!(
+            encode(&request(Command::SetUpdateMode {
+                mode: "manual".into()
+            })),
+            "{\"version\":1,\"command\":\"set_update_mode\",\"mode\":\"manual\"}\n"
+        );
+        assert!(Command::SetAutomation { paused: false }.waits());
+        // `paused` is required: a request without it is malformed.
+        assert_eq!(
+            decode_request("{\"version\":1,\"command\":\"set_automation\"}")
+                .unwrap_err()
+                .code,
+            Code::TrayProtocol
+        );
         // Defaults: a minimal request waits and does not force.
         let parsed =
             decode_request("{\"version\":1,\"command\":\"switch\",\"profile\":\"x\"}").unwrap();
@@ -465,6 +506,7 @@ mod tests {
                         text: "KS110 [start] t.exe: missing".into(),
                     }],
                 }),
+                notes: vec!["warning: not saved".into()],
             }),
         ];
         for body in bodies {
@@ -488,6 +530,7 @@ mod tests {
             waiting: None,
             automation: None,
             last_switch: None,
+            notes: Vec::new(),
         })));
         assert!(!line.contains("last_switch"), "{line}");
         let Body::Status(status) = decode_reply(line.trim_end()).unwrap().body else {

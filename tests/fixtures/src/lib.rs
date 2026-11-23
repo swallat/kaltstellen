@@ -70,6 +70,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--heartbeat",
     "--alloc-mb",
     "--close-delay-ms",
+    "--close-when",
     "--title",
     "--orphan-launcher",
 ];

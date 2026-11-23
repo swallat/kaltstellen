@@ -20,8 +20,9 @@ Afterwards remove `%TEMP%\ks-manual` and `HKCU\Software\kaltstellen-manual`.
    150 % and 200 % scaling and on a second monitor with another scaling.
 2. Hover: the tooltip reads `kaltstellen: neutral`.
 3. Right click and left click: the menu opens near the icon and lists the
-   profiles, `Neutral` (checked), `Start at sign-in`, `Open kaltstellen…`,
-   `Quit`. Clicking elsewhere closes it.
+   profiles, `Neutral` (checked), `Open kaltstellen…`, `Quit`, and no
+   settings: no `Start at sign-in`, no `Automatic switching`, no `Updates:`
+   lines (they are in the main window). Clicking elsewhere closes it.
 4. Choose a profile whose programs are not running: the icon turns orange,
    the tooltip names the profile, the profile is checked.
 5. Make a switch fail (a `start` entry whose `path` does not exist yet):
@@ -89,8 +90,10 @@ main session made them; they show the views below in light and dark.
    switches to Neutral first; afterwards the profile is gone.
 10. Unassigned programs: start a program with a tray icon that has no entry;
     `Refresh`: it is listed as `new`; `Dismiss` removes it.
-11. `Start at sign-in` in the header follows the tray's menu item (use the
-    test Run key from above).
+11. `Start at sign-in` in the header follows `kaltstellen autostart on|off`
+    (use the test Run key from above; focus the window again to refresh).
+    `Automatic switching` next to it is disabled with a hint (hover) while
+    no profile has triggers; see "Automatic triggers" step 7.
 12. Edit the file in an editor while the window is open, then make a change
     in the window: the status line says the file was changed and reloads it.
 13. Right click in the page: no browser context menu (release build). Ctrl+P,
@@ -233,7 +236,8 @@ trigger = ["notepad.exe"]
 1. `kaltstellen check-config` lists `trigger notepad.exe (priority 0)`. Add
    the trigger program as an entry of the same profile: `check-config`
    refuses it (`… is a program that this profile freezes`); remove it again.
-2. Start the tray. The menu shows `Automatic switching`, checked.
+2. Start the tray and open the main window: `Automatic switching` in the
+   header is enabled and checked. The tray menu has no such item.
 3. Start Notepad. Within about 5 s the profile is applied (orange icon, the
    tooltip ends in `(by trigger)`), and a notification appears:
    `kaltstellen: trigger test`, `notepad.exe started: switched to trigger
@@ -264,9 +268,14 @@ trigger = ["notepad.exe"]
    Close it: 5 to 10 s later `neutral` comes back, with a notification.
 6. Start Notepad, switch to another profile from the menu, close Notepad:
    the other profile stays.
-7. Uncheck `Automatic switching`; start Notepad: nothing happens. Quit and
-   start the tray again: the item is still unchecked. Check it: Notepad
-   counts as starting and the profile is applied.
+7. Uncheck `Automatic switching` in the main window: the status line says
+   `Automatic switching paused.` and the tray menu shows the disabled line
+   `Automatic switching paused` at once. Start Notepad: nothing happens.
+   Quit and start the tray again, focus the window: the switch is still
+   unchecked. Check it: Notepad counts as starting and the profile is
+   applied. With the tray quit, uncheck it in the window: the status line
+   says it is saved and the tray uses it when it starts; start the tray:
+   paused.
 8. With Focus assist (Do not disturb) on, the notification goes to the
    notification centre only; the switch still happens and `Back to` is in
    the menu (see 4b).
@@ -289,30 +298,33 @@ trigger = ["notepad.exe"]
 ## Updates (UP1)
 
 Automated tests cover the check, the full update against a local server,
-the rollback and the menu item that switches the check on. Only a person
+the rollback and choosing a mode that checks (through the running tray). Only a person
 can check what is on screen, and only a real release can show the real
 path. Until the first release exists, steps 1 to 3 work with a copy:
 copy `target\release\kaltstellen.exe` to a folder of its own and run it
 from there with the test variables above.
 
-1. Tray menu: `Updates: install automatically` is checked by default;
-   choosing `check and ask` or `off` moves the check mark and
-   `settings.json` gets `"update": "manual"` or `"off"`. With
-   `KALTSTELLEN_UPDATE=off` set, the three lines read
-   `(set by KALTSTELLEN_UPDATE)` and are disabled.
+1. Main window, `Updates` section, with the tray running: `Mode` reads
+   `Install automatically` by default; choosing `Check and ask` or `Off`
+   shows `Update mode manual.` (or `off`) in the status line,
+   `settings.json` gets `"update": "manual"` or `"off"`, and the tray log
+   says `tray: update mode …` (for `manual` also `tray: update check
+   started`). The tray menu has no mode items. With `KALTSTELLEN_UPDATE=off`
+   set for the window, `Mode` is disabled with `Set by KALTSTELLEN_UPDATE.`
 1a. Automatic install (after the first real release, with an older release
    in a normal folder): apply a profile and wait for the daily check (or
-   choose `install automatically` again to check now): nothing is
+   choose `Install automatically` again in the main window to check now):
+   nothing is
    installed while the profile is active. Switch to `Neutral`: the update
    installs without a window, the tray icon disappears briefly and comes
    back with the new version.
 2. With an `update.json` in the test data folder that names a higher
-   version (`{ "latest": "9.9.9" }`), the menu shows a disabled line
+   version (`{ "latest": "9.9.9" }`), the tray menu shows a disabled line
    `Update 9.9.9 available: …` for a development build or a copy below
    `scoop\apps`, and `Install update 9.9.9…` for a release build.
 2a. With `{ "latest": "9.9.9", "failed": "9.9.9", "failed_at": <now>, "failures": 1 }`
    in that file (`<now>` in seconds since 1970) and a
-   release build (or `KALTSTELLEN_UPDATE_URL` set): the menu item reads
+   release build (or `KALTSTELLEN_UPDATE_URL` set): the tray menu item reads
    `Install update 9.9.9… (failed last time)`, and the `Updates`
    section of the main window says that version 9.9.9 could not be
    installed here last time and is tried again automatically after a date
