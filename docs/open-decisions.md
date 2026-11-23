@@ -61,6 +61,13 @@ reasoning is. Implementation choices made without the owner are marked
     the tray item rather than installing silently, so a window that the user
     is looking at shows the steps.
 
+12. **M2 program icons** `[assumed]`: shown at 20 CSS pixels in the three
+    lists; read only from files on a fixed local disk (no shares, mapped
+    network drives or device paths), from a running process of that name
+    first, else from an entry's configured path; at most 96 device pixels;
+    kept while the window is open, at most 4 MiB; a program without an icon
+    shows a grey square of the same size; monochrome icons show the square.
+
 ## Decided by the owner on 2026-11-23
 
 - **L5 pipe**: as built, including no fallback when a running tray does not
