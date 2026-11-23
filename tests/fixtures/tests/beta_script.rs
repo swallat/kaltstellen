@@ -94,11 +94,24 @@ fn script(ps: &Path, args: &[&str]) -> String {
     text
 }
 
-/// What the real configuration looks like: the Run value and the files of
-/// %APPDATA%\kaltstellen and %LOCALAPPDATA%\kaltstellen (name and size, top
-/// level). The sandbox must not change any of them.
-fn real_state() -> (Option<String>, Vec<(String, u64)>) {
-    let run = registry::read(RUN_KEY, VALUE).expect("read the Run key");
+/// The real Run value with its kind ("String|..." or "ExpandString|..."),
+/// empty when there is none; read through PowerShell, which names the kind.
+fn run_value(ps: &Path) -> String {
+    let read = format!(
+        "$k = Get-Item 'HKCU:\\{RUN_KEY}'; if ($null -ne $k.GetValue('{VALUE}')) {{ \"$($k.GetValueKind('{VALUE}'))|$($k.GetValue('{VALUE}', '', 'DoNotExpandEnvironmentNames'))\" }}"
+    );
+    let mut c = command(ps);
+    c.args(["-NoProfile", "-NonInteractive", "-Command", &read]);
+    run(c).1.trim().to_owned()
+}
+
+/// What the real configuration looks like: the Run value (with its kind)
+/// and the files of %APPDATA%\kaltstellen and %LOCALAPPDATA%\kaltstellen
+/// (top level: name and size; for kaltstellen.log* only the name, since
+/// another kaltstellen on the machine may write to it). The sandbox must not
+/// change any of them.
+fn real_state(ps: &Path) -> (String, Vec<(String, u64)>) {
+    let run = run_value(ps);
     let mut files = Vec::new();
     for base in ["APPDATA", "LOCALAPPDATA"] {
         let Some(root) = std::env::var_os(base) else {
@@ -107,18 +120,19 @@ fn real_state() -> (Option<String>, Vec<(String, u64)>) {
         let dir = Path::new(&root).join("kaltstellen");
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
-                let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                files.push((
-                    format!("{base}\\{}", entry.file_name().to_string_lossy()),
-                    len,
-                ));
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let len = if name.starts_with("kaltstellen.log") {
+                    0
+                } else {
+                    entry.metadata().map(|m| m.len()).unwrap_or(0)
+                };
+                files.push((format!("{base}\\{name}"), len));
             }
         }
     }
     files.sort();
     (run, files)
 }
-
 fn str_of(path: &Path) -> &str {
     path.to_str().expect("path is not UTF-8")
 }
@@ -201,7 +215,7 @@ fn beta_script_runs_in_a_sandbox_and_leaves_nothing_behind() {
     let report = dir.path().join("report");
     let exe = kaltstellen_exe();
     let common = ["-Root", str_of(&root), "-Unattended"];
-    let real_before = real_state();
+    let real_before = real_state(&ps);
 
     let mut args = vec![
         "setup",
@@ -299,7 +313,7 @@ fn beta_script_runs_in_a_sandbox_and_leaves_nothing_behind() {
         assert!(pids_of(name).is_empty(), "{name} left running");
     }
     assert_eq!(
-        real_state(),
+        real_state(&ps),
         real_before,
         "the real Run value, %APPDATA%\\kaltstellen or %LOCALAPPDATA%\\kaltstellen changed"
     );
