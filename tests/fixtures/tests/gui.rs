@@ -327,11 +327,13 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
         image.len()
     );
 
-    assert!(!webview.is_empty(), "WebView2 processes were started");
+    // Below the window and by data folder (the tree may not see WebView2).
     assert!(
-        wait_for(Duration::from_secs(15), || alive(&webview).is_empty()),
-        "WebView2 processes left behind: {:?}",
-        alive(&webview)
+        wait_for(Duration::from_secs(15), || alive(&webview).is_empty()
+            && webview_of(&world).is_empty()),
+        "WebView2 processes left behind: {:?} {:?}",
+        alive(&webview),
+        webview_of(&world)
     );
     let back = world.command(&["switch", "neutral"]).output().unwrap();
     assert_eq!(back.status.code(), Some(0));
@@ -361,15 +363,15 @@ fn wp10_screenshot_views_render_in_both_themes() {
             image.starts_with(b"\x89PNG") && image.len() > 10_000,
             "{view}-{theme}"
         );
+        // Three windows of the parallel tests may share the machine. The
+        // tree may not see WebView2 at all (some runtimes, the CI runner),
+        // so the processes of this test's data folder must be gone too.
         assert!(
-            !webview.is_empty(),
-            "{view}-{theme}: no WebView2 process seen"
-        );
-        // Three windows of the parallel tests may share the machine.
-        assert!(
-            wait_for(Duration::from_secs(30), || alive(&webview).is_empty()),
-            "{view}-{theme}: WebView2 processes left behind: {:?}",
-            alive(&webview)
+            wait_for(Duration::from_secs(30), || alive(&webview).is_empty()
+                && webview_of(&world).is_empty()),
+            "{view}-{theme}: WebView2 processes left behind: {:?} {:?}",
+            alive(&webview),
+            webview_of(&world)
         );
     }
 }
