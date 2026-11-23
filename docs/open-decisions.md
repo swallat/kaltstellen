@@ -113,8 +113,7 @@ The author's defaults, confirmed as built:
   ends; one install at a time. A version that could not be installed after
   it was verified is **tried again regularly**, not over and over (waits:
   1, 2, 4, then 7 days, confirmed below): the tray's timer tries it when the
-  wait ends; on request it
-  can be installed at any time.
+  wait ends; on request it can be installed at any time.
 - **UP1 in the main window**: a section `Updates` at the bottom of the
   sidebar; the window checks by running `kaltstellen update --check
   --quiet`; choosing a mode that checks starts a check at once; `Install`
