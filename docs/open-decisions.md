@@ -7,24 +7,49 @@ reasoning is. Implementation choices made without the owner are marked
 
 ## Open
 
+1. **P5 programs started by a profile** `[assumed]`: a switch to `neutral`
+   does not stop programs that kaltstellen started (spec P5, last sentence).
+   Not yet put to the owner.
+
+## Deferred by the owner on 2026-11-23
+
+Decided to be settled later, at the point named:
+
 1. **L7 session end, wait time**: `WM_QUERYENDSESSION` waits at most 4 s for
-   the resume. Provisional until VM test T20 has measured a real shutdown.
-2. **Elevated helper for services (A5, P8)**: deferred. The proposal in
+   the resume; fixed once VM test T20 has measured a real shutdown.
+2. **Elevated helper for services (A5, P8)**: the proposal in
    [design-elevated-helper.md](design-elevated-helper.md) stays a proposal,
    to be decided in detail later.
 3. **Update signing (UP1)**: integrity by SHA-256 from `checksums.txt` only
    for now. Signing (Authenticode certificate or an own key pair) is decided
-   together with the release pipeline.
-4. **UP1 retry waits** `[assumed]`: the owner decided that a version that
-   could not be installed is tried again regularly and left the rhythm to
-   the author: 1 day after the first failure, 2 after the second, 4 after
-   the third, 7 after every later one in a row.
-5. **Automatic trigger details** `[assumed]`
-   ([design-automatic-triggers.md](design-automatic-triggers.md)): `priority`
-   is an integer, default `0`, higher wins; a higher trigger takes over from
-   a lower one and hands back to it when it ends; equal priority keeps the
-   first; debounce about 5 s; the poll interval within 2 to 5 s is fixed
-   when measured.
+   with the first release.
+
+## Assumptions confirmed by the owner on 2026-11-23
+
+The author's defaults, confirmed as built:
+
+- **UP1 retry waits**: a version that could not be installed is tried again
+  1 day after the first failure, 2 after the second, 4 after the third, 7
+  after every later one in a row (the rhythm was left to the author).
+- **Automatic trigger details**
+  ([design-automatic-triggers.md](design-automatic-triggers.md)): `priority`
+  is an integer, default `0`, higher wins; a higher trigger takes over from
+  a lower one and hands back to it when it ends; equal priority keeps the
+  first; debounce about 5 s; the poll interval within 2 to 5 s is fixed
+  when measured.
+- **M6 lockdown details**: the Content-Security-Policy, no navigation away
+  from the page, no new windows, permission requests denied, script
+  dialogs and the status bar off (spec M6 "Hosting and lockdown").
+- **Configuration file** as the only source of truth; the window reads and
+  writes it.
+- **W1**: a program that the target profile also freezes stays frozen
+  through the switch.
+- **W4**: choosing the active profile again applies it again.
+- **L1**: one tray per session with a named mutex; the command line reaches
+  it over a pipe only the user may open.
+- **Main window**: a separate process, content and layout as built; a
+  second start finds the open window by a window property.
+- **N1 dismiss**: recorded in `seen.json`.
 
 ## Decided by the owner on 2026-11-23
 
@@ -32,7 +57,7 @@ reasoning is. Implementation choices made without the owner are marked
   answer (exit code 5).
 - **L6 interrupt**: as built: stop after the current program, resume
   everything, `neutral`, exit code 1.
-- **L7 session end**: as built, except the 4 s wait (open item 1).
+- **L7 session end**: as built, except the 4 s wait (deferred item 1).
 - **L8 start at sign-in**: never written without consent; the tray asks once
   on its first start (built after this decision). The question is a message
   box on its own thread; `KALTSTELLEN_AUTOSTART_PROMPT` (`yes`, `no`, `skip`)
@@ -87,7 +112,7 @@ reasoning is. Implementation choices made without the owner are marked
   the tray quits (`quit_if_idle`); no automatic install while the session
   ends; one install at a time. A version that could not be installed after
   it was verified is **tried again regularly**, not over and over (waits:
-  open item 4): the tray's timer tries it when the wait ends; on request it
+  1, 2, 4, then 7 days, confirmed below): the tray's timer tries it when the wait ends; on request it
   can be installed at any time.
 - **UP1 in the main window**: a section `Updates` at the bottom of the
   sidebar; the window checks by running `kaltstellen update --check

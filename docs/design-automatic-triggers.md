@@ -3,7 +3,8 @@
 Status: **decided** by the owner on 2026-11-23: the direction, and all open
 points of this note (section "Decided details"). To be built **after
 version 1**; nothing of this is implemented, version 1 is manual only (spec
-section 1, U5). Details the owner did not decide are marked `[assumed]`.
+section 1, U5). The details the author proposed (priority form, takeover,
+debounce, poll interval) were confirmed by the owner the same day.
 
 ## Decided
 
@@ -23,12 +24,12 @@ section 1, U5). Details the owner did not decide are marked `[assumed]`.
 3. **Detection**: a poll of the handle-free snapshot every 2 to 5 s, only
    while some profile has triggers, provided it measures below the Q1
    thresholds; not event-based. The interval within that range is fixed
-   when measured `[assumed]`.
+   when measured.
 4. **Two triggers at once**: a `priority` per profile decides (see conflict
    rule 2).
 5. **Return when the trigger ends**: back to the profile that was active
    before the trigger, after the trigger stayed gone for a debounce time of
-   about 5 s `[assumed]`.
+   about 5 s.
 6. **Configuration form**: `trigger = ["simulator.exe"]` per profile, with
    optional paths as in A7; the configuration check refuses a trigger
    program that its own profile stops or freezes. In the main window the
@@ -55,8 +56,7 @@ a visible, reversible effect (notification plus one-click undo).
 
 - A profile may name trigger programs:
   `trigger = ["simulator.exe"]` (executable names, optional paths as in A7),
-  and a `priority` (an integer, default `0`, higher wins) `[assumed]` for
-  the form and the default.
+  and a `priority` (an integer, default `0`, higher wins).
 - **Start of a trigger** (a matching process appears in the session):
   apply the profile, unless a manual switch holds automation (conflict
   rule 1) or automatic switching is paused.
@@ -78,7 +78,7 @@ a visible, reversible effect (notification plus one-click undo).
    never supersede a waiting manual request in W3; a manual request always
    supersedes a waiting automatic one.
 2. **Two triggers at once** (programs of two profiles run): the profile
-   with the higher `priority` wins. `[assumed]` for the details: a trigger
+   with the higher `priority` wins. A trigger
    of higher priority that starts while a lower one is active switches to
    its profile; when it ends, the lower profile comes back if its trigger
    still runs, otherwise the profile from before the first trigger. A
