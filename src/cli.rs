@@ -320,6 +320,11 @@ fn through_tray(command: protocol::Command) -> Option<u8> {
             if let Some(waiting) = status.waiting {
                 println!("tray: waiting {waiting}");
             }
+            if let Some(automation) = status.automation {
+                for line in automation.lines(&status.state.active_profile) {
+                    println!("{line}");
+                }
+            }
             exit::OK
         }
         Body::Accepted { .. } => {
@@ -751,8 +756,20 @@ fn check_config(file: Option<PathBuf>) -> u8 {
                 let hotkey = profile
                     .hotkey
                     .map_or(String::new(), |h| format!(", hotkey {h}"));
+                // U4: shown only where set, so files without triggers
+                // print as before.
+                let triggers = if profile.triggers.is_empty() {
+                    String::new()
+                } else {
+                    let names: Vec<String> = profile.triggers.iter().map(|t| t.text()).collect();
+                    format!(
+                        ", trigger {} (priority {})",
+                        names.join(", "),
+                        profile.priority
+                    )
+                };
                 println!(
-                    "  profile \"{}\": {} program(s){hotkey}",
+                    "  profile \"{}\": {} program(s){hotkey}{triggers}",
                     profile.name,
                     profile.apps.len()
                 );

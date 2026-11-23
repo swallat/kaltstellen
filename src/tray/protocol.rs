@@ -151,6 +151,60 @@ pub struct TrayStatus {
     pub running: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<String>,
+    /// U4: present while some profile has triggers. Added within version
+    /// 1 with a default, so an older client or tray ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation: Option<AutomationStatus>,
+}
+
+/// U4: what automatic switching does, for `kaltstellen status`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationStatus {
+    /// `Automatic switching` is off in the tray menu.
+    #[serde(default)]
+    pub paused: bool,
+    /// A manual switch holds automation until a trigger program starts or
+    /// ends.
+    #[serde(default)]
+    pub held: bool,
+    /// The active profile was applied by this trigger program.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+    /// The profile it returns to when the trigger ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returns_to: Option<String>,
+    /// Profiles whose trigger runs but waits for a higher one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting: Vec<String>,
+}
+
+impl AutomationStatus {
+    /// The lines `kaltstellen status` prints after `tray: …`.
+    pub fn lines(&self, active: &str) -> Vec<String> {
+        let mut lines = Vec::new();
+        if self.paused {
+            lines.push("tray: automatic switching paused".to_owned());
+        } else if self.held {
+            lines.push(
+                "tray: automatic switching held by a manual switch until a trigger program \
+                 starts or ends"
+                    .to_owned(),
+            );
+        } else {
+            lines.push("tray: automatic switching on".to_owned());
+        }
+        if let (Some(trigger), Some(back)) = (&self.trigger, &self.returns_to) {
+            lines.push(format!(
+                "tray: \"{active}\" applied by trigger {trigger}; back to \"{back}\" when it ends"
+            ));
+        }
+        for waiting in &self.waiting {
+            lines.push(format!(
+                "tray: trigger for \"{waiting}\" waits while \"{active}\" is active"
+            ));
+        }
+        lines
+    }
 }
 
 impl Finished {
@@ -318,6 +372,10 @@ mod tests {
                 state: State::default(),
                 running: Some("switch to \"a\"".into()),
                 waiting: None,
+                automation: Some(AutomationStatus {
+                    held: true,
+                    ..AutomationStatus::default()
+                }),
             }),
         ];
         for body in bodies {

@@ -22,8 +22,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, RegisterHotKey, UnregisterHotKey,
 };
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
-    NIN_SELECT, NINF_KEY, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE,
+    NIM_MODIFY, NIM_SETVERSION, NIN_BALLOONUSERCLICK, NIN_SELECT, NINF_KEY, NOTIFYICON_VERSION_4,
+    NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
@@ -45,8 +46,9 @@ use crate::tray::model::{Icon, Item};
 /// Window class; also how scripts find the window.
 pub const CLASS: &str = "kaltstellen-tray";
 const TITLE: &str = "kaltstellen";
-/// Callback message of the notification icon.
-const WM_TRAY: u32 = WM_APP + 1;
+/// Callback message of the notification icon; tests post it to click the
+/// notification (U4).
+pub const WM_TRAY: u32 = WM_APP + 1;
 /// Posted by [`Waker::wake`] from other threads.
 const WM_WAKE: u32 = WM_APP + 2;
 const ICON_ID: u32 = 1;
@@ -54,6 +56,8 @@ const ICON_ID: u32 = 1;
 const TIMER_ID: usize = 1;
 /// The repeating re-check of errors (L9).
 const RECHECK_ID: usize = 2;
+/// The repeating poll of trigger programs (U4).
+const POLL_ID: usize = 3;
 const SHUTDOWN_LEVEL: u32 = 0x3FF;
 /// `szTip` has 128 units; the last one stays NUL.
 const TIP_UNITS: usize = 127;
@@ -96,11 +100,14 @@ pub trait Handler {
     fn timer(&mut self);
     /// The repeating timer of [`set_recheck`] fired (L9).
     fn recheck(&mut self);
+    /// The repeating timer of [`set_poll`] fired (U4).
+    fn poll(&mut self);
+    /// The user clicked the notification shown with [`balloon`] (U4).
+    fn balloon_clicked(&mut self);
 }
 
-/// L9: a repeating timer while errors of the last switch could still
-/// resolve themselves; `None` stops it. Window thread only.
-pub fn set_recheck(interval: Option<std::time::Duration>) {
+/// Sets or stops (`None`) the repeating timer `id`. Window thread only.
+fn repeat(id: usize, interval: Option<std::time::Duration>, what: &str) {
     let hwnd = WINDOW.with_borrow(|w| w.as_ref().map(|w| w.hwnd));
     let Some(hwnd) = hwnd else {
         return;
@@ -112,15 +119,64 @@ pub fn set_recheck(interval: Option<std::time::Duration>) {
                 let ms = u32::try_from(interval.as_millis())
                     .unwrap_or(u32::MAX)
                     .max(10);
-                if SetTimer(Some(hwnd), RECHECK_ID, ms, None) == 0 {
-                    warn!("cannot set the re-check timer");
+                if SetTimer(Some(hwnd), id, ms, None) == 0 {
+                    warn!("cannot set the {what} timer");
                 }
             }
             None => {
-                let _ = KillTimer(Some(hwnd), RECHECK_ID);
+                let _ = KillTimer(Some(hwnd), id);
             }
         }
     }
+}
+
+/// L9: a repeating timer while errors of the last switch could still
+/// resolve themselves; `None` stops it. Window thread only.
+pub fn set_recheck(interval: Option<std::time::Duration>) {
+    repeat(RECHECK_ID, interval, "re-check");
+}
+
+/// U4: the repeating poll of trigger programs while some profile has
+/// triggers and automatic switching is on; `None` stops it. Setting it
+/// again restarts the interval. Window thread only.
+pub fn set_poll(interval: Option<std::time::Duration>) {
+    repeat(POLL_ID, interval, "trigger poll");
+}
+
+/// U4: shows a notification from the tray icon (a balloon; on Windows 10
+/// and 11 a toast that ends up in the notification centre). A click on it
+/// arrives as [`Handler::balloon_clicked`]. The title is cut to 63 and the
+/// text to 255 UTF-16 units. Window thread only; false if the shell
+/// refused it (no notification area).
+pub fn balloon(title: &str, text: &str) -> bool {
+    WINDOW.with_borrow(|window| {
+        let Some(window) = window else {
+            return false;
+        };
+        let mut data = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: window.hwnd,
+            uID: ICON_ID,
+            uFlags: NIF_INFO,
+            dwInfoFlags: NIIF_INFO,
+            ..Default::default()
+        };
+        let units = data.szInfoTitle.len() - 1;
+        for (dst, src) in data
+            .szInfoTitle
+            .iter_mut()
+            .take(units)
+            .zip(title.encode_utf16())
+        {
+            *dst = src;
+        }
+        let units = data.szInfo.len() - 1;
+        for (dst, src) in data.szInfo.iter_mut().take(units).zip(text.encode_utf16()) {
+            *dst = src;
+        }
+        // SAFETY: `data` is fully initialised and lives across the call.
+        unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) }.as_bool()
+    })
 }
 
 /// Registers a global hotkey on the tray window. Window thread only. The
@@ -467,6 +523,8 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                     coordinate(wparam.0, false),
                     coordinate(wparam.0, true),
                 );
+            } else if event == NIN_BALLOONUSERCLICK {
+                with_handler(|h| h.balloon_clicked());
             }
             LRESULT(0)
         }
@@ -497,6 +555,10 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         }
         WM_TIMER if wparam.0 == RECHECK_ID => {
             with_handler(|h| h.recheck());
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == POLL_ID => {
+            with_handler(|h| h.poll());
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_ID => {

@@ -12,10 +12,12 @@ pub mod model;
 pub mod protocol;
 pub mod server;
 pub mod source;
+pub mod triggers;
 pub mod update;
 pub mod worker;
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -29,12 +31,12 @@ use crate::config::{self, NEUTRAL};
 use crate::error::{Code, Error};
 use crate::exit;
 use crate::paths;
-use crate::process::Snapshot;
+use crate::process::{Access, ProcessInfo, Snapshot, Target};
 use crate::settings;
 use crate::state::Store;
 use crate::win32::{console, instance::Instance, pipe, tray as window};
 use model::{Command as MenuCommand, Decision, Guests, Icon, Menu, Status, SwitchError};
-use protocol::{Body, Command, Finished, TrayStatus};
+use protocol::{AutomationStatus, Body, Command, Finished, TrayStatus};
 use server::Incoming;
 use source::Source;
 use worker::{Controller, Done, EngineRunner, Job};
@@ -166,6 +168,7 @@ pub fn main() -> u8 {
         ..Status::default()
     };
     // S5: the profile of the last session is offered, not applied.
+    let mut triggers_paused = false;
     if let Some(dir) = &config_dir {
         let (saved, problem) = settings::load(dir);
         if let Some(problem) = problem {
@@ -175,6 +178,8 @@ pub fn main() -> u8 {
             info!("tray: offering last profile \"{last}\"");
             status.offer = Some(last);
         }
+        // U4, decided detail 7: the pause survives a restart.
+        triggers_paused = saved.triggers_paused;
     }
     let listener = match pipe::Listener::bind(&endpoints.pipe) {
         Ok(listener) => {
@@ -240,12 +245,20 @@ pub fn main() -> u8 {
             update_deferred: false,
             shown_menu: None,
             session_ending: false,
+            automation: triggers::Automation::new(trigger_debounce(), triggers_paused),
+            polling: false,
+            images: HashMap::new(),
+            back_to: None,
         };
         app.refresh_autostart();
         app.ask_autostart_once();
         app.refresh_update();
         app.schedule_update();
         app.sync_hotkeys();
+        if app.automation.paused() {
+            info!("tray: automatic switching is paused");
+        }
+        app.arm_poll();
         app.menu = Menu::build(&names, &app.status);
         Box::new(app)
     });
@@ -316,6 +329,17 @@ struct App {
     session_ending: bool,
     /// L8: the answer to the start-at-sign-in question, while it is open.
     autostart_answer: Option<Receiver<bool>>,
+    /// U4: what the trigger programs ask for.
+    automation: triggers::Automation,
+    /// U4: the poll timer runs.
+    polling: bool,
+    /// U4: image paths of processes named like a trigger with a path, by
+    /// PID and creation time, so each is opened once (A7); `None` when it
+    /// could not be read.
+    images: HashMap<(u32, u64), Option<PathBuf>>,
+    /// U4: the profile `Back to <previous>` of the last automatic switch's
+    /// notification returns to; cleared by the next request.
+    back_to: Option<String>,
 }
 
 /// L8: answers the start-at-sign-in question without a dialog (`yes`,
@@ -329,6 +353,30 @@ const RECHECK: Duration = Duration::from_secs(30);
 /// How long `WM_QUERYENDSESSION` waits for everything to be resumed. Windows
 /// treats a window that takes about 5 s as not responding.
 const END_SESSION_WAIT: Duration = Duration::from_secs(4);
+
+/// U4, decided detail 3: how often the trigger programs are looked for, in
+/// the range of 2 to 5 s; 3 s measured below the Q1 budget (spec U4).
+const TRIGGER_POLL: Duration = Duration::from_secs(3);
+
+/// Test only: replaces [`TRIGGER_POLL`] and the debounce of
+/// [`triggers::DEBOUNCE`], in milliseconds, so the tests need not wait.
+const TRIGGER_POLL_ENV: &str = "KALTSTELLEN_TRIGGER_POLL_MS";
+const TRIGGER_DEBOUNCE_ENV: &str = "KALTSTELLEN_TRIGGER_DEBOUNCE_MS";
+
+fn millis_from_env(name: &str) -> Option<Duration> {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_millis)
+}
+
+fn trigger_poll() -> Duration {
+    millis_from_env(TRIGGER_POLL_ENV).map_or(TRIGGER_POLL, |d| d.max(Duration::from_millis(100)))
+}
+
+fn trigger_debounce() -> Duration {
+    millis_from_env(TRIGGER_DEBOUNCE_ENV).unwrap_or(triggers::DEBOUNCE)
+}
 
 fn icon_name(icon: Icon) -> &'static str {
     match icon {
@@ -666,6 +714,7 @@ impl App {
                 self.submit(Job::switch(&target), None);
             }
             Some(MenuCommand::ToggleAutostart) => self.toggle_autostart(),
+            Some(MenuCommand::ToggleAutomatic) => self.toggle_automatic(),
             Some(MenuCommand::OpenWindow) => open_window(),
             Some(MenuCommand::UpdateMode(mode)) => self.set_update_mode(mode),
             Some(MenuCommand::InstallUpdate) => {
@@ -692,17 +741,199 @@ impl App {
         }
     }
 
+    /// The profile that is active once the running and the waiting job
+    /// are done (U4 compares triggers against it).
+    fn will_be_active(&self) -> String {
+        self.controller
+            .pending()
+            .or(self.controller.running())
+            .map_or_else(|| self.status.active.clone(), |j| j.leads_to().to_owned())
+    }
+
+    /// U4: for `kaltstellen status`; `None` while no profile has triggers.
+    fn automation_status(&self) -> Option<AutomationStatus> {
+        if !self.triggers_configured() {
+            return None;
+        }
+        let view = self.automation.view(&self.will_be_active());
+        let (trigger, returns_to) = match view.applied {
+            Some((_, program, base)) => (Some(program), Some(base)),
+            None => (None, None),
+        };
+        Some(AutomationStatus {
+            paused: view.paused,
+            held: view.held,
+            trigger,
+            returns_to,
+            waiting: view.waiting.into_iter().map(|(p, _)| p).collect(),
+        })
+    }
+
+    /// U4: whether some profile of the configuration in effect has
+    /// triggers.
+    fn triggers_configured(&self) -> bool {
+        triggers::configured(&lock(&self.source).config().profiles)
+    }
+
+    /// U4: starts the poll when some profile has triggers and automatic
+    /// switching is on, stops it while paused, quitting or while the
+    /// session ends. When the triggers are gone from the file, the next
+    /// poll ends them first and then stops itself. Updates the menu's view.
+    fn arm_poll(&mut self) {
+        let configured = self.triggers_configured();
+        let blocked =
+            self.automation.paused() || self.controller.is_quitting() || self.session_ending;
+        if blocked && self.polling {
+            window::set_poll(None);
+            self.polling = false;
+            info!("tray: trigger poll stopped");
+        } else if !blocked && configured && !self.polling {
+            let interval = trigger_poll();
+            window::set_poll(Some(interval));
+            self.polling = true;
+            info!("tray: trigger poll every {} ms", interval.as_millis());
+        }
+        self.status.automation = configured.then(|| self.automation.view(&self.will_be_active()));
+    }
+
+    /// U4: one poll of the handle-free snapshot. Processes are opened only
+    /// for triggers with a path, and then only those of the trigger's name,
+    /// each once (A7).
+    fn poll_triggers(&mut self) {
+        if self.automation.paused() || self.controller.is_quitting() || self.session_ending {
+            self.arm_poll();
+            return;
+        }
+        // The file may have changed; an unchanged one is not parsed again
+        // (C4).
+        let profiles = {
+            let mut source = lock(&self.source);
+            source.refresh();
+            self.status.config_error = source.problem().map(str::to_owned);
+            source.config().profiles.clone()
+        };
+        let Ok(snapshot) = Snapshot::take() else {
+            return;
+        };
+        let session = snapshot.own_session();
+        if !self.images.is_empty() {
+            self.images
+                .retain(|(pid, created), _| snapshot.find(*pid, *created).is_some());
+        }
+        let images = &mut self.images;
+        let mut image = |info: &ProcessInfo| -> Option<PathBuf> {
+            images
+                .entry((info.pid, info.created))
+                .or_insert_with(|| {
+                    match Target::open(info, Access::Query)
+                        .and_then(|t| t.map(|t| t.image_path()).transpose())
+                    {
+                        Ok(path) => path,
+                        Err(err) => {
+                            info!("tray: trigger check: {err}");
+                            None
+                        }
+                    }
+                })
+                .clone()
+        };
+        let seen = triggers::scan(&profiles, snapshot.processes(), session, &mut image);
+        let active = self.will_be_active();
+        let (action, log) = self.automation.poll(Instant::now(), &seen, &active);
+        for line in log {
+            info!("tray: {line}");
+        }
+        if let Some(triggers::Action::Switch {
+            profile,
+            previous,
+            reason,
+        }) = action
+        {
+            // The profile to return to may have left the file meanwhile.
+            let known = profile.eq_ignore_ascii_case(NEUTRAL)
+                || profiles
+                    .iter()
+                    .any(|p| p.name.eq_ignore_ascii_case(&profile));
+            let target = if known {
+                profile
+            } else {
+                info!("tray: \"{profile}\" is no longer in the configuration; going to neutral");
+                NEUTRAL.to_owned()
+            };
+            info!("tray: trigger asks for \"{target}\" ({reason})");
+            self.submit(Job::automatic(&target, &previous, &reason), None);
+        }
+        if seen.is_empty() && self.polling {
+            // No profile has triggers any more: what ran has ended above.
+            window::set_poll(None);
+            self.polling = false;
+            info!("tray: trigger poll stopped, no profile has triggers");
+        }
+        self.arm_poll();
+        self.redraw();
+    }
+
+    /// U4: the menu item `Automatic switching`; remembered in
+    /// `settings.json` (decided detail 7).
+    fn toggle_automatic(&mut self) {
+        let paused = !self.automation.paused();
+        if let Some(dir) = &self.config_dir
+            && let Err(err) = settings::edit(dir, |s| s.triggers_paused = paused)
+        {
+            warn!("tray: {err}");
+        }
+        self.automation.set_paused(paused);
+        info!(
+            "tray: automatic switching {}",
+            if paused { "paused" } else { "on" }
+        );
+        self.arm_poll();
+        self.redraw();
+    }
+
+    /// U4, decided detail 1: an automatic switch ended; tell the user and
+    /// offer the way back.
+    fn notify_automatic(&mut self, target: &str, automatic: &model::Automatic, errors: usize) {
+        let mut text = format!("{}: switched to {target}", automatic.reason);
+        match errors {
+            0 => text.push('.'),
+            1 => text.push_str(", with 1 error."),
+            n => text.push_str(&format!(", with {n} errors.")),
+        }
+        text.push_str(&format!(" Click here: Back to {}", automatic.previous));
+        info!("tray: notification: {text}");
+        if !window::balloon(&format!("kaltstellen: {target}"), &text) {
+            warn!("tray: the notification could not be shown");
+        }
+        self.back_to = Some(automatic.previous.clone());
+    }
+
     fn submit(&mut self, job: Job, waiter: Option<Waiter>) {
         let joining = match &job {
             Job::Switch { guests, .. } => guests.list(),
             _ => Vec::new(),
         };
-        // A deliberate switch replaces the offer of the last session.
-        if matches!(job, Job::Switch { .. }) && self.status.offer.take().is_some() {
+        let automatic = job.is_automatic();
+        // A deliberate switch replaces the offer of the last session; an
+        // automatic one does not (U4, `[assumed]`).
+        if matches!(job, Job::Switch { .. }) && !automatic && self.status.offer.take().is_some() {
             self.save_offer();
+        }
+        // U4: the last notification's `Back to` means nothing any more.
+        self.back_to = None;
+        // U4, conflict rule 1: everything but a trigger is manual here
+        // (menu, hotkey, command line, window, `Back to`) and holds
+        // automation until the trigger situation changes.
+        if !automatic && self.automation.manual() {
+            info!(
+                "tray: automatic switching waits after a manual switch until a trigger program starts or ends"
+            );
         }
         let by = job.leads_to().to_owned();
         match self.controller.request(job) {
+            Decision::Ignored => {
+                self.automation.refused();
+            }
             Decision::Start(job) => {
                 self.status.switching = Some(job.leads_to().to_owned());
                 if let Some(waiter) = waiter {
@@ -812,10 +1043,24 @@ impl App {
             self.refresh_unassigned();
         }
         self.status.config_error = lock(&self.source).problem().map(str::to_owned);
-        if let Some(next) = self.controller.finished(&done.job) {
+        let next = self.controller.finished(&done.job);
+        if let Some(next) = &next {
             self.status.switching = Some(next.leads_to().to_owned());
             self.running = std::mem::take(&mut self.waiting);
         }
+        // U4: an automatic switch is announced with its way back, unless
+        // another request runs already.
+        if let Job::Switch {
+            automatic: Some(automatic),
+            ..
+        } = &done.job
+            && done.outcome.ran
+            && next.is_none()
+        {
+            let active = self.status.active.clone();
+            self.notify_automatic(&active, automatic, errors.len());
+        }
+        self.arm_poll();
         self.sync_hotkeys();
         if self.status.is_neutral() {
             // UP1: an update that waited for neutral may go now.
@@ -873,6 +1118,7 @@ impl App {
                 state: self.store.peek().unwrap_or_default(),
                 running: self.controller.running().map(ToString::to_string),
                 waiting: self.controller.pending().map(ToString::to_string),
+                automation: self.automation_status(),
             }));
             return;
         }
@@ -917,6 +1163,7 @@ impl App {
                         target,
                         force,
                         guests: Guests::of(caller),
+                        automatic: None,
                     },
                     notes,
                 )
@@ -948,6 +1195,7 @@ impl window::Handler for App {
         self.refresh_autostart();
         self.refresh_update();
         self.sync_hotkeys();
+        self.arm_poll();
         self.redraw();
         self.menu = Menu::build(&names, &self.status);
         self.shown_menu = Some(self.menu.clone());
@@ -1015,6 +1263,23 @@ impl window::Handler for App {
         self.recheck_errors();
     }
 
+    fn poll(&mut self) {
+        self.poll_triggers();
+    }
+
+    fn balloon_clicked(&mut self) {
+        let Some(previous) = self.back_to.take() else {
+            info!("tray: notification clicked; nothing to go back to");
+            return;
+        };
+        if self.controller.is_quitting() {
+            return;
+        }
+        // A manual switch: it holds automation like any other (U4).
+        info!("tray: notification clicked; back to \"{previous}\"");
+        self.submit(Job::switch(&previous), None);
+    }
+
     fn timer(&mut self) {
         if self
             .updates
@@ -1067,9 +1332,15 @@ impl window::Handler for App {
         info!("tray: session is ending; resuming everything");
         self.session_ending = true;
         // The profile to offer next time: the active one, or the offer that
-        // was not taken up yet.
+        // was not taken up yet. A profile a trigger applied is not offered,
+        // but the one from before the trigger (U4, decided detail 8).
+        self.arm_poll();
         if !self.status.is_neutral() {
-            self.status.offer = Some(self.status.active.clone());
+            match self.automation.base_of(&self.status.active) {
+                Some(base) if base.eq_ignore_ascii_case(NEUTRAL) => {}
+                Some(base) => self.status.offer = Some(base.to_owned()),
+                None => self.status.offer = Some(self.status.active.clone()),
+            }
         }
         if self.status.offer.is_some() {
             self.save_offer();
@@ -1106,6 +1377,10 @@ impl window::Handler for App {
                 Some(last) => info!("tray: end of session cancelled; offering \"{last}\" again"),
                 None => info!("tray: end of session cancelled"),
             }
+            // U4: triggers start afresh; one that still runs applies again
+            // (`[assumed]`).
+            self.automation.restart();
+            self.arm_poll();
             self.redraw();
             return;
         }

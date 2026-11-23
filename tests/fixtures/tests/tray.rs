@@ -19,10 +19,10 @@ use common::*;
 use kaltstellen::autostart::{self, RUN_KEY, VALUE};
 use kaltstellen::state::Store;
 use kaltstellen::tray::model::{
-    ID_AUTOSTART, ID_LAST, ID_NEUTRAL, ID_OPEN, ID_PROFILE_BASE, ID_QUIT,
+    ID_AUTOMATIC, ID_AUTOSTART, ID_LAST, ID_NEUTRAL, ID_OPEN, ID_PROFILE_BASE, ID_QUIT,
 };
 use kaltstellen::win32::registry;
-use kaltstellen::win32::tray::CLASS;
+use kaltstellen::win32::tray::{CLASS, WM_TRAY};
 use std::os::windows::process::CommandExt;
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -160,6 +160,9 @@ impl Tray {
             .env("KALTSTELLEN_CONFIG_DIR", self.dir.path().join("config"))
             .env("KALTSTELLEN_DATA_DIR", self.data())
             .env("KALTSTELLEN_RUN_KEY", self.run_key())
+            // U4: poll and debounce fast enough for tests.
+            .env("KALTSTELLEN_TRIGGER_POLL_MS", "200")
+            .env("KALTSTELLEN_TRIGGER_DEBOUNCE_MS", "1000")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -208,6 +211,23 @@ impl Tray {
         // makes the call fail.
         unsafe { PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(usize::from(id)), LPARAM(0)) }
             .expect("post WM_COMMAND");
+    }
+
+    /// Posts what a click on the tray's notification posts (U4):
+    /// `NIN_BALLOONUSERCLICK` with `NOTIFYICON_VERSION_4`.
+    fn click_notification(&self) {
+        const NIN_BALLOONUSERCLICK: isize = 0x405;
+        let hwnd = tray_window(self.pid()).expect("tray window");
+        // SAFETY: as in `click`.
+        unsafe {
+            PostMessageW(
+                Some(hwnd),
+                WM_TRAY,
+                WPARAM(0),
+                LPARAM((1 << 16) | NIN_BALLOONUSERCLICK),
+            )
+        }
+        .expect("post the notification click");
     }
 
     /// Posts a window message as Windows would send it.
@@ -1011,4 +1031,317 @@ fn l8_the_tray_asks_once_about_start_at_sign_in() {
     }
     // The second start did not ask again, whatever the answer would be.
     assert_eq!(t.logged("question answered"), 1);
+}
+
+/// A profile with trigger programs (U4).
+fn triggered(name: &str, priority: i32, triggers: &[&str], apps: &[(&str, &str)]) -> String {
+    let list: Vec<String> = triggers.iter().map(|t| format!("\"{t}\"")).collect();
+    let head = format!(
+        "[[profile]]\nname = \"{name}\"\ntrigger = [{}]\npriority = {priority}\n",
+        list.join(", ")
+    );
+    // The entries of `profile`, without its first two lines.
+    let entries = profile(name, apps);
+    let entries = entries
+        .split_once('\n')
+        .and_then(|(_, rest)| rest.split_once('\n'))
+        .map_or("", |(_, rest)| rest);
+    format!("{head}{entries}")
+}
+
+#[test]
+fn u4_a_trigger_applies_its_profile_and_the_end_returns() {
+    let mut t = Tray::new();
+    let _a = t.program("ks-trig1-a.exe");
+    t.config(&format!(
+        "{}{}",
+        profile("work", &[]),
+        triggered(
+            "flight",
+            0,
+            &["ks-trig1-sim.exe"],
+            &[("ks-trig1-a.exe", "suspend")]
+        ),
+    ));
+    t.start(1);
+    t.wait_log("tray: trigger poll every 200 ms", 1);
+    let (_, out, _) = t.run(&["status"]);
+    assert!(out.contains("tray: automatic switching on"), "{out}");
+
+    let sim = t.program("ks-trig1-sim.exe");
+    t.wait_log("tray: automatic switch to \"flight\" finished", 1);
+    assert!(t.is_frozen("ks-trig1-a.exe"));
+    assert!(
+        t.is_beating("ks-trig1-sim.exe"),
+        "the trigger itself runs on"
+    );
+    let log = t.log();
+    assert!(
+        log.contains("tray: trigger ks-trig1-sim.exe of \"flight\" started"),
+        "{log}"
+    );
+    assert!(
+        log.contains(
+            "tray: notification: ks-trig1-sim.exe started: switched to flight. Click here: Back to neutral"
+        ),
+        "{log}"
+    );
+    let (_, out, _) = t.run(&["status"]);
+    assert!(out.contains("active profile: flight"), "{out}");
+    assert!(
+        out.contains(
+            "tray: \"flight\" applied by trigger ks-trig1-sim.exe; back to \"neutral\" when it ends"
+        ),
+        "{out}"
+    );
+
+    // The trigger ends: back to the profile from before, after the
+    // debounce.
+    drop(sim);
+    t.wait_log("tray: automatic switch to \"neutral\" finished", 1);
+    assert!(t.is_beating("ks-trig1-a.exe"));
+    assert!(
+        t.log()
+            .contains("tray: notification: ks-trig1-sim.exe ended: switched to neutral"),
+        "{}",
+        t.log()
+    );
+    assert_eq!(t.quit(), Some(0));
+}
+
+#[test]
+fn u4_manual_switch_and_the_notification_click_hold_automation() {
+    let mut t = Tray::new();
+    let _a = t.program("ks-trig2-a.exe");
+    let _b = t.program("ks-trig2-b.exe");
+    t.config(&format!(
+        "{}{}",
+        triggered(
+            "flight",
+            0,
+            &["ks-trig2-sim.exe", "ks-trig2-alt.exe"],
+            &[("ks-trig2-a.exe", "suspend")]
+        ),
+        profile("work", &[("ks-trig2-b.exe", "suspend")]),
+    ));
+    t.start(1);
+    t.wait_log("tray: trigger poll every", 1);
+    let sim = t.program("ks-trig2-sim.exe");
+    t.wait_log("tray: automatic switch to \"flight\" finished", 1);
+    assert!(t.is_frozen("ks-trig2-a.exe"));
+
+    // `Back to neutral` in the notification is a manual switch: it holds
+    // automation while the trigger keeps running.
+    t.click_notification();
+    t.wait_log("tray: notification clicked; back to \"neutral\"", 1);
+    t.wait_log("tray: switch to \"neutral\" finished", 1);
+    assert!(t.is_beating("ks-trig2-a.exe"));
+    let (_, out, _) = t.run(&["status"]);
+    assert!(
+        out.contains("automatic switching held by a manual switch"),
+        "{out}"
+    );
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(
+        t.logged("tray: automatic switch to \"flight\" finished"),
+        1,
+        "held"
+    );
+
+    // A manual switch from the menu while held; then the trigger ends: the
+    // hold ends, but nothing returns, the user chose "work" (rule 5).
+    t.click(ID_PROFILE_BASE + 1);
+    t.wait_log("tray: switch to \"work\" finished", 1);
+    drop(sim);
+    t.wait_log(
+        "tray: the trigger situation changed; automatic switching goes on",
+        1,
+    );
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(t.store().peek().unwrap().active_profile, "work");
+    assert!(t.is_frozen("ks-trig2-b.exe"));
+    assert_eq!(t.logged("tray: automatic switch to \"neutral\""), 0);
+
+    // A trigger starts again: automation applies its profile from "work".
+    let _alt = t.program("ks-trig2-alt.exe");
+    t.wait_log("tray: automatic switch to \"flight\" finished", 2);
+    assert!(t.log().contains("Click here: Back to work"), "{}", t.log());
+    assert!(t.is_frozen("ks-trig2-a.exe"));
+    assert!(t.is_beating("ks-trig2-b.exe"));
+    assert_eq!(t.quit(), Some(0));
+}
+
+#[test]
+fn u4_a_higher_priority_takes_over_and_hands_back() {
+    let mut t = Tray::new();
+    let _a = t.program("ks-trig3-a.exe");
+    let _b = t.program("ks-trig3-b.exe");
+    t.config(&format!(
+        "{}{}",
+        triggered(
+            "low",
+            1,
+            &["ks-trig3-low.exe"],
+            &[("ks-trig3-a.exe", "suspend")]
+        ),
+        triggered(
+            "high",
+            5,
+            &["ks-trig3-high.exe"],
+            &[("ks-trig3-b.exe", "suspend")]
+        ),
+    ));
+    t.start(1);
+    t.wait_log("tray: trigger poll every", 1);
+    let low = t.program("ks-trig3-low.exe");
+    t.wait_log("tray: automatic switch to \"low\" finished", 1);
+    assert!(t.is_frozen("ks-trig3-a.exe"));
+
+    let high = t.program("ks-trig3-high.exe");
+    t.wait_log("tray: automatic switch to \"high\" finished", 1);
+    assert!(t.is_frozen("ks-trig3-b.exe"));
+    assert!(t.is_beating("ks-trig3-a.exe"));
+    assert!(
+        t.log()
+            .contains("tray: trigger for \"low\" waits while \"high\" is active")
+    );
+    let (_, out, _) = t.run(&["status"]);
+    assert!(
+        out.contains(
+            "tray: \"high\" applied by trigger ks-trig3-high.exe; back to \"neutral\" when it ends"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("tray: trigger for \"low\" waits while \"high\" is active"),
+        "{out}"
+    );
+
+    // The higher one ends while the lower runs: back to the lower one.
+    drop(high);
+    t.wait_log("tray: automatic switch to \"low\" finished", 2);
+    assert!(t.is_frozen("ks-trig3-a.exe"));
+    assert!(t.is_beating("ks-trig3-b.exe"));
+    // Then the lower one ends: back to the profile before the first.
+    drop(low);
+    t.wait_log("tray: automatic switch to \"neutral\" finished", 1);
+    assert!(t.is_beating("ks-trig3-a.exe"));
+    assert_eq!(t.quit(), Some(0));
+}
+
+#[test]
+fn u4_automatic_switching_can_be_paused_and_stays_paused() {
+    let mut t = Tray::new();
+    let _a = t.program("ks-trig4-a.exe");
+    t.config(&triggered(
+        "flight",
+        0,
+        &["ks-trig4-sim.exe"],
+        &[("ks-trig4-a.exe", "suspend")],
+    ));
+    t.start(1);
+    t.wait_log("tray: trigger poll every", 1);
+    t.click(ID_AUTOMATIC);
+    t.wait_log("tray: automatic switching paused", 1);
+    t.wait_log("tray: trigger poll stopped", 1);
+    assert!(
+        t.settings().contains("\"triggers_paused\": true"),
+        "{}",
+        t.settings()
+    );
+    let _sim = t.program("ks-trig4-sim.exe");
+    std::thread::sleep(Duration::from_millis(1000));
+    assert_eq!(t.logged("automatic switch to"), 0);
+    assert!(t.is_beating("ks-trig4-a.exe"));
+    assert_eq!(t.quit(), Some(0));
+
+    // Remembered across a restart (settings.json).
+    t.start(2);
+    assert_eq!(t.logged("tray: automatic switching is paused"), 1);
+    let (_, out, _) = t.run(&["status"]);
+    assert!(out.contains("tray: automatic switching paused"), "{out}");
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(t.logged("automatic switch to"), 0);
+
+    // On again: a trigger that runs counts as starting.
+    t.click(ID_AUTOMATIC);
+    t.wait_log("tray: automatic switching on", 1);
+    t.wait_log("tray: automatic switch to \"flight\" finished", 1);
+    assert!(t.is_frozen("ks-trig4-a.exe"));
+    assert!(
+        !t.settings().contains("triggers_paused"),
+        "{}",
+        t.settings()
+    );
+    assert_eq!(t.quit(), Some(0));
+    assert!(t.is_beating("ks-trig4-a.exe"));
+}
+
+#[test]
+fn u4_s5_after_a_trigger_the_profile_from_before_is_offered() {
+    let mut t = Tray::new();
+    let _a = t.program("ks-trig5-a.exe");
+    let _b = t.program("ks-trig5-b.exe");
+    t.config(&format!(
+        "{}{}",
+        profile("work", &[("ks-trig5-b.exe", "suspend")]),
+        triggered(
+            "flight",
+            0,
+            &["ks-trig5-sim.exe"],
+            &[("ks-trig5-a.exe", "suspend")]
+        ),
+    ));
+    t.start(1);
+    t.wait_log("tray: trigger poll every", 1);
+    t.click(ID_PROFILE_BASE);
+    t.wait_log("tray: switch to \"work\" finished", 1);
+    let _sim = t.program("ks-trig5-sim.exe");
+    t.wait_log("tray: automatic switch to \"flight\" finished", 1);
+
+    t.post(WM_QUERYENDSESSION, 0);
+    t.wait_log("tray: end of session finished", 1);
+    t.wait_log("tray: trigger poll stopped", 1);
+    assert!(t.is_beating("ks-trig5-a.exe"));
+    let settings = t.settings();
+    assert!(
+        settings.contains("\"last_profile\": \"work\""),
+        "{settings}"
+    );
+
+    // Cancelled: triggers start afresh; the one that still runs applies.
+    t.post(WM_ENDSESSION, 0);
+    t.wait_log("tray: automatic switch to \"flight\" finished", 2);
+    assert!(t.is_frozen("ks-trig5-a.exe"));
+    assert_eq!(t.quit(), Some(0));
+}
+
+#[test]
+fn u4_check_config_refuses_a_trigger_its_own_profile_freezes() {
+    let t = Tray::new();
+    t.config(&triggered(
+        "flight",
+        0,
+        &["ks-trig6-sim.exe"],
+        &[("ks-trig6-sim.exe", "suspend")],
+    ));
+    let (code, _, err) = t.run(&["check-config"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("KS203"), "{err}");
+    assert!(
+        err.contains("trigger \"ks-trig6-sim.exe\" is a program that this profile freezes"),
+        "{err}"
+    );
+    t.config(&triggered(
+        "flight",
+        7,
+        &["ks-trig6-sim.exe"],
+        &[("ks-trig6-a.exe", "suspend")],
+    ));
+    let (code, out, err) = t.run(&["check-config"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.contains("profile \"flight\": 1 program(s), trigger ks-trig6-sim.exe (priority 7)"),
+        "{out}"
+    );
 }

@@ -26,6 +26,8 @@ pub enum Job {
         target: String,
         force: bool,
         guests: Guests,
+        /// U4: requested by a trigger, not by the user.
+        automatic: Option<Automatic>,
     },
     /// L2: resume everything suspended, keep stopped records, then exit.
     Quit,
@@ -39,7 +41,31 @@ impl Job {
             target: target.trim().to_owned(),
             force: false,
             guests: Guests::default(),
+            automatic: None,
         }
+    }
+
+    /// U4: a switch a trigger asks for.
+    pub fn automatic(target: &str, previous: &str, reason: &str) -> Self {
+        Job::Switch {
+            target: target.trim().to_owned(),
+            force: false,
+            guests: Guests::default(),
+            automatic: Some(Automatic {
+                previous: previous.to_owned(),
+                reason: reason.to_owned(),
+            }),
+        }
+    }
+
+    pub fn is_automatic(&self) -> bool {
+        matches!(
+            self,
+            Job::Switch {
+                automatic: Some(_),
+                ..
+            }
+        )
     }
 
     /// The profile that is active once the job is done (W3 compares these).
@@ -55,11 +81,26 @@ impl std::fmt::Display for Job {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Job::Recover => f.write_str("recover"),
+            Job::Switch {
+                target,
+                automatic: Some(_),
+                ..
+            } => write!(f, "automatic switch to \"{target}\""),
             Job::Switch { target, .. } => write!(f, "switch to \"{target}\""),
             Job::Quit => f.write_str("quit"),
             Job::EndSession => f.write_str("end of session"),
         }
     }
+}
+
+/// U4: why a trigger asked for a switch, for the notification and its
+/// `Back to <previous>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Automatic {
+    /// The profile active before the switch.
+    pub previous: String,
+    /// For example `simulator.exe started`.
+    pub reason: String,
 }
 
 /// The callers a switch protects (T16), shared between the window thread,
@@ -112,6 +153,9 @@ pub enum Decision {
     Dropped { superseded: Option<Job> },
     /// Quit or the end of the session runs or waits: nothing new is taken.
     Refused,
+    /// U4: an automatic request never replaces a waiting manual one; it is
+    /// not queued.
+    Ignored,
 }
 
 /// W3: while a job runs, at most one further request waits. The latest
@@ -133,6 +177,11 @@ impl Queue {
         // request may replace them while they wait (as while quitting).
         if matches!(self.pending, Some(Job::Quit | Job::EndSession)) {
             return Decision::Refused;
+        }
+        // U4, conflict rule 1: manual beats automatic. A manual request
+        // replaces a waiting automatic one like any other (below).
+        if job.is_automatic() && self.pending.as_ref().is_some_and(|p| !p.is_automatic()) {
+            return Decision::Ignored;
         }
         let superseded = self.pending.take();
         if same_profile(running.leads_to(), job.leads_to()) {
@@ -205,6 +254,9 @@ pub struct Status {
     pub update_locked: bool,
     /// UP1: a newer version found by the last check.
     pub update: Option<UpdateOffer>,
+    /// U4: automation as the menu shows it; `None` while no profile has
+    /// triggers.
+    pub automation: Option<super::triggers::View>,
 }
 
 /// L9: when an error of the last switch counts as resolved without a switch,
@@ -305,6 +357,7 @@ impl Default for Status {
             update_mode: crate::update::Mode::Auto,
             update_locked: false,
             update: None,
+            automation: None,
         }
     }
 }
@@ -356,6 +409,13 @@ impl Status {
 
     pub fn tooltip(&self) -> String {
         let mut tip = format!("kaltstellen: {}", self.active);
+        if self
+            .automation
+            .as_ref()
+            .is_some_and(|a| a.applied.is_some())
+        {
+            tip.push_str(" (by trigger)");
+        }
         if let Some(target) = &self.switching {
             tip.push_str(&format!(" (switching to {target})"));
         }
@@ -420,6 +480,8 @@ pub enum Command {
     UpdateMode(crate::update::Mode),
     /// UP1: opens a console running `kaltstellen update`.
     InstallUpdate,
+    /// U4: pauses or resumes all triggers.
+    ToggleAutomatic,
     Quit,
 }
 
@@ -453,6 +515,8 @@ pub const ID_UPDATE_MANUAL: u16 = 10;
 pub const ID_UPDATE_OFF: u16 = 11;
 /// UP1: `Install update <version>…`.
 pub const ID_UPDATE_INSTALL: u16 = 9;
+/// U4: `Automatic switching` (checked while not paused).
+pub const ID_AUTOMATIC: u16 = 12;
 /// Profile `n` of the configuration has ID `ID_PROFILE_BASE + n`.
 pub const ID_PROFILE_BASE: u16 = 100;
 
@@ -529,6 +593,41 @@ impl Menu {
         }
         for hotkey in &status.hotkeys_unavailable {
             menu.disabled(format!("Hotkey not available: {}", escape(hotkey)));
+        }
+        if let Some(view) = &status.automation {
+            // U4: what automation does, then the switch that pauses it.
+            if let Some((_, program, base)) = &view.applied {
+                menu.disabled(truncate(
+                    &format!(
+                        "Applied by trigger {}; back to {} when it ends",
+                        escape(program),
+                        escape(base)
+                    ),
+                    100,
+                ));
+            }
+            for (waiting, winner) in &view.waiting {
+                menu.disabled(truncate(
+                    &format!(
+                        "Trigger for {} waits while {} is active",
+                        escape(waiting),
+                        escape(winner)
+                    ),
+                    100,
+                ));
+            }
+            if view.held && !view.paused {
+                menu.disabled(
+                    "Triggers wait after a manual switch until a trigger program starts or ends"
+                        .to_owned(),
+                );
+            }
+            menu.entry(
+                ID_AUTOMATIC,
+                "Au&tomatic switching".to_owned(),
+                !view.paused,
+                Command::ToggleAutomatic,
+            );
         }
         if let Some(on) = status.autostart {
             menu.entry(
@@ -712,6 +811,52 @@ mod tests {
     }
 
     #[test]
+    fn u4_manual_beats_automatic_in_the_queue() {
+        let auto = |t: &str| Job::automatic(t, "neutral", "sim.exe started");
+        // An automatic request does not replace a waiting manual one...
+        let mut q = Queue::default();
+        q.request(sw("a"));
+        q.request(sw("b"));
+        assert_eq!(q.request(auto("c")), Decision::Ignored);
+        assert_eq!(q.pending(), Some(&sw("b")));
+        // ...nor a waiting recovery from the command line.
+        let mut q = Queue::default();
+        q.request(sw("a"));
+        q.request(Job::Recover);
+        assert_eq!(q.request(auto("c")), Decision::Ignored);
+        // A manual request replaces a waiting automatic one.
+        let mut q = Queue::default();
+        q.request(sw("a"));
+        assert_eq!(q.request(auto("c")), Decision::Queued { superseded: None });
+        assert_eq!(
+            q.request(sw("b")),
+            Decision::Queued {
+                superseded: Some(auto("c"))
+            }
+        );
+        // Automatic replaces automatic; one leading where the running
+        // switch leads is dropped (conflict rule 3, W3); one runs at once
+        // when nothing runs.
+        let mut q = Queue::default();
+        assert_eq!(q.request(auto("a")), Decision::Start(auto("a")));
+        assert_eq!(q.request(auto("b")), Decision::Queued { superseded: None });
+        assert_eq!(
+            q.request(auto("c")),
+            Decision::Queued {
+                superseded: Some(auto("b"))
+            }
+        );
+        assert_eq!(
+            q.request(auto("A")),
+            Decision::Dropped {
+                superseded: Some(auto("c"))
+            }
+        );
+        assert_eq!(auto("a").to_string(), "automatic switch to \"a\"");
+        assert!(!sw("a").is_automatic());
+    }
+
+    #[test]
     fn force_travels_with_the_request() {
         let mut q = Queue::default();
         q.request(sw("a"));
@@ -719,6 +864,7 @@ mod tests {
             target: "b".into(),
             force: true,
             guests: Guests::default(),
+            automatic: None,
         };
         q.request(forced.clone());
         assert_eq!(q.finish(), Some(forced));
@@ -951,6 +1097,54 @@ mod tests {
         assert_eq!(menu.command(ID_UNASSIGNED), Some(&Command::OpenWindow));
         status.unassigned = 0;
         assert_eq!(Menu::build(&[], &status).command(ID_UNASSIGNED), None);
+    }
+
+    #[test]
+    fn u4_automatic_switching_item_only_with_triggers() {
+        let plain = Menu::build(&[], &Status::default());
+        assert_eq!(plain.command(ID_AUTOMATIC), None);
+        let mut status = Status {
+            active: "flight".into(),
+            automation: Some(crate::tray::triggers::View {
+                paused: false,
+                held: false,
+                applied: Some(("flight".into(), "sim.exe".into(), "neutral".into())),
+                waiting: vec![("music".into(), "flight".into())],
+            }),
+            ..Status::default()
+        };
+        let menu = Menu::build(&["flight".to_owned(), "music".to_owned()], &status);
+        let all = labels(&menu);
+        let at = all
+            .iter()
+            .position(|l| l == "[x] Au&tomatic switching")
+            .expect("item");
+        assert_eq!(
+            all[at - 2..at],
+            [
+                "Applied by trigger sim.exe; back to neutral when it ends (disabled)",
+                "Trigger for music waits while flight is active (disabled)"
+            ]
+        );
+        assert_eq!(menu.command(ID_AUTOMATIC), Some(&Command::ToggleAutomatic));
+        assert_eq!(status.tooltip(), "kaltstellen: flight (by trigger)");
+        let view = status.automation.as_mut().unwrap();
+        view.paused = true;
+        view.held = true;
+        view.applied = None;
+        view.waiting.clear();
+        let all = labels(&Menu::build(&[], &status));
+        assert!(all.contains(&"Au&tomatic switching".to_owned()), "{all:?}");
+        assert!(
+            !all.iter().any(|l| l.starts_with("Triggers wait")),
+            "{all:?}"
+        );
+        status.automation.as_mut().unwrap().paused = false;
+        let all = labels(&Menu::build(&[], &status));
+        assert!(
+            all.iter().any(|l| l.starts_with("Triggers wait")),
+            "{all:?}"
+        );
     }
 
     #[test]
