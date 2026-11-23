@@ -167,13 +167,34 @@ main session made them; they show the views below in light and dark.
     while it checks, including scrolling and opening dialogs. The log has
     `gui: program info for N programs (… known, … pending) in … ms`,
     `gui: version resources of N files in … ms` and `gui: N signatures in
-    … ms, … waiting`. With the network cable pulled or Wi-Fi off, the
-    results are the same (no network access; a packet capture or the
-    firewall log shows no connection from `kaltstellen.exe` while the
-    lists fill). Check in light and dark mode.
-    In a console: `kaltstellen list note` shows `Notepad, signed by
-    Microsoft Windows` after `Notepad.exe`; `kaltstellen status
-    --unassigned` shows the same text after each program.
+    … ms, … waiting`. A program signed with a certificate whose root this
+    computer does not know (a self-signed test signature made with
+    `New-SelfSignedCertificate` and `Set-AuthenticodeSignature` in
+    PowerShell, without importing the certificate) shows an italic, muted `signature not verifiable here`,
+    not the warning colour; its tooltip says this is no sign of a change.
+    Check in light and dark mode.
+    No network access (the check requests none; Windows' own update of its
+    root certificate lists has no switch, so this is checked by hand):
+    a. In an elevated console, empty the URL cache of the certificate
+       engine (`certutil -urlcache * delete`) and turn on logging of
+       outgoing connections (`auditpol /set /subcategory:"Filtering
+       Platform Connection" /success:enable`).
+    b. Note the time, open the window and `Add a program`, wait until all
+       publishers are shown, and run `kaltstellen list --info` and
+       `kaltstellen status --unassigned`.
+    c. Event Viewer, Windows Logs, Security, events 5156 since that time:
+       none with application `kaltstellen.exe`. Note any connection of
+       `svchost.exe` (CryptSvc) at that time: that would be Windows
+       updating its certificate lists on its own. Turn the logging off
+       again (`/success:disable`). Also with Wi-Fi off or the cable
+       pulled the lists fill as fast as before, with the same results or
+       at most `signature not verifiable here` for chains Windows had
+       not cached.
+    In a console: plain `kaltstellen list` looks as before (no text after
+    the names, as fast as before); `kaltstellen list --info note` shows
+    `Notepad, signed by Microsoft Windows` after `Notepad.exe`;
+    `kaltstellen status --unassigned` shows the same kind of text after
+    each program.
 14. With the window open and minimised, choose `Open kaltstellen…` again
     (or run `kaltstellen gui`): the same window comes back to the front, no
     second window opens.

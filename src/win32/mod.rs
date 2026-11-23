@@ -24,3 +24,13 @@ pub mod webview;
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
+
+/// A path as UTF-16, NUL-terminated, without loss: names that are not
+/// valid Unicode (unpaired surrogates) stay as they are.
+fn wide_path(path: &std::path::Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}

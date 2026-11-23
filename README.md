@@ -46,8 +46,8 @@ kaltstellen autostart [on|off]    start the tray at sign-in (per-user Run key)
 kaltstellen gui                   window to edit profiles and their programs
                                   (needs the WebView2 runtime of Windows 11)
 
-kaltstellen list [FILTER]         list running processes, with what each
-                                  program is (description, publisher)
+kaltstellen list [FILTER]         list running processes; --info adds what
+          [--info]                each program is (description, publisher)
 kaltstellen suspend NAME [--trim] freeze a program by hand: all processes with
                                   that executable name and their children
 kaltstellen resume NAME           continue them
@@ -69,7 +69,7 @@ kaltstellen resume NAME           continue them
 - What a program is comes from its own file only, with no network access:
   the description from its version resource (which the file can claim
   freely) and the publisher from its signature, shown only when the
-  signature is valid (`list`: `Notepad, signed by Microsoft Windows`;
+  signature is valid (`list --info`: `Notepad, signed by Microsoft Windows`;
   `Tool (Acme), unsigned`). The main window shows the same under each
   program's name.
 - A suspended process uses no CPU and keeps its state.

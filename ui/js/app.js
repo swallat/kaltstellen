@@ -124,6 +124,7 @@ function renderProfiles() {
 
 async function select(name) {
   selected = name;
+  forgetAbout();
   render();
   await loadUnassigned();
 }
@@ -266,8 +267,15 @@ function watchScale() {
 
 /** `exe|path` to what the host knows. Only finished answers are kept: a
  * pending one is asked again on the `program_info` event, a program
- * without a readable file (`null`) the next time the list is drawn. */
+ * without a readable file (`null`) the next time the list is drawn. They
+ * are kept only until the state is refreshed (focus), another profile is
+ * shown or `Add a program` opens: a running program is known by its name
+ * here, and the host finds its file (and whether it changed) afresh. */
 const aboutCache = new Map();
+
+function forgetAbout() {
+  aboutCache.clear();
+}
 
 function aboutKey(exe, path) {
   return `${exe.toLowerCase()}|${(path || '').toLowerCase()}`;
@@ -292,6 +300,7 @@ function aboutTitle(v) {
   const signature = {
     valid: `Signed by ${v.publisher || 'an unnamed publisher'}${v.catalog ? ' (through a Windows catalog)' : ''}; the signature is valid.`,
     invalid: `The file has a signature, but it is not valid: ${v.problem}.`,
+    unverified: `The file has a signature, but whether it is valid cannot be decided from what this computer has: ${v.problem}. That is not a sign that the file was changed.`,
     unsigned: 'The file is not signed.',
     unknown: `Signature not checked: ${v.problem}.`,
     pending: 'Checking the signature…',
@@ -319,6 +328,9 @@ function showAbout(holder, v) {
   if (text) parts.push(text);
   if (v.signature === 'valid') parts.push(el('span', { class: 'publisher', text: `✓ ${v.publisher || 'signed'}` }));
   if (v.signature === 'invalid') parts.push(el('span', { class: 'sig-invalid', text: '⚠ signature not valid' }));
+  // Neutral, not the warning colour: offline or unknown roots are no sign
+  // of tampering.
+  if (v.signature === 'unverified') parts.push(el('span', { class: 'sig-none', text: 'signature not verifiable here' }));
   if (v.signature === 'unsigned') parts.push(el('span', { class: 'sig-none', text: 'unsigned' }));
   const children = [];
   parts.forEach((part, i) => {
@@ -669,6 +681,7 @@ function megabytes(bytes) {
 const protectionText = { none: '', warn: 'warn list', hard: 'protected, cannot be added' };
 
 async function openAdd() {
+  forgetAbout();
   $('add-error').textContent = '';
   const reply = await call('running');
   const running = reply.ok ? reply.data : [];
@@ -797,7 +810,10 @@ addEventListener('focus', async () => {
   if (!state || document.querySelector('dialog[open]') || Date.now() - lastRefresh < 2000) return;
   lastRefresh = Date.now();
   const reply = await request('get_state');
-  if (reply.ok && !document.querySelector('dialog[open]')) adopt(reply.state);
+  if (reply.ok && !document.querySelector('dialog[open]')) {
+    forgetAbout();
+    adopt(reply.state);
+  }
 });
 
 onEvent(async (event) => {

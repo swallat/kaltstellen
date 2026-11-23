@@ -94,21 +94,28 @@ pub fn version(strings: &impl Strings) -> Option<Version> {
 }
 
 /// Text from a file for the page and the terminal: control characters
-/// (escape sequences) and bidirectional overrides (which could turn text
-/// around) removed, whitespace collapsed, at most [`MAX_TEXT`] characters.
-/// `None` when nothing is left.
+/// (escape sequences), bidirectional marks and overrides (which could turn
+/// text around) and invisible format characters (zero-width spaces and
+/// joiners, word joiner, invisible operators, byte order mark) removed,
+/// whitespace collapsed, at most [`MAX_TEXT`] characters. `None` when
+/// nothing is left.
 pub fn clean(text: &str) -> Option<String> {
-    let bidi = |c: char| {
+    let hidden = |c: char| {
         matches!(
             c,
-            '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            '\u{061C}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{FEFF}'
         )
     };
     let words: Vec<&str> = text
         .split(|c: char| c.is_whitespace() || c.is_control())
         .filter(|w| !w.is_empty())
         .collect();
-    let joined: String = words.join(" ").chars().filter(|&c| !bidi(c)).collect();
+    let joined: String = words.join(" ").chars().filter(|&c| !hidden(c)).collect();
     let joined = joined.trim();
     if joined.is_empty() {
         return None;
@@ -129,8 +136,16 @@ pub enum Signature {
         publisher: Option<String>,
         catalog: bool,
     },
-    /// A signature is there but does not verify.
+    /// A signature is there but does not verify: the file was changed, the
+    /// certificate expired, was revoked or is distrusted.
     Invalid {
+        reason: String,
+    },
+    /// A signature is there, but whether it is valid cannot be decided from
+    /// what this computer has (a root it does not know, a chain that needs
+    /// certificates from the network, a check its settings forbid). Not a
+    /// sign of tampering.
+    Unverified {
         reason: String,
     },
     Unsigned,
@@ -145,6 +160,9 @@ impl Signature {
                 publisher: signer.and_then(|s| clean(&s)),
                 catalog,
             },
+            Trust::Invalid { code, .. } if cannot_decide(code) => Signature::Unverified {
+                reason: reason(code),
+            },
             Trust::Invalid { code, .. } => Signature::Invalid {
                 reason: reason(code),
             },
@@ -153,15 +171,32 @@ impl Signature {
         }
     }
 
-    /// `valid`, `invalid`, `unsigned` or `unknown`.
+    /// `valid`, `invalid`, `unverified`, `unsigned` or `unknown`.
     pub fn kind(&self) -> &'static str {
         match self {
             Signature::Valid { .. } => "valid",
             Signature::Invalid { .. } => "invalid",
+            Signature::Unverified { .. } => "unverified",
             Signature::Unsigned => "unsigned",
             Signature::Unknown(_) => "unknown",
         }
     }
+}
+
+/// `WinVerifyTrust` results that mean "cannot be decided here" rather than
+/// "wrong" `[assumed]`: with revocation off and URLs from the cache only, a
+/// root or intermediate certificate this computer does not have ends this
+/// way, for example offline.
+pub fn cannot_decide(code: i32) -> bool {
+    matches!(
+        code as u32,
+        // CERT_E_UNTRUSTEDROOT, CERT_E_CHAINING
+        0x800B_0109 | 0x800B_010A
+        // CRYPT_E_NO_REVOCATION_CHECK, CRYPT_E_REVOCATION_OFFLINE
+        | 0x8009_2012 | 0x8009_2013
+        // CRYPT_E_SECURITY_SETTINGS
+        | 0x8009_2026
+    )
 }
 
 /// Why `WinVerifyTrust` refused a signature, in a few words.
@@ -169,7 +204,9 @@ pub fn reason(code: i32) -> String {
     let text = match code as u32 {
         0x8009_6010 => "the file was changed after signing",
         0x800B_0100 => "the signature cannot be read",
-        0x800B_0109 => "its root certificate is not trusted here",
+        0x800B_0109 => "its root certificate is not known to this computer",
+        0x8009_2012 => "its revocation cannot be checked",
+        0x8009_2013 => "the revocation server cannot be reached",
         0x800B_010A => "its certificate chain cannot be built from local data",
         0x800B_0101 => "its certificate has expired",
         0x800B_010C => "its certificate was revoked",
@@ -298,6 +335,9 @@ pub fn summary(info: &Info) -> Option<String> {
             publisher: None, ..
         } => "signed".to_owned(),
         Signature::Invalid { reason } => format!("signature not valid: {reason}"),
+        Signature::Unverified { reason } => {
+            format!("signature cannot be verified from local data: {reason}")
+        }
         Signature::Unsigned => "unsigned".to_owned(),
         // Unreadable or too large: nothing worth a word on every line.
         Signature::Unknown(_) => String::new(),
@@ -317,7 +357,7 @@ pub struct View {
     pub product: Option<String>,
     pub company: Option<String>,
     pub version: Option<String>,
-    /// `valid`, `invalid`, `unsigned`, `unknown`, or `pending` while it is
+    /// `valid`, `invalid`, `unverified`, `unsigned`, `unknown`, or `pending` while it is
     /// being checked.
     pub signature: &'static str,
     /// Only for a valid signature.
@@ -340,6 +380,8 @@ pub struct Entry {
     pub signature: Option<Signature>,
     /// Handed to the reader and not finished yet.
     pub queued: bool,
+    /// When it was last looked up ([`Cache`]'s clock).
+    pub used: u64,
 }
 
 impl Entry {
@@ -361,7 +403,9 @@ impl Entry {
                     view.publisher = publisher.clone();
                     view.catalog = *catalog;
                 }
-                Signature::Invalid { reason } => view.problem = Some(reason.clone()),
+                Signature::Invalid { reason } | Signature::Unverified { reason } => {
+                    view.problem = Some(reason.clone());
+                }
                 Signature::Unknown(why) => view.problem = Some(why.clone()),
                 Signature::Unsigned => {}
             }
@@ -375,6 +419,8 @@ impl Entry {
 #[derive(Debug, Default)]
 pub struct Cache {
     entries: HashMap<String, Entry>,
+    /// Counts lookups; each entry remembers when it was last looked up.
+    clock: u64,
 }
 
 fn key(path: &Path) -> String {
@@ -393,8 +439,7 @@ impl Cache {
             .is_some_and(|e| e.stamp == Some(stamp));
         if !fresh {
             if self.entries.len() >= CACHE_ENTRIES {
-                // Only finished entries go; the reader still fills the rest.
-                self.entries.retain(|_, e| e.queued);
+                self.evict();
             }
             self.entries.insert(
                 key.clone(),
@@ -404,12 +449,31 @@ impl Cache {
                 },
             );
         }
+        self.clock += 1;
         let entry = self.entries.get_mut(&key).expect("just inserted");
+        entry.used = self.clock;
         let wanted = entry.view().pending && !entry.queued;
         if wanted {
             entry.queued = true;
         }
         (entry.view(), wanted)
+    }
+
+    /// Makes room: the finished entries looked up longest ago go, down to
+    /// three quarters of [`CACHE_ENTRIES`]; entries the reader still fills
+    /// stay.
+    fn evict(&mut self) {
+        let mut finished: Vec<(u64, String)> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| !e.queued)
+            .map(|(k, e)| (e.used, k.clone()))
+            .collect();
+        finished.sort_unstable();
+        let excess = self.entries.len().saturating_sub(CACHE_ENTRIES * 3 / 4);
+        for (_, key) in finished.into_iter().take(excess) {
+            self.entries.remove(&key);
+        }
     }
 
     /// The reader: what is still missing for `path`, `None` if the entry
@@ -435,10 +499,19 @@ impl Cache {
         }
     }
 
-    /// The reader gave up on `path` (the window is closing).
-    pub fn unqueue(&mut self, path: &Path) {
-        if let Some(entry) = self.entries.get_mut(&key(path)) {
-            entry.queued = false;
+    /// The reader is gone (it failed): everything it was to read, and
+    /// `more` that could not be handed to it, is finished as "could not be
+    /// read", so nothing stays pending.
+    pub fn give_up<'a>(&mut self, more: impl IntoIterator<Item = &'a Path>) {
+        let more: Vec<String> = more.into_iter().map(key).collect();
+        for (key, entry) in &mut self.entries {
+            if entry.queued || more.contains(key) {
+                entry.queued = false;
+                entry.version.get_or_insert(None);
+                entry.signature.get_or_insert_with(|| {
+                    Signature::Unknown("the file could not be read".to_owned())
+                });
+            }
         }
     }
 
@@ -531,6 +604,11 @@ mod tests {
         assert_eq!(clean("  a\r\n b\tc  "), Some("a b c".into()));
         assert_eq!(clean("\u{1b}]0;title\u{7}x"), Some("]0;title x".into()));
         assert_eq!(clean("evil\u{202E}txt.exe"), Some("eviltxt.exe".into()));
+        assert_eq!(
+            clean("\u{FEFF}Mi\u{200B}cro\u{200D}soft\u{2060}\u{2064}\u{061C}"),
+            Some("Microsoft".into())
+        );
+        assert_eq!(clean("\u{200B}\u{FEFF}"), None);
         assert_eq!(clean("\u{0}\u{9b}"), None);
         let long = "x".repeat(500);
         let cut = clean(&long).unwrap();
@@ -562,6 +640,52 @@ mod tests {
         );
         assert_eq!(bad.kind(), "invalid");
         assert_eq!(reason(0x8000_4005_u32 as i32), "error 0x80004005");
+        // Offline or unknown chains are "cannot be verified", not tampering.
+        for code in [
+            0x800B_0109_u32, // CERT_E_UNTRUSTEDROOT
+            0x800B_010A,     // CERT_E_CHAINING
+            0x8009_2012,     // CRYPT_E_NO_REVOCATION_CHECK
+            0x8009_2013,     // CRYPT_E_REVOCATION_OFFLINE
+            0x8009_2026,     // CRYPT_E_SECURITY_SETTINGS
+        ] {
+            let s = Signature::from_trust(Trust::Invalid {
+                code: code as i32,
+                catalog: false,
+            });
+            assert_eq!(s.kind(), "unverified", "{code:08X}");
+            let text = summary(&info(None, s)).unwrap();
+            assert!(
+                text.starts_with("signature cannot be verified from local data: "),
+                "{text}"
+            );
+        }
+        // Wrong stays wrong.
+        for code in [
+            0x8009_6010_u32, // TRUST_E_BAD_DIGEST
+            0x800B_0101,     // CERT_E_EXPIRED
+            0x800B_010C,     // CERT_E_REVOKED
+            0x800B_0111,     // TRUST_E_EXPLICIT_DISTRUST
+            0x800B_010D,     // CERT_E_UNTRUSTEDTESTROOT
+            0x800B_0100,     // TRUST_E_NOSIGNATURE with another last error
+            0x8000_4005,     // anything unknown
+        ] {
+            let s = Signature::from_trust(Trust::Invalid {
+                code: code as i32,
+                catalog: true,
+            });
+            assert_eq!(s.kind(), "invalid", "{code:08X}");
+        }
+        let view = Entry {
+            version: Some(None),
+            signature: Some(Signature::Unverified { reason: "r".into() }),
+            ..Entry::default()
+        }
+        .view();
+        assert_eq!(
+            (view.signature, view.problem.as_deref()),
+            ("unverified", Some("r"))
+        );
+        assert_eq!(view.publisher, None);
         assert_eq!(Signature::from_trust(Trust::Unsigned).kind(), "unsigned");
         assert_eq!(Signature::from_trust(Trust::Unreadable).kind(), "unknown");
     }
@@ -710,19 +834,25 @@ mod tests {
             len: 1,
             modified: None,
         };
+        let path = |i: usize| PathBuf::from(format!(r"C:\P\{i}.exe"));
         for i in 0..CACHE_ENTRIES {
-            let path = PathBuf::from(format!(r"C:\P\{i}.exe"));
-            cache.lookup(&path, stamp);
+            cache.lookup(&path(i), stamp);
             if i > 0 {
-                cache.set_version(&path, stamp, None);
-                cache.set_signature(&path, stamp, Signature::Unsigned);
+                cache.set_version(&path(i), stamp, None);
+                cache.set_signature(&path(i), stamp, Signature::Unsigned);
             }
         }
+        // Looked up again recently: stays.
+        cache.lookup(&path(1), stamp);
         assert_eq!(cache.len(), CACHE_ENTRIES);
         cache.lookup(Path::new(r"C:\P\new.exe"), stamp);
-        // The one still queued and the new one.
-        assert_eq!(cache.len(), 2);
-        assert!(cache.missing(Path::new(r"C:\P\0.exe"), stamp).is_some());
+        // The finished entries looked up longest ago went; the one still
+        // queued, the one looked up again and the new one are there.
+        assert_eq!(cache.len(), CACHE_ENTRIES * 3 / 4 + 1);
+        assert!(cache.missing(&path(0), stamp).is_some());
+        assert!(cache.missing(&path(1), stamp).is_some());
+        assert!(cache.missing(&path(2), stamp).is_none());
+        assert!(cache.missing(&path(CACHE_ENTRIES - 1), stamp).is_some());
     }
 
     #[test]
@@ -759,8 +889,9 @@ mod tests {
             Signature::Valid { catalog: true, .. }
         ));
         let mut bytes = std::fs::read(&copy).unwrap();
-        let middle = bytes.len() / 2;
-        bytes[middle] ^= 0xFF;
+        // A byte in the middle of the code section.
+        let at = code_byte(&bytes);
+        bytes[at] ^= 0xFF;
         std::fs::write(&copy, &bytes).unwrap();
         let changed = read(&copy).unwrap();
         assert_eq!(changed.signature, Signature::Unsigned);
@@ -797,8 +928,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let copy = dir.path().join("signed.exe");
         let mut bytes = std::fs::read(&signed).unwrap();
-        // A byte of the code, far from the signature at the end.
-        bytes[0x1000] ^= 0xFF;
+        // A byte of the code section, far from the signature at the end.
+        let at = code_byte(&bytes);
+        bytes[at] ^= 0xFF;
         std::fs::write(&copy, &bytes).unwrap();
         let broken = read(&copy).unwrap();
         assert_eq!(
@@ -809,6 +941,25 @@ mod tests {
             "{broken:?}"
         );
         assert!(summary(&broken).unwrap().contains("signature not valid"));
+    }
+
+    /// The offset of a byte in the middle of the `.text` section of a PE
+    /// file, from its section table, so changing it changes the code (and
+    /// the Authenticode hash) for sure.
+    fn code_byte(pe: &[u8]) -> usize {
+        let u16_at = |at: usize| usize::from(u16::from_le_bytes([pe[at], pe[at + 1]]));
+        let u32_at =
+            |at: usize| u32::from_le_bytes([pe[at], pe[at + 1], pe[at + 2], pe[at + 3]]) as usize;
+        let header = u32_at(0x3C);
+        assert_eq!(&pe[header..header + 4], b"PE\0\0", "a PE file");
+        let coff = header + 4;
+        let sections = u16_at(coff + 2);
+        let table = coff + 20 + u16_at(coff + 16);
+        (0..sections)
+            .map(|i| table + i * 40)
+            .find(|s| pe[*s..*s + 8].starts_with(b".text"))
+            .map(|s| u32_at(s + 20) + u32_at(s + 16) / 2)
+            .expect("a .text section")
     }
 
     fn embedded_signed() -> Option<PathBuf> {

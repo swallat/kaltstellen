@@ -79,6 +79,7 @@ const mockAbout = {
   'browser.exe': { description: 'Web Browser', product: 'Browser', company: 'Example Browser Corp', signature: 'valid', publisher: 'Example Browser Corp' },
   'mail.exe': { description: 'Mail', company: 'Mail Makers', signature: 'valid', publisher: 'Mail Makers Ltd', catalog: false },
   'chat.exe': { description: 'Chat client', company: 'Chatty', signature: 'invalid', problem: 'the file was changed after signing' },
+  'sync.exe': { description: 'File sync', company: 'Sync Example Ltd', signature: 'unverified', problem: 'its root certificate is not known to this computer' },
   'explorer.exe': { description: 'Windows Explorer', company: 'Microsoft Corporation', signature: 'valid', publisher: 'Microsoft Windows', catalog: true },
   'anydesk.exe': { description: 'Remote desk', company: 'Remote Example GmbH', signature: 'valid', publisher: 'Remote Example GmbH' },
   'game-launcher.exe': { description: 'Game Launcher', company: 'Games Inc.', signature: 'unsigned' },

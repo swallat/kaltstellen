@@ -17,7 +17,7 @@ use windows::Win32::UI::Shell::SHDefExtractIconW;
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
 use windows::core::PCWSTR;
 
-use super::wide;
+use super::{wide, wide_path};
 
 /// Largest size asked for (a 20 px icon at 400 %, or zoomed in); the page
 /// asks for its own size times the DPI scale, rounded up to a size icons
@@ -93,7 +93,7 @@ pub fn of_file(exe: &Path, size: u32) -> Option<Pixels> {
     if !on_a_local_disk(exe) {
         return None;
     }
-    let name = wide(&exe.to_string_lossy());
+    let name = wide_path(exe);
     let mut handle = HICON::default();
     // SAFETY: `name` is NUL-terminated and outlives the call; one out
     // pointer for the large icon, none for the small one.

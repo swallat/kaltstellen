@@ -192,6 +192,6 @@ name. Purpose: find out which real apps tolerate being frozen.
   the publisher of a valid Authenticode signature (own or Windows
   catalog), local sources only, in the three program lists of the main
   window (`program_info`, read in the background) and after each program
-  in `list` and `status --unassigned`. Details chosen without the owner
+  in `list --info` and `status --unassigned`. Details chosen without the owner
   are under "Open" in `docs/open-decisions.md`; the look is a manual check
   (`docs/manual-checks.md` 13e).

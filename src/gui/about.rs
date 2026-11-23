@@ -9,7 +9,7 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -80,28 +80,45 @@ impl Reader {
             *sender = Some(tx);
         }
         if let Some(Err(err)) = sender.as_ref().map(|s| s.send(jobs)) {
-            // The reader ended (it panicked): nothing more will come.
-            let mut cache = lock(&self.cache);
-            for (path, _) in err.0 {
-                cache.unqueue(&path);
-            }
+            // The reader failed: nothing more will come, so these are
+            // finished as unreadable instead of staying pending.
+            lock(&self.cache).give_up(err.0.iter().map(|(path, _)| path.as_path()));
         }
     }
 }
 
-/// The reader thread: ends when the window drops its [`Reader`].
+/// Finishes what a failed reader leaves behind.
+struct GiveUp<'a>(&'a Mutex<Cache>);
+
+impl Drop for GiveUp<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            lock(self.0).give_up([]);
+        }
+    }
+}
+
+/// The reader thread: ends when the window drops its [`Reader`] (checked
+/// between files, so a closing window does not wait for a long queue).
 fn work(cache: &Mutex<Cache>, jobs: &Receiver<Vec<Job>>, notify: &(dyn Fn() + Send + Sync)) {
+    let _give_up = GiveUp(cache);
     let mut queue: VecDeque<Job> = VecDeque::new();
     loop {
         // Wait only when there is nothing to do.
-        let arrived: Vec<Vec<Job>> = if queue.is_empty() {
+        let mut arrived: Vec<Vec<Job>> = Vec::new();
+        if queue.is_empty() {
             match jobs.recv() {
-                Ok(batch) => std::iter::once(batch).chain(jobs.try_iter()).collect(),
+                Ok(batch) => arrived.push(batch),
                 Err(_) => return,
             }
-        } else {
-            jobs.try_iter().collect()
-        };
+        }
+        loop {
+            match jobs.try_recv() {
+                Ok(batch) => arrived.push(batch),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => return,
+            }
+        }
         if !arrived.is_empty() {
             // Version resources first, so descriptions show at once.
             let started = Instant::now();
@@ -169,7 +186,7 @@ mod tests {
             Some(notepad.clone()),
             Some(junk.clone()),
             None,
-            Some(PathBuf::from(r"\server\share\a.exe")),
+            Some(PathBuf::from(r"\\server\share\a.exe")),
             Some(PathBuf::from(r"C:\no\such\program.exe")),
         ];
         let first = reader.views(&files);
@@ -195,5 +212,32 @@ mod tests {
         // A changed file is read again.
         std::fs::write(&junk, b"MZ changed, and longer than before").unwrap();
         assert!(reader.views(&files)[1].as_ref().unwrap().pending);
+        // Closing the window (dropping the reader) ends the thread, which
+        // then drops its `notify`.
+        drop(reader);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Arc::strong_count(&calls) > 1 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(Arc::strong_count(&calls), 1, "the reader thread ended");
+    }
+
+    #[test]
+    fn m2_a_failed_reader_leaves_nothing_pending() {
+        let mut cache = Cache::default();
+        let stamp = Stamp {
+            len: 1,
+            modified: None,
+        };
+        let (a, b) = (PathBuf::from(r"C:\A\a.exe"), PathBuf::from(r"C:\B\b.exe"));
+        cache.lookup(&a, stamp);
+        let (view, _) = cache.lookup(&b, stamp);
+        assert!(view.pending);
+        cache.give_up([]);
+        for path in [&a, &b] {
+            let (view, hand_over) = cache.lookup(path, stamp);
+            assert!(!view.pending && !hand_over);
+            assert_eq!(view.signature, "unknown");
+        }
     }
 }

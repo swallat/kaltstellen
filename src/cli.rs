@@ -37,7 +37,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// List running processes, optionally only those containing FILTER
-    List { filter: Option<String> },
+    List {
+        filter: Option<String>,
+        /// Also show what each program is: description and publisher (from
+        /// its file only; checking signatures takes a moment)
+        #[arg(long)]
+        info: bool,
+    },
     /// Freeze all processes with the given executable name
     Suspend {
         /// Executable name, e.g. "notepad" or "notepad.exe"
@@ -693,7 +699,7 @@ fn status_unassigned() -> u8 {
     exit::OK
 }
 
-/// M2: the description and publisher after a program in `list` and
+/// M2: the description and publisher after a program in `list --info` and
 /// `status --unassigned`, two spaces after what was there before, so the
 /// existing columns stay as they were; nothing when nothing is known.
 fn after_name(text: Option<String>) -> String {
@@ -841,7 +847,7 @@ fn init_logging() {
 /// Returns `Ok(false)` if the command ran but did not fully succeed.
 fn run(command: Command) -> Result<bool> {
     match command {
-        Command::List { filter } => {
+        Command::List { filter, info } => {
             let filter = filter.map(|f| f.to_lowercase());
             let snapshot = Snapshot::take()?;
             let mut processes: Vec<_> = snapshot
@@ -855,9 +861,15 @@ fn run(command: Command) -> Result<bool> {
                 .cloned()
                 .collect();
             processes.sort_by_key(|p| (p.name.to_lowercase(), p.pid));
-            // M2: what each program is, after its name, where its file can
-            // be read (processes of other users usually cannot be opened).
-            let images: Vec<Option<PathBuf>> = processes.iter().map(image_of).collect();
+            // M2: with `--info`, what each program is, after its name, where
+            // its file can be read (processes of other users usually cannot
+            // be opened). Without it nothing is opened or read, so the list
+            // stays fast and as it was `[assumed]`.
+            let images: Vec<Option<PathBuf>> = if info {
+                processes.iter().map(image_of).collect()
+            } else {
+                vec![None; processes.len()]
+            };
             let about = program_info::read_many(images.iter().flatten().map(PathBuf::as_path));
             println!("{:>8} {:>8} {:>7}  NAME", "PID", "PARENT", "SESSION");
             for (p, image) in processes.iter().zip(&images) {

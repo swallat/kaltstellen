@@ -6,7 +6,10 @@
 //! `GetFileVersionInfoW`, which maps the file as a data file; no code of the
 //! file runs. The signature is checked with `WinVerifyTrust` without UI,
 //! without revocation checks and with URL retrieval limited to the local
-//! cache, so nothing goes to the network. Choosing fields, wording and
+//! cache, so no network access is requested `[assumed]`: Windows may still
+//! refresh its root and disallowed certificate lists on its own (automatic
+//! root update has no WinTrust flag); manual check 13e verifies that the
+//! window and the command line cause no connection. Choosing fields, wording and
 //! caching are safe code in [`crate::program_info`].
 
 use std::fs::File;
@@ -38,7 +41,7 @@ use windows::Win32::Storage::FileSystem::{
 use windows::core::{PCWSTR, w};
 
 use super::icon::on_a_local_disk;
-use super::wide;
+use super::{wide, wide_path};
 
 /// Largest version resource read; real ones are a few KiB.
 const MAX_VERSION_BLOCK: u32 = 1 << 20;
@@ -57,7 +60,7 @@ impl VersionResource {
         if !on_a_local_disk(path) {
             return None;
         }
-        let name = wide(&path.to_string_lossy());
+        let name = wide_path(path);
         // SAFETY: `name` is NUL-terminated and outlives the call.
         let size = unsafe { GetFileVersionInfoSizeW(PCWSTR(name.as_ptr()), None) };
         if size == 0 || size > MAX_VERSION_BLOCK {
@@ -228,7 +231,7 @@ fn trust_data(choice: WINTRUST_DATA_UNION_CHOICE, subject: WINTRUST_DATA_0) -> W
         Anonymous: subject,
         dwStateAction: WTD_STATEACTION_VERIFY,
         // No revocation, and URLs (certificates, CRLs) only from the cache:
-        // no network access.
+        // no network access is requested (see the module comment).
         dwProvFlags: WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_REVOCATION_CHECK_NONE | WTD_DISABLE_MD2_MD4,
         dwUIContext: WTD_UICONTEXT_EXECUTE,
         ..WINTRUST_DATA::default()
@@ -260,7 +263,7 @@ pub fn verify(path: &Path) -> Trust {
     let Ok(mut file) = File::open(path) else {
         return Trust::Unreadable;
     };
-    let name = wide(&path.to_string_lossy());
+    let name = wide_path(path);
     let handle = HANDLE(file.as_raw_handle());
     let mut info = WINTRUST_FILE_INFO {
         cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as u32,
@@ -295,14 +298,12 @@ pub fn verify(path: &Path) -> Trust {
             catalog: false,
         };
     }
-    if file.seek(SeekFrom::Start(0)).is_err() {
-        return Trust::Unsigned;
-    }
     // Windows' own files are mostly signed through catalogs. SHA-256
-    // catalogs first, then the older SHA-1 ones.
+    // catalogs first; the file is hashed with SHA-1 only when no SHA-256
+    // catalog lists it.
     [w!("SHA256"), w!("SHA1")]
         .into_iter()
-        .find_map(|algorithm| in_catalog(&name, handle, algorithm))
+        .find_map(|algorithm| in_catalog(&name, &mut file, algorithm))
         .unwrap_or(Trust::Unsigned)
 }
 
@@ -316,19 +317,37 @@ impl Drop for Admin {
     }
 }
 
-/// Owns a catalog found for a hash.
+/// Owns the catalog context the enumeration is at (0: none).
 struct Catalog<'a>(&'a Admin, isize);
+
+impl Catalog<'_> {
+    /// The next catalog that lists `hash` (the first one at 0). The call
+    /// releases the current context itself.
+    fn advance(&mut self, hash: &[u8]) {
+        let mut previous = std::mem::take(&mut self.1);
+        let previous = (previous != 0).then_some(&raw mut previous);
+        // SAFETY: the admin context is open; `previous`, if given, is a
+        // context of it that is ours, and the call releases it.
+        self.1 = unsafe { CryptCATAdminEnumCatalogFromHash(self.0.0, hash, None, previous) };
+    }
+}
 
 impl Drop for Catalog<'_> {
     fn drop(&mut self) {
-        // SAFETY: owned and released once, before its admin context.
-        let _ = unsafe { CryptCATAdminReleaseCatalogContext(self.0.0, self.1, 0) };
+        if self.1 != 0 {
+            // SAFETY: owned and released once, before its admin context.
+            let _ = unsafe { CryptCATAdminReleaseCatalogContext(self.0.0, self.1, 0) };
+        }
     }
 }
 
 /// The catalog verdict for the file, if a catalog lists its `algorithm`
-/// hash. `name` is the NUL-terminated path of the open `file`.
-fn in_catalog(name: &[u16], file: HANDLE, algorithm: PCWSTR) -> Option<Trust> {
+/// hash: valid if one of the catalogs that list it verifies, else the
+/// result of the first. `name` is the NUL-terminated path of `file`.
+fn in_catalog(name: &[u16], file: &mut File, algorithm: PCWSTR) -> Option<Trust> {
+    // Each hash starts at the beginning of the file.
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let handle = HANDLE(file.as_raw_handle());
     let mut admin = 0isize;
     // SAFETY: valid out pointer; `algorithm` is a static string.
     unsafe {
@@ -347,53 +366,63 @@ fn in_catalog(name: &[u16], file: HANDLE, algorithm: PCWSTR) -> Option<Trust> {
     let mut len = hash.len() as u32;
     // SAFETY: `hash` is writable for `len` bytes; the handle is open.
     unsafe {
-        CryptCATAdminCalcHashFromFileHandle2(admin.0, file, &mut len, Some(hash.as_mut_ptr()), None)
+        CryptCATAdminCalcHashFromFileHandle2(
+            admin.0,
+            handle,
+            &mut len,
+            Some(hash.as_mut_ptr()),
+            None,
+        )
     }
     .ok()?;
     let hash = &mut hash[..(len as usize).min(64)];
-    // SAFETY: the admin context is open and the hash is valid.
-    let found = unsafe { CryptCATAdminEnumCatalogFromHash(admin.0, hash, None, None) };
-    if found == 0 {
-        return None;
-    }
-    let catalog = Catalog(&admin, found);
-    let mut catalog_info = CATALOG_INFO {
-        cbStruct: std::mem::size_of::<CATALOG_INFO>() as u32,
-        ..CATALOG_INFO::default()
-    };
-    // SAFETY: a catalog context of this admin context; valid out pointer.
-    unsafe { CryptCATCatalogInfoFromContext(catalog.1, &mut catalog_info, 0) }.ok()?;
     let tag = wide(&hash.iter().map(|b| format!("{b:02X}")).collect::<String>());
-    let mut info = WINTRUST_CATALOG_INFO {
-        cbStruct: std::mem::size_of::<WINTRUST_CATALOG_INFO>() as u32,
-        dwCatalogVersion: 0,
-        pcwszCatalogFilePath: PCWSTR(catalog_info.wszCatalogFile.as_ptr()),
-        pcwszMemberTag: PCWSTR(tag.as_ptr()),
-        pcwszMemberFilePath: PCWSTR(name.as_ptr()),
-        hMemberFile: file,
-        pbCalculatedFileHash: hash.as_mut_ptr(),
-        cbCalculatedFileHash: hash.len() as u32,
-        pcCatalogContext: std::ptr::null_mut(),
-        hCatAdmin: admin.0,
-    };
-    let mut data = trust_data(
-        WTD_CHOICE_CATALOG,
-        WINTRUST_DATA_0 {
-            pCatalog: &mut info,
-        },
-    );
-    let (result, state) = verify_with(&mut data);
-    Some(if result == 0 {
-        Trust::Valid {
-            signer: state.signer(),
-            catalog: true,
+    let mut catalog = Catalog(&admin, 0);
+    let mut first_failure = None;
+    loop {
+        catalog.advance(hash);
+        if catalog.1 == 0 {
+            return first_failure;
         }
-    } else {
-        Trust::Invalid {
+        let mut catalog_info = CATALOG_INFO {
+            cbStruct: std::mem::size_of::<CATALOG_INFO>() as u32,
+            ..CATALOG_INFO::default()
+        };
+        // SAFETY: a catalog context of this admin context; valid out
+        // pointer.
+        if unsafe { CryptCATCatalogInfoFromContext(catalog.1, &mut catalog_info, 0) }.is_err() {
+            continue;
+        }
+        let mut info = WINTRUST_CATALOG_INFO {
+            cbStruct: std::mem::size_of::<WINTRUST_CATALOG_INFO>() as u32,
+            dwCatalogVersion: 0,
+            pcwszCatalogFilePath: PCWSTR(catalog_info.wszCatalogFile.as_ptr()),
+            pcwszMemberTag: PCWSTR(tag.as_ptr()),
+            pcwszMemberFilePath: PCWSTR(name.as_ptr()),
+            hMemberFile: handle,
+            pbCalculatedFileHash: hash.as_mut_ptr(),
+            cbCalculatedFileHash: hash.len() as u32,
+            pcCatalogContext: std::ptr::null_mut(),
+            hCatAdmin: admin.0,
+        };
+        let mut data = trust_data(
+            WTD_CHOICE_CATALOG,
+            WINTRUST_DATA_0 {
+                pCatalog: &mut info,
+            },
+        );
+        let (result, state) = verify_with(&mut data);
+        if result == 0 {
+            return Some(Trust::Valid {
+                signer: state.signer(),
+                catalog: true,
+            });
+        }
+        first_failure.get_or_insert(Trust::Invalid {
             code: result,
             catalog: true,
-        }
-    })
+        });
+    }
 }
 
 #[cfg(test)]

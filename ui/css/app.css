@@ -152,7 +152,8 @@ input[type="checkbox"] { min-height: auto; width: 1rem; height: 1rem; accent-col
 .icon img { display: block; width: 20px; height: 20px; }
 /* M2, N1: what a program is, a muted line under its name; empty (and not
    shown) until the host knows. The verified publisher stands out a little,
-   a broken signature in the warning colour, "unsigned" stays discreet. */
+   a broken signature in the warning colour; "unsigned" and a signature that
+   cannot be verified here (offline, unknown root) stay discreet. */
 .table .about { display: block; color: var(--color-muted); font-size: 0.8125rem; font-weight: 400; overflow-wrap: anywhere; cursor: default; }
 .table .about:empty { display: none; }
 .about .publisher { color: var(--color-primary); font-weight: 600; white-space: nowrap; }
