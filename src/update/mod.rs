@@ -143,6 +143,16 @@ pub fn check(fetch: &dyn Fetch, source: &Source, data_dir: Option<&Path>) -> Res
             }
             Err(err) => rec.error = Some(err.to_string()),
         }
+        // A failed version that is installed now, or older, is done with.
+        if rec
+            .failed
+            .as_deref()
+            .is_some_and(|failed| !version::newer(CURRENT, failed))
+        {
+            rec.failed = None;
+            rec.failed_at = None;
+            rec.failures = 0;
+        }
         // The answer counts more than remembering it.
         if let Err(err) = record::save(dir, &rec) {
             log::warn!("{err}");
@@ -451,6 +461,15 @@ mod tests {
         // The version found earlier stays known; the error is recorded.
         assert_eq!(rec.latest.as_deref(), Some("9.9.9"));
         assert!(rec.error.unwrap().starts_with("KS801"));
+        // A failed version newer than this build is kept; one this build
+        // already has (installed after all) is forgotten.
+        record::mark_failed(dir.path(), "9.9.9", 1).unwrap();
+        check(&fake, &source(), Some(dir.path())).unwrap();
+        assert!(record::load(dir.path()).0.failed_before("9.9.9"));
+        record::mark_failed(dir.path(), CURRENT, 1).unwrap();
+        check(&fake, &source(), Some(dir.path())).unwrap();
+        let (rec, _) = record::load(dir.path());
+        assert_eq!((rec.failed, rec.failed_at, rec.failures), (None, None, 0));
     }
 
     #[test]

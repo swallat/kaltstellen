@@ -538,12 +538,34 @@ impl App {
         self.status.update = offer;
     }
 
-    /// UP1: sets the timer for the next automatic check, if there is one.
+    /// UP1: sets the timer for the next automatic check, or for the moment
+    /// a version that could not be installed is tried again, whichever
+    /// comes first.
     fn schedule_update(&mut self) {
-        if let Some(delay) = self.updates.next_delay(self.config_dir.as_deref()) {
+        let check = self.updates.next_delay(self.config_dir.as_deref());
+        let retry = self.retry_delay();
+        if let Some(delay) = check {
             info!("tray: next update check in {} s", delay.as_secs());
+        }
+        if let Some(delay) = retry {
+            info!("tray: failed update tried again in {} s", delay.as_secs());
+        }
+        if let Some(delay) = [check, retry].into_iter().flatten().min() {
             window::set_timer(delay);
         }
+    }
+
+    /// UP1: how long until a held-back version may be installed
+    /// automatically again; `None` when nothing is held back or the mode
+    /// does not install by itself.
+    fn retry_delay(&self) -> Option<Duration> {
+        if self.status.update_mode != crate::update::Mode::Auto {
+            return None;
+        }
+        let retry_at = self.status.update.as_ref()?.retry_at?;
+        Some(Duration::from_secs(
+            retry_at.saturating_sub(crate::update::record::now()),
+        ))
     }
 
     /// UP1: sets the update mode from the menu.
@@ -957,8 +979,9 @@ impl window::Handler for App {
             update::log_result(self.status.update.as_ref());
             // A version whose earlier attempt ended in an error before the
             // tray was touched (offline, checksum) is tried again after a
-            // later check, at most once a day. Failures after the tray quit
-            // are recorded in `update.json` and never retried by themselves.
+            // later check, at most once a day. Failures after it was
+            // verified are recorded in `update.json` and tried again after
+            // their wait (`retry_delay`).
             self.update_started = None;
             self.maybe_install_update();
             self.schedule_update();
@@ -973,6 +996,9 @@ impl window::Handler for App {
                 self.update_waiting = None;
                 self.maybe_install_update();
             }
+            // A failure recorded just now holds the version back: the timer
+            // brings the next try.
+            self.schedule_update();
         }
         self.redraw();
     }
@@ -982,12 +1008,26 @@ impl window::Handler for App {
     }
 
     fn timer(&mut self) {
-        match self.updates.next_delay(self.config_dir.as_deref()) {
-            Some(delay) if delay.is_zero() => self.updates.start_check(),
-            // update.json changed meanwhile (a check from the command line).
-            Some(delay) => window::set_timer(delay),
-            None => {}
+        if self
+            .updates
+            .next_delay(self.config_dir.as_deref())
+            .is_some_and(|delay| delay.is_zero())
+        {
+            // The check's result decides on an install and sets the timer.
+            self.updates.start_check();
+            return;
         }
+        if self.retry_delay().is_some_and(|delay| delay.is_zero()) {
+            // UP1: a version that could not be installed has waited long
+            // enough; `update.json` is read again first.
+            self.refresh_update();
+            self.update_started = None;
+            self.update_held = None;
+            self.maybe_install_update();
+        }
+        // Otherwise update.json changed meanwhile (a check from the command
+        // line): the timer follows it.
+        self.schedule_update();
     }
 
     fn close(&mut self) {

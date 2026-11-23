@@ -114,7 +114,9 @@ pub fn load(dir: &Path) -> (Record, Option<Error>) {
 /// Writes the record atomically (temporary file, then rename).
 pub fn save(dir: &Path, record: &Record) -> Result<()> {
     let file = file(dir);
-    let tmp = dir.join("update.json.tmp");
+    // One temporary file per process: a check and an install may save at
+    // the same time.
+    let tmp = dir.join(format!("update.json.{}.tmp", std::process::id()));
     let text = serde_json::to_string_pretty(record).map_err(|e| io_error(&file, e))?;
     fs::create_dir_all(dir)
         .and_then(|()| fs::write(&tmp, text))

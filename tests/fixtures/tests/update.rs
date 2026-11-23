@@ -655,21 +655,27 @@ fn up1_a_version_that_did_not_start_waits_and_is_tried_again_later() {
         "(2 time(s) in a row); the automatic install tries it again in 2 day(s)",
         1,
     );
-    // Two days later the automatic install tries it again by itself.
+    // When the two days are over, a tray that just sits in neutral tries it
+    // again by itself, on its own timer (no check, no switch). The tray
+    // the update started again is ended first, so nothing reads the record
+    // while it is edited: two days minus 4 s ago.
+    drop(KillProgram(
+        s.exe.file_name().unwrap().to_string_lossy().into_owned(),
+    ));
     let file = s.data().join("update.json");
     let mut record: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(record["failures"], 2, "{record}");
     let at = record["failed_at"].as_u64().unwrap();
-    record["failed_at"] = (at - 2 * 24 * 60 * 60).into();
+    record["failed_at"] = (at - 2 * 24 * 60 * 60 + 4).into();
     fs::write(&file, record.to_string()).unwrap();
-    drop(KillProgram(
-        s.exe.file_name().unwrap().to_string_lossy().into_owned(),
-    ));
+    let installs = s
+        .log()
+        .matches("tray: installing update 9.9.9 automatically")
+        .count();
     s.start_tray_with(&fake);
-    let pid = s.tray.as_ref().unwrap().id();
-    click(pid, ID_UPDATE_AUTO);
-    s.wait_log("tray: installing update 9.9.9 automatically", 2);
+    s.wait_log("tray: failed update tried again in", 1);
+    s.wait_log("tray: installing update 9.9.9 automatically", installs + 1);
     s.wait_log(
         "(3 time(s) in a row); the automatic install tries it again in 4 day(s)",
         1,

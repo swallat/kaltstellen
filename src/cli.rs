@@ -125,7 +125,7 @@ enum Command {
         #[arg(long, hide = true)]
         from_tray: bool,
         /// The tray's automatic install: quits the tray only if it is idle
-        /// in neutral, skips a version that could not be installed here before
+        /// in neutral, skips a version that could not be installed here recently
         #[arg(long, hide = true, conflicts_with_all = ["check", "force", "from_tray"])]
         unattended: bool,
     },
