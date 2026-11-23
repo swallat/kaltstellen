@@ -18,9 +18,7 @@ use std::time::Duration;
 use common::*;
 use kaltstellen::autostart::{self, RUN_KEY, VALUE};
 use kaltstellen::state::Store;
-use kaltstellen::tray::model::{
-    ID_AUTOMATIC, ID_AUTOSTART, ID_BACK, ID_LAST, ID_NEUTRAL, ID_OPEN, ID_PROFILE_BASE, ID_QUIT,
-};
+use kaltstellen::tray::model::{ID_BACK, ID_LAST, ID_NEUTRAL, ID_OPEN, ID_PROFILE_BASE, ID_QUIT};
 use kaltstellen::win32::registry;
 use kaltstellen::win32::tray::{CLASS, WM_TRAY};
 use std::os::windows::process::CommandExt;
@@ -293,6 +291,35 @@ impl Drop for Tray {
     }
 }
 
+/// A slow-stop window (`ks-window --close-when`): its stop ends only once
+/// [`Gate::open`] is called (at the latest after 60 s), so a test decides
+/// exactly how long a switch runs instead of racing a timer.
+struct Gate(PathBuf);
+
+impl Gate {
+    fn new(t: &Tray, name: &str) -> Gate {
+        Gate(t.dir.path().join(format!("{name}.gate")))
+    }
+
+    fn args(&self) -> [&str; 2] {
+        ["--close-when", str_of(&self.0)]
+    }
+
+    fn open(&self) {
+        fs::write(&self.0, b"").unwrap();
+    }
+
+    /// Waits until the window got `WM_CLOSE`: the stop step runs.
+    fn wait_closing(&self) {
+        let marker = ks_fixtures::window::closing_marker(&self.0);
+        assert!(wait_for(LONG, || marker.exists()), "the stop never began");
+    }
+}
+
+/// `[settings]` for tests with a gated stop: a stop timeout well above the
+/// time the test holds the gate.
+const SLOW_SETTINGS: &str = "[settings]\nstop_timeout_s = 30\n\n";
+
 fn profile(name: &str, apps: &[(&str, &str)]) -> String {
     let mut text = format!("[[profile]]\nname = \"{name}\"\n");
     for (exe, action) in apps {
@@ -348,6 +375,32 @@ fn l2_quit_resumes_frozen_programs_and_keeps_stopped_records() {
     assert_eq!(state.stopped.len(), 1, "stopped records stay (L2)");
     assert_eq!(state.stopped[0].exe, "ks-tray2-b.exe");
     assert_eq!(pids_of("ks-tray2-b.exe"), Vec::<u32>::new());
+}
+
+/// `kaltstellen quit` ends the tray of its data directory like the menu's
+/// Quit; without a tray it says so and succeeds.
+#[test]
+fn l2_quit_from_the_command_line() {
+    let mut t = Tray::new();
+    let _a = t.program("ks-tray2q-a.exe");
+    t.config(&profile("quiet", &[("ks-tray2q-a.exe", "suspend")]));
+    t.start(1);
+    t.click(ID_PROFILE_BASE);
+    t.wait_log("tray: switch to \"quiet\" finished", 1);
+    assert!(t.is_frozen("ks-tray2q-a.exe"));
+
+    let (code, out, err) = t.run(&["quit"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let mut child = t.child.take().unwrap();
+    assert!(
+        wait_for(LONG, || child.try_wait().unwrap().is_some()),
+        "the tray ends"
+    );
+    assert!(t.is_beating("ks-tray2q-a.exe"), "quit resumes (L2)");
+
+    let (code, out, _) = t.run(&["quit"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("no tray runs"), "{out}");
 }
 
 #[test]
@@ -422,13 +475,14 @@ fn t4_w3_requests_during_a_slow_switch_run_only_the_latest() {
     let mut t = Tray::new();
     t.cleanup.push(KillProgram("ks-tray5-slow.exe".to_owned()));
     let slow = copy_fixture(WINDOW, t.dir.path(), "ks-tray5-slow.exe");
-    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "2000"]) else {
+    let gate = Gate::new(&t, "tray5");
+    let Some(_slow) = window_fixture(str_of(&slow), &gate.args()) else {
         return;
     };
     let _x = t.program("ks-tray5-x.exe");
     let _y = t.program("ks-tray5-y.exe");
     t.config(&format!(
-        "{}{}{}",
+        "{SLOW_SETTINGS}{}{}{}",
         profile("slow", &[("ks-tray5-slow.exe", "stop")]),
         profile("x", &[("ks-tray5-x.exe", "suspend")]),
         profile("y", &[("ks-tray5-y.exe", "suspend")]),
@@ -437,6 +491,9 @@ fn t4_w3_requests_during_a_slow_switch_run_only_the_latest() {
     t.click(ID_PROFILE_BASE);
     t.click(ID_PROFILE_BASE + 1);
     t.click(ID_PROFILE_BASE + 2);
+    // Both later clicks wait behind the slow stop, which ends only now.
+    t.wait_log("tray: switch to \"y\" waits", 1);
+    gate.open();
     t.wait_log("tray: switch to \"y\" finished", 1);
     let log = t.log();
     assert!(log.contains("tray: switch to \"slow\" finished"), "{log}");
@@ -547,13 +604,14 @@ fn t4_w3_through_the_pipe_the_superseded_request_ends_with_code_3() {
     let mut t = Tray::new();
     t.cleanup.push(KillProgram("ks-pipe2-slow.exe".to_owned()));
     let slow = copy_fixture(WINDOW, t.dir.path(), "ks-pipe2-slow.exe");
-    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "3000"]) else {
+    let gate = Gate::new(&t, "pipe2");
+    let Some(_slow) = window_fixture(str_of(&slow), &gate.args()) else {
         return;
     };
     let _x = t.program("ks-pipe2-x.exe");
     let _y = t.program("ks-pipe2-y.exe");
     t.config(&format!(
-        "{}{}{}",
+        "{SLOW_SETTINGS}{}{}{}",
         profile("slow", &[("ks-pipe2-slow.exe", "stop")]),
         profile("x", &[("ks-pipe2-x.exe", "suspend")]),
         profile("y", &[("ks-pipe2-y.exe", "suspend")]),
@@ -565,6 +623,9 @@ fn t4_w3_through_the_pipe_the_superseded_request_ends_with_code_3() {
     let second = t.cli(&["switch", "x"]).spawn().unwrap();
     t.wait_log("tray: switch to \"x\" waits", 1);
     let third = t.cli(&["switch", "y"]).spawn().unwrap();
+    // Both wait behind the slow stop, which ends only now.
+    t.wait_log("tray: switch to \"y\" waits", 1);
+    gate.open();
 
     let (code, _, err) = finish(second);
     assert_eq!(code, 3, "the waiting request is superseded: {err}");
@@ -590,14 +651,25 @@ fn l1_a_request_equal_to_the_running_switch_shares_its_result() {
     let mut t = Tray::new();
     t.cleanup.push(KillProgram("ks-pipe3-slow.exe".to_owned()));
     let slow = copy_fixture(WINDOW, t.dir.path(), "ks-pipe3-slow.exe");
-    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "2000"]) else {
+    let gate = Gate::new(&t, "pipe3");
+    let Some(_slow) = window_fixture(str_of(&slow), &gate.args()) else {
         return;
     };
-    t.config(&profile("slow", &[("ks-pipe3-slow.exe", "stop")]));
+    t.config(&format!(
+        "{SLOW_SETTINGS}{}",
+        profile("slow", &[("ks-pipe3-slow.exe", "stop")])
+    ));
     t.start(1);
     let first = t.cli(&["switch", "slow"]).spawn().unwrap();
     t.wait_log("tray: running switch to \"slow\"", 1);
-    let (code, out, err) = t.run(&["switch", "slow"]);
+    let second = t.cli(&["switch", "slow"]).spawn().unwrap();
+    // It joins the running switch, which ends only now.
+    t.wait_log(
+        "tray: switch to \"slow\" dropped, the running job leads there",
+        1,
+    );
+    gate.open();
+    let (code, out, err) = finish(second);
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("stop ks-pipe3-slow.exe"), "same result: {out}");
     assert_eq!(finish(first).0, 0);
@@ -612,13 +684,14 @@ fn s5_ctrl_break_during_an_in_process_switch_leaves_nothing_frozen() {
     let mut t = Tray::new();
     t.cleanup.push(KillProgram("ks-ctrl-slow.exe".to_owned()));
     let slow = copy_fixture(WINDOW, t.dir.path(), "ks-ctrl-slow.exe");
-    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "3000"]) else {
+    let gate = Gate::new(&t, "ctrl");
+    let Some(_slow) = window_fixture(str_of(&slow), &gate.args()) else {
         return;
     };
     let _a = t.program("ks-ctrl-a.exe");
     let _b = t.program("ks-ctrl-b.exe");
     t.config(&format!(
-        "{}{}",
+        "{SLOW_SETTINGS}{}{}",
         profile("first", &[("ks-ctrl-a.exe", "suspend")]),
         profile(
             "second",
@@ -638,17 +711,22 @@ fn s5_ctrl_break_during_an_in_process_switch_leaves_nothing_frozen() {
         .creation_flags(CREATE_NEW_PROCESS_GROUP)
         .spawn()
         .unwrap();
-    // The slow stop runs for 3 s; interrupt in the middle of it. The Ctrl
-    // handler is in place before the switch logs its start.
+    // Interrupt in the middle of the slow stop, which lasts until the gate
+    // opens. The Ctrl handler is in place before the switch logs its start.
     t.wait_log("switch from \"first\" to \"second\"", 1);
-    std::thread::sleep(Duration::from_millis(500));
+    gate.wait_closing();
     // SAFETY: sends Ctrl+Break to the child's own process group on the
     // console this test shares with it.
-    if let Err(err) = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) } {
+    let sent = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) };
+    if let Err(err) = sent {
         eprintln!("skipped: cannot send Ctrl+Break here ({err})");
+        gate.open();
         let _ = finish(child);
         return;
     }
+    // The stop ends only once the handler has taken the interrupt.
+    t.wait_log("console: interrupt requested", 1);
+    gate.open();
     let (code, out, err) = finish(child);
     assert_eq!(code, 1, "{out}\n{err}");
     assert!(err.contains("KS403"), "{err}");
@@ -718,7 +796,7 @@ fn s5_t7_end_of_session_resumes_keeps_the_profile_for_next_time() {
 }
 
 #[test]
-fn autostart_from_the_command_line_and_the_menu_uses_the_injected_key() {
+fn autostart_from_the_command_line_uses_the_injected_key_and_not_the_menu() {
     // The real Run key is only read, before and after.
     let real_before = registry::read(RUN_KEY, VALUE).unwrap();
     let mut t = Tray::new();
@@ -736,14 +814,19 @@ fn autostart_from_the_command_line_and_the_menu_uses_the_injected_key() {
     assert_eq!((code, out.trim()), (0, "start at sign-in: off"));
     assert_eq!(registry::read(&t.run_key(), VALUE).unwrap(), None);
 
-    // The tray's menu item toggles the same value.
+    // The setting is in the main window and on the command line, not in
+    // the tray menu (owner, 2026-11-23): the old menu ID does nothing, and
+    // the command line works the same while a tray runs.
     t.config("");
     t.start(1);
-    t.click(ID_AUTOSTART);
-    t.wait_log("tray: start at sign-in on", 1);
+    t.click(4);
+    t.wait_log("tray: command 4 has no meaning; ignored", 1);
+    assert_eq!(registry::read(&t.run_key(), VALUE).unwrap(), None);
+    let (code, out, _) = t.run(&["autostart", "on"]);
+    assert_eq!((code, out.trim()), (0, "start at sign-in: on"));
     assert_eq!(registry::read(&t.run_key(), VALUE).unwrap(), Some(expected));
-    t.click(ID_AUTOSTART);
-    t.wait_log("tray: start at sign-in off", 1);
+    let (code, _, _) = t.run(&["autostart", "off"]);
+    assert_eq!(code, 0);
     assert_eq!(registry::read(&t.run_key(), VALUE).unwrap(), None);
     assert_eq!(t.quit(), Some(0));
 
@@ -1314,9 +1397,9 @@ fn u4_an_automatic_request_does_not_replace_a_waiting_manual_one() {
     let mut t = Tray::new();
     t.cleanup.push(KillProgram("ks-trig8-slow.exe".to_owned()));
     let slow = copy_fixture(WINDOW, t.dir.path(), "ks-trig8-slow.exe");
-    // Long enough for the steps below also on a slow runner; the switch
-    // to "slow" waits for it.
-    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "10000"]) else {
+    // The switch to "slow" lasts until the gate opens.
+    let gate = Gate::new(&t, "trig8");
+    let Some(_slow) = window_fixture(str_of(&slow), &gate.args()) else {
         return;
     };
     let _b = t.program("ks-trig8-b.exe");
@@ -1325,7 +1408,7 @@ fn u4_an_automatic_request_does_not_replace_a_waiting_manual_one() {
     let sim_exe = copy_fixture(HEARTBEAT, t.dir.path(), "ks-trig8-sim.exe");
     let sim_beat = t.beat_file("ks-trig8-sim.exe");
     t.config(&format!(
-        "{}{}{}",
+        "{SLOW_SETTINGS}{}{}{}",
         profile("slow", &[("ks-trig8-slow.exe", "stop")]),
         profile("work", &[("ks-trig8-b.exe", "suspend")]),
         triggered("flight", 0, &["ks-trig8-sim.exe"], &[]),
@@ -1341,6 +1424,7 @@ fn u4_an_automatic_request_does_not_replace_a_waiting_manual_one() {
         "tray: automatic switch to \"flight\" ignored, a manual request waits",
         1,
     );
+    gate.open();
     t.wait_log("tray: switch to \"work\" finished", 1);
     assert!(t.is_frozen("ks-trig8-b.exe"));
     // Automation owns nothing: the end of the trigger changes nothing.
@@ -1422,7 +1506,15 @@ fn u4_automatic_switching_can_be_paused_and_stays_paused() {
     ));
     t.start(1);
     t.wait_log("tray: trigger poll every", 1);
-    t.click(ID_AUTOMATIC);
+    // The switch is in the main window (owner, 2026-11-23); the window and
+    // `kaltstellen automation` hand it to the running tray over the pipe
+    // (`set_automation`), which takes it over at once and writes it.
+    let (code, out, err) = t.run(&["automation", "off"]);
+    assert_eq!(
+        (code, out.trim()),
+        (0, "automatic switching: paused"),
+        "{err}"
+    );
     t.wait_log("tray: automatic switching paused", 1);
     t.wait_log("tray: trigger poll stopped", 1);
     assert!(
@@ -1430,13 +1522,25 @@ fn u4_automatic_switching_can_be_paused_and_stays_paused() {
         "{}",
         t.settings()
     );
+    // The same again changes nothing.
+    let (code, _, _) = t.run(&["automation", "off"]);
+    assert_eq!(code, 0);
+    t.wait_log("tray: automatic switching already paused; unchanged", 1);
+    let (_, out, _) = t.run(&["automation"]);
+    assert_eq!(out.trim(), "automatic switching: paused");
+    // The old menu ID does nothing.
+    t.click(12);
+    t.wait_log("tray: command 12 has no meaning; ignored", 1);
     let _sim = t.program("ks-trig4-sim.exe");
     // The poll is stopped while paused; Quit is the later marker.
     assert!(t.is_beating("ks-trig4-a.exe"));
     assert_eq!(t.quit(), Some(0));
     assert_eq!(t.logged("automatic switch to"), 0);
 
-    // Remembered across a restart (settings.json).
+    // Remembered across a restart (settings.json), and shown from it
+    // without a tray.
+    let (_, out, _) = t.run(&["automation"]);
+    assert_eq!(out.trim(), "automatic switching: paused");
     t.start(2);
     assert_eq!(t.logged("tray: automatic switching is paused"), 1);
     let (_, out, _) = t.run(&["status"]);
@@ -1444,7 +1548,8 @@ fn u4_automatic_switching_can_be_paused_and_stays_paused() {
     assert_eq!(t.logged("automatic switch to"), 0);
 
     // On again: a trigger that runs counts as starting.
-    t.click(ID_AUTOMATIC);
+    let (code, out, _) = t.run(&["automation", "on"]);
+    assert_eq!((code, out.trim()), (0, "automatic switching: on"));
     t.wait_log("tray: automatic switching on", 1);
     t.wait_log("tray: automatic switch to \"flight\" finished", 1);
     assert!(t.is_frozen("ks-trig4-a.exe"));
@@ -1453,8 +1558,22 @@ fn u4_automatic_switching_can_be_paused_and_stays_paused() {
         "{}",
         t.settings()
     );
+    // On again while on: nothing is applied again.
+    let (code, _, _) = t.run(&["automation", "on"]);
+    assert_eq!(code, 0);
+    t.wait_log("tray: automatic switching already on; unchanged", 1);
+    assert_eq!(t.logged("automatic switch to \"flight\" finished"), 1);
     assert_eq!(t.quit(), Some(0));
     assert!(t.is_beating("ks-trig4-a.exe"));
+
+    // Without a tray the command line writes the file; the next tray
+    // starts paused.
+    let (code, out, _) = t.run(&["automation", "off"]);
+    assert_eq!((code, out.trim()), (0, "automatic switching: paused"));
+    assert!(t.settings().contains("\"triggers_paused\": true"));
+    t.start(3);
+    assert_eq!(t.logged("tray: automatic switching is paused"), 2);
+    assert_eq!(t.quit(), Some(0));
 }
 
 #[test]
@@ -1524,4 +1643,25 @@ fn u4_check_config_refuses_a_trigger_its_own_profile_freezes() {
         out.contains("profile \"flight\": 1 program(s), trigger ks-trig6-sim.exe (priority 7)"),
         "{out}"
     );
+}
+
+#[test]
+fn u4_automation_from_the_command_line_without_triggers_says_so() {
+    // No tray: the command line writes settings.json itself.
+    let t = Tray::new();
+    t.config(&profile("plain", &[("ks-auto0-a.exe", "suspend")]));
+    let (code, out, err) = t.run(&["automation", "off"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out.lines().collect::<Vec<_>>(),
+        [
+            "automatic switching: paused",
+            "note: no profile has triggers yet; automatic switching does nothing until one has"
+        ]
+    );
+    assert!(t.settings().contains("\"triggers_paused\": true"));
+    let (code, out, _) = t.run(&["automation", "on"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("automatic switching: on\n"), "{out}");
+    assert!(!t.settings().contains("triggers_paused"));
 }

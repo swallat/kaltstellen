@@ -78,6 +78,8 @@ enum Command {
         #[arg(long)]
         no_wait: bool,
     },
+    /// End the running tray as its menu's Quit does (resumes what it froze)
+    Quit,
     /// Run the notification-area icon with the profile menu
     Tray,
     /// Open the main window: profiles, programs and their actions
@@ -97,6 +99,11 @@ enum Command {
         /// Where --drive writes the replies
         #[arg(long, hide = true)]
         drive_out: Option<PathBuf>,
+    },
+    /// Automatic switching by trigger programs: show, or switch on or off
+    Automation {
+        #[arg(value_enum)]
+        switch: Option<OnOff>,
     },
     /// Start the tray at sign-in: show, or switch on or off
     Autostart {
@@ -163,6 +170,7 @@ pub fn main() -> ExitCode {
             }
         }
         Command::Recover { no_wait } => recover(!no_wait),
+        Command::Quit => quit(),
         Command::Tray => crate::tray::main(),
         Command::Gui {
             screenshot,
@@ -182,6 +190,7 @@ pub fn main() -> ExitCode {
             drive_out,
         }),
         Command::Autostart { switch } => autostart(switch),
+        Command::Automation { switch } => automation(switch),
         Command::Update {
             check,
             force,
@@ -417,6 +426,52 @@ fn switch(target: &str, force: bool, wait: bool) -> u8 {
     print_finished(&finished)
 }
 
+/// L2 from the command line: the tray of this data directory resumes what
+/// it froze and ends, as with Quit in its menu (the pipe request the
+/// updater uses). Without a tray there is nothing to end.
+fn quit() -> u8 {
+    let endpoints = match Endpoints::current() {
+        Ok(endpoints) => endpoints,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return exit::UNREACHABLE;
+        }
+    };
+    match client::request(&endpoints, protocol::Command::Quit, || {
+        eprintln!("waiting for the tray's running switch");
+    }) {
+        Ok(None) => {
+            println!("no tray runs");
+            exit::OK
+        }
+        Ok(Some(Body::Done(finished))) => print_finished(&finished),
+        Ok(Some(Body::Rejected { exit_code, lines })) => {
+            for line in lines {
+                eprintln!("{line}");
+            }
+            exit_code
+        }
+        Ok(Some(other)) => {
+            eprintln!("error: unexpected answer of the tray: {other:?}");
+            exit::UNREACHABLE
+        }
+        // The tray may end before its reply is written (as the updater
+        // knows): what counts is that it ends.
+        Err(err) => {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while crate::win32::instance::Instance::exists(&endpoints.mutex) {
+                if std::time::Instant::now() >= deadline {
+                    eprintln!("error: {err}");
+                    return exit::UNREACHABLE;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            println!("the tray has ended");
+            exit::OK
+        }
+    }
+}
+
 fn recover(wait: bool) -> u8 {
     if let Some(code) = through_tray(protocol::Command::Recover { wait }) {
         return code;
@@ -470,20 +525,97 @@ fn autostart(switch: Option<OnOff>) -> u8 {
     exit::OK
 }
 
-/// `update --auto on|off` (UP1).
+/// A note for a setting the running tray did not take over at once, or
+/// took over with a note of its own (not saved).
+fn delivery_note(delivery: &client::Delivery) -> Option<String> {
+    match delivery {
+        client::Delivery::Tray(status) if !status.notes.is_empty() => Some(status.notes.join(" ")),
+        client::Delivery::Tray(_) | client::Delivery::Saved => None,
+        client::Delivery::OlderTray(reason) => Some(format!(
+            "saved, but the running tray is older and did not take it over ({reason}); it keeps its own setting until it restarts"
+        )),
+        client::Delivery::Unanswered(reason) => Some(format!(
+            "saved, but the running tray did not answer in time ({reason})"
+        )),
+    }
+}
+
+/// U4: whether some profile of the configuration in effect names triggers;
+/// `None` when the file cannot be read (then nothing is said about it).
+fn triggers_configured() -> Option<bool> {
+    config::for_switch(paths::config_file().as_deref(), config::NEUTRAL)
+        .ok()
+        .map(|(config, _)| config.profiles.iter().any(|p| !p.triggers.is_empty()))
+}
+
+/// `update --mode auto|manual|off` (UP1). With a tray running, the tray
+/// writes the mode and checks at once if the mode checks (pipe
+/// `set_update_mode`); without one, the file is written here.
 fn update_mode(mode: update::Mode) -> u8 {
     let Some(dir) = paths::config_dir() else {
         eprintln!("error: no configuration directory (APPDATA unset)");
         return exit::ERRORS;
     };
-    if let Err(err) = crate::settings::edit(&dir, |s| s.update = Some(mode.name().to_owned())) {
-        eprintln!("error: {err}");
-        return exit::ERRORS;
-    }
+    let delivery = match client::set_update_mode(mode, false) {
+        Ok(delivery) => delivery,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return exit::ERRORS;
+        }
+    };
     info!("update: mode {}", mode.name());
     println!("update mode: {}", mode.name());
+    if let Some(note) = delivery_note(&delivery) {
+        println!("note: {note}");
+    }
     if update::current_mode(Some(&dir)).1 {
         println!("note: {} is set and takes precedence", update::MODE_ENV);
+    }
+    exit::OK
+}
+
+/// `automation [on|off]` (U4): shows or sets automatic switching. Set: the
+/// running tray takes it over at once (pipe `set_automation`) and writes
+/// `triggers_paused`; without one, the file is written here. Shown: what
+/// the running tray does, else what `settings.json` says.
+fn automation(switch: Option<OnOff>) -> u8 {
+    let (paused, note) = match switch {
+        Some(switch) => {
+            let paused = matches!(switch, OnOff::Off);
+            match client::set_automation(paused, false) {
+                Ok(delivery) => (paused, delivery_note(&delivery)),
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return exit::ERRORS;
+                }
+            }
+        }
+        None => {
+            let from_tray = Endpoints::current()
+                .ok()
+                .and_then(|e| client::request(&e, protocol::Command::Status, || {}).ok())
+                .flatten()
+                .and_then(|body| match body {
+                    Body::Status(status) => status.automation.map(|a| a.paused),
+                    _ => None,
+                });
+            let paused = from_tray.unwrap_or_else(|| {
+                paths::config_dir().is_some_and(|dir| crate::settings::load(&dir).0.triggers_paused)
+            });
+            (paused, None)
+        }
+    };
+    println!(
+        "automatic switching: {}",
+        if paused { "paused" } else { "on" }
+    );
+    if let Some(note) = note {
+        println!("note: {note}");
+    }
+    if triggers_configured() == Some(false) {
+        println!(
+            "note: no profile has triggers yet; automatic switching does nothing until one has"
+        );
     }
     exit::OK
 }
@@ -832,9 +964,11 @@ fn run(command: Command) -> Result<bool> {
         | Command::Switch { .. }
         | Command::Status { .. }
         | Command::Recover { .. }
+        | Command::Quit
         | Command::Tray
         | Command::Gui { .. }
         | Command::Autostart { .. }
+        | Command::Automation { .. }
         | Command::Update { .. } => unreachable!("handled in main"),
     }
 }

@@ -596,7 +596,9 @@ impl App {
                     let yes = crate::win32::dialog::ask_yes_no(
                         "kaltstellen",
                         "Start kaltstellen automatically when you sign in to Windows?\n\n\
-                         You can change this later with \"Start at sign-in\" in the tray menu.",
+                         You can change this later with \"Start at sign-in\" in the main window \
+                         (\"Open kaltstellen…\" in the tray menu) or with \
+                         \"kaltstellen autostart on|off\".",
                     );
                     let _ = tx.send(yes);
                     waker.wake();
@@ -662,9 +664,8 @@ impl App {
 
     /// UP1: mode and the last known version for the menu.
     fn refresh_update(&mut self) {
-        let (mode, locked, offer) = update::menu_state(self.config_dir.as_deref());
+        let (mode, _, offer) = update::menu_state(self.config_dir.as_deref());
         self.status.update_mode = mode;
-        self.status.update_locked = locked;
         self.status.update = offer;
     }
 
@@ -702,21 +703,27 @@ impl App {
         ))
     }
 
-    /// UP1: sets the update mode from the menu.
-    fn set_update_mode(&mut self, mode: crate::update::Mode) {
-        let Some(dir) = &self.config_dir else {
-            return;
-        };
+    /// UP1: sets the update mode for the main window or `kaltstellen update
+    /// --mode` (pipe `set_update_mode`). A mode in effect that checks
+    /// checks at once, as the menu items did before they moved to the
+    /// window.
+    fn set_update_mode(&mut self, mode: crate::update::Mode) -> Result<(), String> {
+        let dir = self
+            .config_dir
+            .as_ref()
+            .ok_or("no configuration directory")?;
         if let Err(err) = settings::edit(dir, |s| s.update = Some(mode.name().to_owned())) {
             warn!("tray: {err}");
-            return;
+            return Err(err.to_string());
         }
         info!("tray: update mode {}", mode.name());
         self.refresh_update();
-        if mode.checks() {
+        // `KALTSTELLEN_UPDATE` may decide another mode; that one counts.
+        if self.status.update_mode.checks() {
             // Look now; the timer follows the result.
             self.updates.start_check();
         }
+        Ok(())
     }
 
     /// UP1: `neutral` is active, no switch runs or waits, the tray is not
@@ -795,14 +802,11 @@ impl App {
                 info!("tray: menu asks for \"{target}\"");
                 self.submit(Job::switch(&target), None);
             }
-            Some(MenuCommand::ToggleAutostart) => self.toggle_autostart(),
-            Some(MenuCommand::ToggleAutomatic) => self.toggle_automatic(),
             Some(MenuCommand::BackTo(shown)) => {
                 info!("tray: menu asks to go back to \"{shown}\"");
                 self.go_back(Some(&shown));
             }
             Some(MenuCommand::OpenWindow) => open_window(),
-            Some(MenuCommand::UpdateMode(mode)) => self.set_update_mode(mode),
             Some(MenuCommand::InstallUpdate) => {
                 if self.updates.installing() {
                     info!("tray: an update is being installed already");
@@ -837,6 +841,19 @@ impl App {
             .filter(|j| j.is_automatic())
             .or(self.controller.running())
             .map_or_else(|| self.status.active.clone(), |j| j.leads_to().to_owned())
+    }
+
+    /// The `status` reply of the pipe (also the answer to `set_automation`
+    /// and `set_update_mode`).
+    fn tray_status(&self) -> TrayStatus {
+        TrayStatus {
+            state: self.store.peek().unwrap_or_default(),
+            running: self.controller.running().map(ToString::to_string),
+            waiting: self.controller.pending().map(ToString::to_string),
+            automation: self.automation_status(),
+            last_switch: self.status.last_switch(),
+            notes: Vec::new(),
+        }
     }
 
     /// U4: for `kaltstellen status`; `None` while no profile has triggers.
@@ -999,14 +1016,26 @@ impl App {
         self.redraw();
     }
 
-    /// U4: the menu item `Automatic switching`; remembered in
-    /// `settings.json` (decided detail 7).
-    fn toggle_automatic(&mut self) {
-        let paused = !self.automation.paused();
-        if let Some(dir) = &self.config_dir
-            && let Err(err) = settings::edit(dir, |s| s.triggers_paused = paused)
-        {
-            warn!("tray: {err}");
+    /// U4: `Automatic switching` of the main window or `kaltstellen
+    /// automation on|off` (pipe `set_automation`); remembered in
+    /// `settings.json` (decided detail 7), which the tray writes. Setting
+    /// the state it has already changes nothing, so a trigger that runs is
+    /// not applied again. A file that cannot be written is reported; the
+    /// state still changes for this session.
+    fn set_automatic(&mut self, paused: bool) -> Result<(), String> {
+        let saved = match &self.config_dir {
+            Some(dir) => settings::edit(dir, |s| s.triggers_paused = paused).map_err(|err| {
+                warn!("tray: {err}");
+                err.to_string()
+            }),
+            None => Err("no configuration directory".to_owned()),
+        };
+        if paused == self.automation.paused() {
+            info!(
+                "tray: automatic switching already {}; unchanged",
+                if paused { "paused" } else { "on" }
+            );
+            return saved;
         }
         self.automation.set_paused(paused);
         info!(
@@ -1015,6 +1044,7 @@ impl App {
         );
         self.arm_poll();
         self.redraw();
+        saved
     }
 
     /// U4, decided detail 1: an automatic switch ended; tell the user and
@@ -1308,13 +1338,7 @@ impl App {
             // M5: errors whose cause is gone drop out first (L9), so the
             // main window marks only what is still wrong.
             self.recheck_errors();
-            respond(Body::Status(TrayStatus {
-                state: self.store.peek().unwrap_or_default(),
-                running: self.controller.running().map(ToString::to_string),
-                waiting: self.controller.pending().map(ToString::to_string),
-                automation: self.automation_status(),
-                last_switch: self.status.last_switch(),
-            }));
+            respond(Body::Status(self.tray_status()));
             return;
         }
         if self.controller.is_quitting() {
@@ -1324,6 +1348,52 @@ impl App {
                     "error: {}: the tray is quitting",
                     Code::TrayUnreachable
                 )],
+            });
+            return;
+        }
+        // The settings that moved from the menu to the main window (owner,
+        // 2026-11-23): the tray takes them over at once and stays the one
+        // that writes them while it runs.
+        let changed = match &command {
+            Command::SetAutomation { paused } => {
+                info!("tray: asked over the pipe to set automatic switching");
+                // Taken over in any case; a file that could not be written
+                // is said in a note, so the caller does not write it again
+                // and claim that the tray takes it at its next start.
+                let notes = match self.set_automatic(*paused) {
+                    Ok(()) => Vec::new(),
+                    Err(reason) => vec![format!(
+                        "warning: taken over by the tray for this session, but not saved: {reason}"
+                    )],
+                };
+                Some(Ok(notes))
+            }
+            Command::SetUpdateMode { mode } => {
+                info!("tray: asked over the pipe to set the update mode");
+                // The tray reads the mode from the file, so a mode that
+                // could not be saved is not taken over either: refused.
+                Some(
+                    crate::update::Mode::parse(mode)
+                        .filter(|m| m.name() == mode.trim())
+                        .ok_or_else(|| {
+                            format!("{}: unknown update mode \"{mode}\"", Code::TrayProtocol)
+                        })
+                        .and_then(|m| self.set_update_mode(m))
+                        .map(|()| Vec::new()),
+                )
+            }
+            _ => None,
+        };
+        if let Some(changed) = changed {
+            respond(match changed {
+                Ok(notes) => Body::Status(TrayStatus {
+                    notes,
+                    ..self.tray_status()
+                }),
+                Err(reason) => Body::Rejected {
+                    exit_code: exit::ERRORS,
+                    lines: vec![format!("error: {reason}")],
+                },
             });
             return;
         }
@@ -1364,7 +1434,11 @@ impl App {
                 )
             }
             Command::Recover { .. } => (Job::Recover, Vec::new()),
-            Command::Status | Command::Quit | Command::QuitIfIdle => {
+            Command::Status
+            | Command::Quit
+            | Command::QuitIfIdle
+            | Command::SetAutomation { .. }
+            | Command::SetUpdateMode { .. } => {
                 unreachable!("answered above")
             }
         };
