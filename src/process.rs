@@ -278,7 +278,7 @@ impl Snapshot {
     }
 }
 
-fn with_extension(exe: &str) -> String {
+pub(crate) fn with_extension(exe: &str) -> String {
     let exe = exe.trim();
     if exe.contains('.') {
         exe.to_owned()
