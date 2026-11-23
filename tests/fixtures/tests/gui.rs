@@ -414,7 +414,7 @@ impl Drop for TrayOf {
 }
 
 #[test]
-fn m5_failure_markers_come_from_the_trays_error_state_and_clear_with_a_clean_switch() {
+fn m5_failure_markers_come_from_the_trays_error_state_and_clear_when_resolved() {
     // A start entry whose file is missing (KS110) beside one that works.
     let world = World::new("");
     let missing = world.path("ks-wv-m5.exe");
@@ -452,30 +452,20 @@ fn m5_failure_markers_come_from_the_trays_error_state_and_clear_with_a_clean_swi
     );
     assert_eq!(entries(&results[1])[1]["errors"], serde_json::json!([]));
 
-    // Started by hand, the error stays: it names a path, and the snapshot
-    // cannot tell a process from this path from one of the same name
-    // elsewhere (A7), so it waits for the next switch. That switch finds the
-    // program running and is clean: the marker goes.
+    // L9: started by hand at the entry's path, the error resolves; the next
+    // refresh shows no marker, without a switch.
     copy_fixture(HEARTBEAT, world.dir.path(), "ks-wv-m5.exe");
     let beat = world.path("m5.beat");
     let _program = Fixture::spawn(str_of(&missing), &[str_of(&beat)]);
     assert!(beating(&beat));
-    let results = drive(
-        &world,
-        "m5-again",
-        r#"[{"type": "get_state"}, {"type": "apply", "profile": "broken"}]"#,
-    );
+    let results = drive(&world, "m5-resolved", r#"[{"type": "get_state"}]"#);
     assert_eq!(
-        entries(&results[0])[0]["errors"][0]["code"],
-        "KS110",
-        "{results}"
-    );
-    assert_eq!(results[1]["status"], "Applied \"broken\".", "{results}");
-    assert_eq!(
-        entries(&results[1])[0]["errors"],
+        entries(&results[0])[0]["errors"],
         serde_json::json!([]),
         "{results}"
     );
+    let log = fs::read_to_string(world.path("data").join("kaltstellen.log")).unwrap();
+    assert!(log.contains("error resolved by itself: KS110"), "{log}");
 }
 
 #[test]

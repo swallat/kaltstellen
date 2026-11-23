@@ -727,11 +727,7 @@ fn autostart_from_the_command_line_and_the_menu_uses_the_injected_key() {
 }
 
 #[test]
-fn l9_a_failed_start_waits_for_the_next_switch_even_when_the_program_runs() {
-    // M5 decision: a failed start names its path, and the snapshot has no
-    // image paths (A7), so a process of that name does not resolve it (it
-    // could come from another folder). The rules by name for errors without
-    // a path are unit tests of `tray::model`.
+fn l9_an_error_resolves_by_itself_when_its_cause_is_gone() {
     let mut t = Tray::new();
     t.cleanup.push(KillProgram("ks-l9-tool.exe".to_owned()));
     let missing = t.dir.path().join("tools").join("ks-l9-tool.exe");
@@ -742,25 +738,62 @@ fn l9_a_failed_start_waits_for_the_next_switch_even_when_the_program_runs() {
     t.start(1);
     t.click(ID_PROFILE_BASE);
     t.wait_log("tray: icon error", 1);
-    // The owner starts the program by hand: a re-check (posted here instead
-    // of waiting 30 s) and a status request keep the error.
+    // A re-check before anything changed keeps the error.
+    t.post(WM_TIMER, 2);
+    // A pipe request is answered on the window thread after the timer
+    // message posted before it, so the re-check has run by then.
+    assert_eq!(t.run(&["status"]).0, 0);
+    assert_eq!(t.logged("error resolved by itself"), 0);
+    // The owner starts the program by hand: the error is gone without a
+    // switch at the next re-check (posted here instead of waiting 30 s).
     fs::create_dir_all(missing.parent().unwrap()).unwrap();
     fs::copy(HEARTBEAT, &missing).unwrap();
     let beat = t.dir.path().join("tool.beat");
     let _tool = Fixture::spawn(str_of(&missing), &[str_of(&beat)]);
     assert!(beating(&beat));
     t.post(WM_TIMER, 2);
-    // A pipe request is answered on the window thread after the timer
-    // message posted before it, so the re-check has run by then.
+    t.wait_log("tray: error resolved by itself: KS110", 1);
+    t.wait_log("tray: icon active", 1);
+    assert_eq!(
+        t.store().peek().unwrap().active_profile,
+        "work",
+        "no switch"
+    );
+    assert_eq!(t.quit(), Some(0));
+}
+
+#[test]
+fn l9_a_failed_start_resolves_only_when_the_program_runs_from_its_path() {
+    // Two folders with a program of one name (C2): the entry's copy in `a`
+    // is missing, the one in `b` runs. B's process must not resolve A's
+    // error; A's own does, without a switch.
+    let mut t = Tray::new();
+    t.cleanup.push(KillProgram("ks-l9b-tool.exe".to_owned()));
+    let in_a = t.dir.path().join("a").join("ks-l9b-tool.exe");
+    let in_b = t.dir.path().join("b").join("ks-l9b-tool.exe");
+    t.config(&format!(
+        "[[profile]]\nname = \"work\"\n\n  [[profile.app]]\n  exe = \"ks-l9b-tool.exe\"\n  path = '{}'\n  action = \"start\"\n",
+        in_a.display()
+    ));
+    t.start(1);
+    t.click(ID_PROFILE_BASE);
+    t.wait_log("tray: icon error", 1);
+    fs::create_dir_all(in_b.parent().unwrap()).unwrap();
+    fs::copy(HEARTBEAT, &in_b).unwrap();
+    let beat_b = t.dir.path().join("b.beat");
+    let _b = Fixture::spawn(str_of(&in_b), &[str_of(&beat_b)]);
+    assert!(beating(&beat_b));
+    t.post(WM_TIMER, 2);
+    // Answered after the re-check, which a status request runs as well.
     assert_eq!(t.run(&["status"]).0, 0);
     assert_eq!(t.logged("error resolved by itself"), 0);
-    assert_eq!(t.logged("tray: icon active"), 0);
-    // The next switch finds the program running and is clean.
-    t.click(ID_PROFILE_BASE);
-    t.wait_log(
-        "tray: switch to \"work\" finished, active profile \"work\", 0 error(s)",
-        1,
-    );
+    fs::create_dir_all(in_a.parent().unwrap()).unwrap();
+    fs::copy(HEARTBEAT, &in_a).unwrap();
+    let beat_a = t.dir.path().join("a.beat");
+    let _a = Fixture::spawn(str_of(&in_a), &[str_of(&beat_a)]);
+    assert!(beating(&beat_a));
+    t.post(WM_TIMER, 2);
+    t.wait_log("tray: error resolved by itself: KS110", 1);
     t.wait_log("tray: icon active", 1);
     assert_eq!(t.quit(), Some(0));
 }

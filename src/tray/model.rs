@@ -227,15 +227,22 @@ pub struct Status {
 }
 
 /// L9: when an error of the last switch counts as resolved without a switch,
-/// judged from the handle-free snapshot (A7: no process is opened).
+/// judged from the handle-free snapshot (A7: no process is opened), except
+/// for a failed start that names its path (see [`Running`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
-    /// Resolved once a process of this program runs (a failed start).
-    Runs(String),
+    /// Resolved once a process of this program runs (a failed start); with
+    /// a path, only one whose image is that path.
+    Runs(String, Option<String>),
     /// Resolved once no process of this program runs (a failed stop,
     /// close or freeze).
     Gone(String),
 }
+
+/// L9: `running(exe, path)` tells whether a process of the program `exe`
+/// runs in the session; with `path`, only one whose image is that path
+/// counts (read for processes of that name only, A7's fallback).
+pub type Running<'a> = dyn Fn(&str, Option<&str>) -> bool + 'a;
 
 /// One error of the last switch, as shown and as checked again (L9).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,17 +268,18 @@ impl SwitchError {
     ///   suspend step: resolved when the program no longer runs.
     /// - Everything else (state or log I/O, warn list, resume, snapshot):
     ///   stays until the next switch.
-    /// - An error that names a path (a failed start) stays until the next
-    ///   switch too (M5): the handle-free snapshot has no image paths (A7),
-    ///   so a process of that name started from another folder would
-    ///   resolve it wrongly.
+    ///
+    /// A failed start that names its path resolves only when a process of
+    /// that name runs from that path, so a program of the same name from
+    /// another folder (C2) does not resolve it.
     pub fn of(error: &Error) -> Self {
         let resolution = error
             .program
             .clone()
-            .filter(|_| error.path.is_none())
             .and_then(|exe| match (error.code, error.step) {
-                (Code::StartFailed | Code::ElevationRequired, _) => Some(Resolution::Runs(exe)),
+                (Code::StartFailed | Code::ElevationRequired, _) => {
+                    Some(Resolution::Runs(exe, error.path.clone()))
+                }
                 (Code::CloseTimeout | Code::TerminateFailed | Code::SuspendFailed, _) => {
                     Some(Resolution::Gone(exe))
                 }
@@ -289,11 +297,11 @@ impl SwitchError {
         }
     }
 
-    /// Whether `running(exe)` shows the cause is gone.
-    pub fn resolved(&self, running: &dyn Fn(&str) -> bool) -> bool {
+    /// Whether `running` shows the cause is gone.
+    pub fn resolved(&self, running: &Running) -> bool {
         match &self.resolution {
-            Some(Resolution::Runs(exe)) => running(exe),
-            Some(Resolution::Gone(exe)) => !running(exe),
+            Some(Resolution::Runs(exe, path)) => running(exe, path.as_deref()),
+            Some(Resolution::Gone(exe)) => !running(exe, None),
             None => false,
         }
     }
@@ -376,7 +384,7 @@ impl Status {
 
     /// L9: drops the errors whose cause is gone and returns them. An
     /// invalid configuration or a missing pipe is not touched here.
-    pub fn resolve(&mut self, running: &dyn Fn(&str) -> bool) -> Vec<SwitchError> {
+    pub fn resolve(&mut self, running: &Running) -> Vec<SwitchError> {
         let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.switch_errors)
             .into_iter()
             .partition(|e| e.resolved(running));
@@ -994,7 +1002,7 @@ mod tests {
             .step(Step::Suspend);
         status.finished("focus".into(), vec![SwitchError::of(&freeze)]);
         assert!(status.last_switch().is_some());
-        status.resolve(&|_: &str| false);
+        status.resolve(&|_: &str, _: Option<&str>| false);
         assert_eq!(status.last_switch(), None);
         status.finished("focus".into(), vec![SwitchError::of(&start)]);
         assert!(status.last_switch().is_some());
@@ -1003,22 +1011,49 @@ mod tests {
     }
 
     #[test]
-    fn m5_a_failed_start_with_a_path_is_not_resolved_by_its_name() {
-        // tool.exe in C:\A is missing; a tool.exe from C:\B runs. The
-        // snapshot has no image paths (A7), so the error must stay.
+    fn m5_a_failed_start_with_a_path_resolves_only_from_that_path() {
+        // tool.exe in C:\A is missing; a tool.exe from C:\B runs: that one
+        // must not resolve A's error. The tray answers `running` from the
+        // image paths of the processes of that name.
         let start = Error::new(Code::StartFailed, "missing")
             .program("tool.exe")
             .path("C:\\A\\tool.exe")
             .step(Step::Start);
         let mut status = Status::default();
         status.finished("focus".into(), vec![SwitchError::of(&start)]);
-        assert!(!status.resolvable(), "no re-check timer for it");
-        assert!(status.resolve(&|exe: &str| exe == "tool.exe").is_empty());
+        assert!(status.resolvable(), "the re-check timer runs");
+        let asked = std::cell::RefCell::new(Vec::new());
+        let only_b = |exe: &str, path: Option<&str>| {
+            asked
+                .borrow_mut()
+                .push((exe.to_owned(), path.map(str::to_owned)));
+            exe == "tool.exe"
+                && path.is_some_and(|p| {
+                    crate::process::same_path(
+                        std::path::Path::new(p),
+                        std::path::Path::new("C:\\B\\tool.exe"),
+                    )
+                })
+        };
+        assert!(status.resolve(&only_b).is_empty());
+        assert_eq!(
+            asked.borrow().as_slice(),
+            [("tool.exe".to_owned(), Some("C:\\A\\tool.exe".to_owned()))]
+        );
         let last = status.last_switch().unwrap();
         assert_eq!(last.errors[0].path.as_deref(), Some("C:\\A\\tool.exe"));
         assert_eq!(status.icon(), Icon::Error);
-        // The next switch replaces it.
-        status.finished("focus".into(), vec![]);
+        // Started from C:\A (any case): resolved without a switch.
+        let from_a = |exe: &str, path: Option<&str>| {
+            exe == "tool.exe"
+                && path.is_some_and(|p| {
+                    crate::process::same_path(
+                        std::path::Path::new(p),
+                        std::path::Path::new("c:\\a\\TOOL.exe"),
+                    )
+                })
+        };
+        assert_eq!(status.resolve(&from_a).len(), 1);
         assert_eq!(status.last_switch(), None);
     }
 
@@ -1081,10 +1116,10 @@ mod tests {
         assert_eq!(status.icon(), Icon::Error);
         assert!(status.resolvable());
         // Nothing changed yet: tool.exe does not run, the others still do.
-        let running = |exe: &str| exe != "tool.exe";
+        let running = |exe: &str, _: Option<&str>| exe != "tool.exe";
         assert!(status.resolve(&running).is_empty());
         // tool.exe started by hand, chat.exe and svc.exe closed by hand.
-        let running = |exe: &str| exe == "tool.exe";
+        let running = |exe: &str, _: Option<&str>| exe == "tool.exe";
         let gone = status.resolve(&running);
         assert_eq!(gone.len(), 3);
         assert_eq!(status.switch_errors.len(), 1, "the state error stays");
@@ -1095,7 +1130,7 @@ mod tests {
         assert_eq!(status.icon(), Icon::Active);
         // A broken configuration is not resolved this way.
         status.config_error = Some("KS202".into());
-        assert!(status.resolve(&|_: &str| true).is_empty());
+        assert!(status.resolve(&|_: &str, _: Option<&str>| true).is_empty());
         assert_eq!(status.icon(), Icon::Error);
         assert!(
             Menu::build(&[], &status)
