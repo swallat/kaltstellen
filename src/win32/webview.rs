@@ -8,7 +8,9 @@
 //! windows are refused, every web request outside the origin is answered
 //! with 403 (no network at all), permission requests are denied, default
 //! script dialogs are off, and in release builds dev tools, the context
-//! menu and browser accelerator keys are off.
+//! menu and browser accelerator keys are off. A file dropped onto the
+//! window (M2) never navigates to it: the page handles every drop, and the
+//! navigation guard would cancel the `file:` URL anyway.
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -89,13 +91,17 @@ pub enum Answer {
     Script(String),
     /// Capture the page as PNG into the file, then close.
     CaptureAndClose(PathBuf),
+    /// Call these DevTools protocol methods (name, parameters as JSON) one
+    /// after the other (test driver: a drop of files on disk, M2).
+    DevTools(Vec<(String, String)>),
     Close,
 }
 
 /// The safe side of the window.
 pub trait Page {
-    /// A message from the page, as JSON text.
-    fn message(&mut self, json: &str) -> Answer;
+    /// A message from the page, as JSON text, with the paths of the files
+    /// it attached (M2: files dropped from Explorer; usually none).
+    fn message(&mut self, json: &str, files: Vec<PathBuf>) -> Answer;
     /// A [`Waker`] fired; returns what to do (events for the page, close).
     fn wake(&mut self) -> Vec<Answer>;
     /// The user closes the window; true to let it close.
@@ -326,6 +332,30 @@ fn act(hwnd: HWND, answer: Answer) {
             let _ = unsafe { PostMessageW(Some(hwnd), WM_CAPTURE, WPARAM(0), LPARAM(0)) };
         }
         Answer::Close => close(hwnd),
+        Answer::DevTools(calls) => dev_tools(webview, calls.into()),
+    }
+}
+
+/// Runs the first call, and the rest once it has completed.
+fn dev_tools(webview: ICoreWebView2, mut calls: std::collections::VecDeque<(String, String)>) {
+    let Some((method, params)) = calls.pop_front() else {
+        return;
+    };
+    let name = wide(&method);
+    let params = wide(&params);
+    let next = webview.clone();
+    let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, _| {
+        if let Err(err) = result {
+            log::warn!("gui: {method}: {err}");
+        }
+        dev_tools(next, calls);
+        Ok(())
+    }));
+    // SAFETY: NUL-terminated strings that outlive the call.
+    if let Err(err) = unsafe {
+        webview.CallDevToolsProtocolMethod(PCWSTR(name.as_ptr()), PCWSTR(params.as_ptr()), &handler)
+    } {
+        log::warn!("gui: DevTools call failed: {err}");
     }
 }
 
@@ -605,6 +635,48 @@ fn create_controller(
         .map_err(|e| fail("create the WebView", e))
 }
 
+/// Most attached objects read from one message; the bridge allows fewer.
+const MAX_ATTACHED: u32 = 1024;
+
+/// M2: the paths of the files the page attached to a message with
+/// `chrome.webview.postMessageWithAdditionalObjects` (files dropped from
+/// Explorer: the page itself only sees their names). An object that is not
+/// a file, or a file without a path, gives an empty path, which the bridge
+/// refuses as "an item that is not a file". Needs a runtime with `ICoreWebView2WebMessageReceivedEventArgs2`;
+/// an older one gives none.
+fn attached_files(args: &ICoreWebView2WebMessageReceivedEventArgs) -> Vec<PathBuf> {
+    use windows::core::Interface;
+    let Ok(args) = args.cast::<ICoreWebView2WebMessageReceivedEventArgs2>() else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    // SAFETY: COM calls on objects of this thread; strings from WebView2
+    // are freed by `take_string`.
+    unsafe {
+        let Ok(objects) = args.AdditionalObjects() else {
+            return files;
+        };
+        let mut count = 0u32;
+        if objects.Count(&mut count).is_err() {
+            return files;
+        }
+        for index in 0..count.min(MAX_ATTACHED) {
+            let path = objects
+                .GetValueAtIndex(index)
+                .ok()
+                .and_then(|object| object.cast::<ICoreWebView2File>().ok())
+                .and_then(|file| {
+                    let mut path = PWSTR::null();
+                    file.Path(&mut path).ok()?;
+                    (!path.is_null()).then(|| take_string(path))
+                })
+                .unwrap_or_default();
+            files.push(PathBuf::from(path));
+        }
+    }
+    files
+}
+
 /// # Safety
 /// COM objects of this thread.
 unsafe fn install_handlers(
@@ -691,7 +763,8 @@ unsafe fn install_handlers(
                     json.chars().take(200).collect::<String>()
                 );
             }
-            if let Some(answer) = with_page(|page| page.message(&json)) {
+            let files = attached_files(&args);
+            if let Some(answer) = with_page(|page| page.message(&json, files)) {
                 act(HWND(HWND_OF.get() as *mut _), answer);
             }
             Ok(())

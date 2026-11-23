@@ -4,9 +4,28 @@
 
 use std::sync::{Arc, Mutex};
 
+use super::protocol::{ErrorLine, LastSwitch};
 use crate::config::NEUTRAL;
 use crate::error::{Code, Error, Step};
 use crate::process::Guest;
+
+/// M5: the encoded size `last_switch` may take in the status reply, in
+/// bytes, so the reply stays far below the pipe's 64 KiB line whatever a
+/// profile holds; errors beyond it are left out (the menu still has them).
+const MAX_LAST_SWITCH: usize = 16 * 1024;
+/// Longest program name, text and profile name of one error, in bytes.
+const MAX_ERROR_FIELD: usize = 512;
+/// Longest path sent with an error, in bytes.
+const MAX_ERROR_PATH: usize = 1024;
+
+/// `text` cut to at most `max` bytes, on a character boundary.
+fn cut(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
 
 /// Profile names compare like `Config::profile` does: trimmed, any case.
 fn same_profile(a: &str, b: &str) -> bool {
@@ -263,15 +282,22 @@ pub struct Status {
 }
 
 /// L9: when an error of the last switch counts as resolved without a switch,
-/// judged from the handle-free snapshot (A7: no process is opened).
+/// judged from the handle-free snapshot (A7: no process is opened), except
+/// for a failed start that names its path (see [`Running`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
-    /// Resolved once a process of this program runs (a failed start).
-    Runs(String),
+    /// Resolved once a process of this program runs (a failed start); with
+    /// a path, only one whose image is that path.
+    Runs(String, Option<String>),
     /// Resolved once no process of this program runs (a failed stop,
     /// close or freeze).
     Gone(String),
 }
+
+/// L9: `running(exe, path)` tells whether a process of the program `exe`
+/// runs in the session; with `path`, only one whose image is that path
+/// counts (read for processes of that name only, A7's fallback).
+pub type Running<'a> = dyn Fn(&str, Option<&str>) -> bool + 'a;
 
 /// One error of the last switch, as shown and as checked again (L9).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,6 +306,10 @@ pub struct SwitchError {
     /// `None`: nothing observable resolves it; it stays until the next
     /// switch.
     pub resolution: Option<Resolution>,
+    /// What the main window needs to put a marker on the entry (M5).
+    pub code: Option<Code>,
+    pub program: Option<String>,
+    pub path: Option<String>,
 }
 
 impl SwitchError {
@@ -293,29 +323,40 @@ impl SwitchError {
     ///   suspend step: resolved when the program no longer runs.
     /// - Everything else (state or log I/O, warn list, resume, snapshot):
     ///   stays until the next switch.
+    ///
+    /// A failed start that names its path resolves only when a process of
+    /// that name runs from that path, so a program of the same name from
+    /// another folder (C2) does not resolve it.
     pub fn of(error: &Error) -> Self {
-        let program = error.program.clone();
-        let resolution = program.and_then(|exe| match (error.code, error.step) {
-            (Code::StartFailed | Code::ElevationRequired, _) => Some(Resolution::Runs(exe)),
-            (Code::CloseTimeout | Code::TerminateFailed | Code::SuspendFailed, _) => {
-                Some(Resolution::Gone(exe))
-            }
-            (Code::NeedsAdmin | Code::Protected, Some(Step::Stop | Step::Suspend)) => {
-                Some(Resolution::Gone(exe))
-            }
-            _ => None,
-        });
+        let resolution = error
+            .program
+            .clone()
+            .and_then(|exe| match (error.code, error.step) {
+                (Code::StartFailed | Code::ElevationRequired, _) => {
+                    Some(Resolution::Runs(exe, error.path.clone()))
+                }
+                (Code::CloseTimeout | Code::TerminateFailed | Code::SuspendFailed, _) => {
+                    Some(Resolution::Gone(exe))
+                }
+                (Code::NeedsAdmin | Code::Protected, Some(Step::Stop | Step::Suspend)) => {
+                    Some(Resolution::Gone(exe))
+                }
+                _ => None,
+            });
         Self {
             text: error.to_string(),
             resolution,
+            code: Some(error.code),
+            program: error.program.clone(),
+            path: error.path.clone(),
         }
     }
 
-    /// Whether `running(exe)` shows the cause is gone.
-    pub fn resolved(&self, running: &dyn Fn(&str) -> bool) -> bool {
+    /// Whether `running` shows the cause is gone.
+    pub fn resolved(&self, running: &Running) -> bool {
         match &self.resolution {
-            Some(Resolution::Runs(exe)) => running(exe),
-            Some(Resolution::Gone(exe)) => !running(exe),
+            Some(Resolution::Runs(exe, path)) => running(exe, path.as_deref()),
+            Some(Resolution::Gone(exe)) => !running(exe, None),
             None => false,
         }
     }
@@ -327,6 +368,9 @@ impl From<&str> for SwitchError {
         Self {
             text: text.to_owned(),
             resolution: None,
+            code: None,
+            program: None,
+            path: None,
         }
     }
 }
@@ -397,12 +441,43 @@ impl Status {
 
     /// L9: drops the errors whose cause is gone and returns them. An
     /// invalid configuration or a missing pipe is not touched here.
-    pub fn resolve(&mut self, running: &dyn Fn(&str) -> bool) -> Vec<SwitchError> {
+    pub fn resolve(&mut self, running: &Running) -> Vec<SwitchError> {
         let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.switch_errors)
             .into_iter()
             .partition(|e| e.resolved(running));
         self.switch_errors = kept;
         gone
+    }
+
+    /// M5: the errors of the last switch that name a program, for the
+    /// markers of the main window; `None` when there are none. They belong
+    /// to the profile that switch made active.
+    pub fn last_switch(&self) -> Option<LastSwitch> {
+        let profile = cut(&self.active, MAX_ERROR_FIELD);
+        // Measured as sent (JSON escapes double every backslash).
+        let encoded = |value: &str| serde_json::to_string(value).map_or(usize::MAX, |s| s.len());
+        let mut used = encoded(&profile);
+        let mut errors = Vec::new();
+        for e in &self.switch_errors {
+            let (Some(code), Some(program)) = (e.code, &e.program) else {
+                continue;
+            };
+            let line = ErrorLine {
+                code: code.to_string(),
+                program: cut(program, MAX_ERROR_FIELD),
+                // A cut path would match no entry; one too long is left out
+                // and the marker goes by name only.
+                path: e.path.clone().filter(|p| p.len() <= MAX_ERROR_PATH),
+                text: cut(&e.text, MAX_ERROR_FIELD),
+            };
+            let size = serde_json::to_string(&line).map_or(usize::MAX, |s| s.len() + 1);
+            if used.saturating_add(size) > MAX_LAST_SWITCH {
+                break;
+            }
+            used += size;
+            errors.push(line);
+        }
+        (!errors.is_empty()).then_some(LastSwitch { profile, errors })
     }
 
     /// Whether a later check could still resolve an error (the re-check
@@ -1058,6 +1133,133 @@ mod tests {
     }
 
     #[test]
+    fn m5_last_switch_lists_program_errors_of_the_active_profile() {
+        let mut status = Status::default();
+        assert_eq!(status.last_switch(), None);
+        let start = Error::new(Code::StartFailed, "missing")
+            .program("tool.exe")
+            .path("C:\\t\\tool.exe")
+            .step(Step::Start);
+        let io = Error::new(Code::StateIo, "disk full");
+        status.finished(
+            "focus".into(),
+            vec![
+                SwitchError::of(&start),
+                SwitchError::of(&io),
+                "plain".into(),
+            ],
+        );
+        let last = status.last_switch().unwrap();
+        assert_eq!(last.profile, "focus");
+        // Only errors that name a program can become markers.
+        assert_eq!(
+            last.errors,
+            vec![ErrorLine {
+                code: "KS110".into(),
+                program: "tool.exe".into(),
+                path: Some("C:\\t\\tool.exe".into()),
+                text: "KS110 [start] tool.exe: missing".into(),
+            }]
+        );
+        // Resolved (L9) or replaced by a clean switch: nothing to mark.
+        let freeze = Error::new(Code::SuspendFailed, "denied")
+            .program("chat.exe")
+            .step(Step::Suspend);
+        status.finished("focus".into(), vec![SwitchError::of(&freeze)]);
+        assert!(status.last_switch().is_some());
+        status.resolve(&|_: &str, _: Option<&str>| false);
+        assert_eq!(status.last_switch(), None);
+        status.finished("focus".into(), vec![SwitchError::of(&start)]);
+        assert!(status.last_switch().is_some());
+        status.finished("focus".into(), vec![]);
+        assert_eq!(status.last_switch(), None);
+    }
+
+    #[test]
+    fn m5_a_failed_start_with_a_path_resolves_only_from_that_path() {
+        // tool.exe in C:\A is missing; a tool.exe from C:\B runs: that one
+        // must not resolve A's error. The tray answers `running` from the
+        // image paths of the processes of that name.
+        let start = Error::new(Code::StartFailed, "missing")
+            .program("tool.exe")
+            .path("C:\\A\\tool.exe")
+            .step(Step::Start);
+        let mut status = Status::default();
+        status.finished("focus".into(), vec![SwitchError::of(&start)]);
+        assert!(status.resolvable(), "the re-check timer runs");
+        let asked = std::cell::RefCell::new(Vec::new());
+        let only_b = |exe: &str, path: Option<&str>| {
+            asked
+                .borrow_mut()
+                .push((exe.to_owned(), path.map(str::to_owned)));
+            exe == "tool.exe"
+                && path.is_some_and(|p| {
+                    crate::process::same_path(
+                        std::path::Path::new(p),
+                        std::path::Path::new("C:\\B\\tool.exe"),
+                    )
+                })
+        };
+        assert!(status.resolve(&only_b).is_empty());
+        assert_eq!(
+            asked.borrow().as_slice(),
+            [("tool.exe".to_owned(), Some("C:\\A\\tool.exe".to_owned()))]
+        );
+        let last = status.last_switch().unwrap();
+        assert_eq!(last.errors[0].path.as_deref(), Some("C:\\A\\tool.exe"));
+        assert_eq!(status.icon(), Icon::Error);
+        // Started from C:\A (any case): resolved without a switch.
+        let from_a = |exe: &str, path: Option<&str>| {
+            exe == "tool.exe"
+                && path.is_some_and(|p| {
+                    crate::process::same_path(
+                        std::path::Path::new(p),
+                        std::path::Path::new("c:\\a\\TOOL.exe"),
+                    )
+                })
+        };
+        assert_eq!(status.resolve(&from_a).len(), 1);
+        assert_eq!(status.last_switch(), None);
+    }
+
+    #[test]
+    fn m5_last_switch_stays_below_its_byte_budget_and_the_pipe_line() {
+        use super::super::protocol::{Body, MAX_LINE, TrayStatus, encode, reply};
+        let long = "ü€".repeat(400);
+        let path = format!("C:{}", "\\a".repeat(400));
+        let errors: Vec<SwitchError> = (0..200)
+            .map(|i| {
+                SwitchError::of(
+                    &Error::new(Code::SuspendFailed, format!("{i} {long}"))
+                        .program(format!("{long}{i}.exe"))
+                        .path(&path)
+                        .step(Step::Suspend),
+                )
+            })
+            .collect();
+        let mut status = Status::default();
+        status.finished(long.clone(), errors);
+        let last = status.last_switch().unwrap();
+        assert!(!last.errors.is_empty() && last.errors.len() < 200);
+        let encoded = serde_json::to_string(&last).unwrap();
+        assert!(encoded.len() <= MAX_LAST_SWITCH + 64, "{}", encoded.len());
+        for line in &last.errors {
+            // Cut by bytes, on character boundaries (a `String` cannot be
+            // anything else; `cut` would panic otherwise).
+            assert!(line.text.len() <= MAX_ERROR_FIELD && line.program.len() <= MAX_ERROR_FIELD);
+            assert!(line.path.is_some(), "a path of 802 bytes is sent");
+        }
+        let line = encode(&reply(Body::Status(TrayStatus {
+            state: crate::state::State::default(),
+            running: Some(long.clone()),
+            waiting: None,
+            automation: None,
+            last_switch: Some(last),
+        })));
+        assert!(line.len() < MAX_LINE, "{}", line.len());
+    }
+
+    #[test]
     fn l9_errors_resolve_when_their_cause_is_gone() {
         let start = Error::new(Code::StartFailed, "missing")
             .program("tool.exe")
@@ -1080,10 +1282,10 @@ mod tests {
         assert_eq!(status.icon(), Icon::Error);
         assert!(status.resolvable());
         // Nothing changed yet: tool.exe does not run, the others still do.
-        let running = |exe: &str| exe != "tool.exe";
+        let running = |exe: &str, _: Option<&str>| exe != "tool.exe";
         assert!(status.resolve(&running).is_empty());
         // tool.exe started by hand, chat.exe and svc.exe closed by hand.
-        let running = |exe: &str| exe == "tool.exe";
+        let running = |exe: &str, _: Option<&str>| exe == "tool.exe";
         let gone = status.resolve(&running);
         assert_eq!(gone.len(), 3);
         assert_eq!(status.switch_errors.len(), 1, "the state error stays");
@@ -1094,7 +1296,7 @@ mod tests {
         assert_eq!(status.icon(), Icon::Active);
         // A broken configuration is not resolved this way.
         status.config_error = Some("KS202".into());
-        assert!(status.resolve(&|_: &str| true).is_empty());
+        assert!(status.resolve(&|_: &str, _: Option<&str>| true).is_empty());
         assert_eq!(status.icon(), Icon::Error);
         assert!(
             Menu::build(&[], &status)

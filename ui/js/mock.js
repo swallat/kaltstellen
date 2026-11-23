@@ -16,7 +16,7 @@ function entry(exe, action, extra = {}) {
   return {
     exe, path: null, action, args: [], cwd: null, on_timeout: 'kill',
     restart_on_neutral: false, trim: action === 'suspend' ? true : null,
-    confirmed: false, protection: protectionOf(exe), ...extra,
+    confirmed: false, protection: protectionOf(exe), errors: [], ...extra,
   };
 }
 
@@ -39,7 +39,11 @@ const state = {
         entry('browser.exe', 'suspend'),
         entry('mail.exe', 'suspend', { trim: false }),
         entry('chat.exe', 'stop', { restart_on_neutral: true, args: ['--minimized'] }),
-        entry('tracker.exe', 'start', { path: 'C:\\Tools\\Tracker\\tracker.exe', args: ['--profile', 'flight'] }),
+        // M5: an error of the last switch on its entry.
+        entry('tracker.exe', 'start', {
+          path: 'C:\\Tools\\Tracker\\tracker.exe', args: ['--profile', 'flight'],
+          errors: [{ code: 'KS110', label: 'start failed', text: 'KS110 [start] tracker.exe: C:\\Tools\\Tracker\\tracker.exe: The system cannot find the file specified.' }],
+        }),
         entry('anydesk.exe', 'ignore'),
       ],
     },
@@ -175,6 +179,26 @@ function handle(message) {
     }
     case 'pick_executable':
       return { ok: true, data: { exe: 'editor.exe', path: 'C:\\Program Files\\Editor\\editor.exe', protection: 'none' } };
+    case 'drop_files': {
+      // M2: the browser gives no paths; the mock makes some up.
+      const names = m.mock_names || [];
+      if (names.length === 0) return fail('no file was dropped (drop files from Explorer)');
+      const files = [];
+      const refused = [];
+      for (const name of names) {
+        if (/\.exe$/i.test(name)) files.push({ exe: name, path: `C:\\Dropped\\${name}`, protection: protectionOf(name) });
+        else refused.push(`${name} is not a program (.exe)`);
+      }
+      return { ok: true, data: { files, refused } };
+    }
+    case 'drop_done': {
+      const notAdded = m.not_added || [];
+      const total = m.added + notAdded.length;
+      state.status = notAdded.length
+        ? `${m.added} of ${total} added to "${m.profile}". Not added: ${notAdded.join('; ')}`
+        : `${m.added} program${m.added === 1 ? '' : 's'} added to "${m.profile}"; saved.`;
+      return { ok: true };
+    }
     case 'running': return { ok: true, data: clone(running) };
     case 'icons': {
       if (!Array.isArray(m.programs) || m.programs.length > 256) return fail('at most 256 icons per request');
@@ -199,6 +223,8 @@ function handle(message) {
         state.applying = false;
         state.active = m.profile;
         state.status = `Applied "${m.profile}".`;
+        // M5: a clean switch clears the markers.
+        for (const p of state.profiles) for (const e of p.entries) e.errors = [];
         emit({ v: 1, event: 'applied', state: view() });
       }, 600);
       return { ok: true };

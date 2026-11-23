@@ -180,3 +180,10 @@ name. Purpose: find out which real apps tolerate being frozen.
   tests with heartbeat copies as triggers in `tests/fixtures/tests/tray.rs`;
   the notification as shown and a real program as trigger are manual
   checks.
+- Failure markers and drag and drop in the main window (2026-11-23, owner
+  request; branch `gui-markers-dnd`): M5 entries show the tray's open
+  errors of the last switch (read over the pipe, field `last_switch` of
+  `status`); M2 `.exe` files dropped from Explorer are added like chosen
+  ones (`drop_files`, paths read by the host from WebView2). Details chosen
+  without the owner are under "Open" in `docs/open-decisions.md`; the real
+  drop from Explorer is a manual check (`docs/manual-checks.md` 13c, 13d).

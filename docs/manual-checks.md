@@ -110,6 +110,41 @@ main session made them; they show the views below in light and dark.
     square of the same size; rows do not move when the icons arrive. The
     log (`kaltstellen.log`) has one line per request: `gui: N icons at S px
     (… found, … read) in … ms; cache … icons, … KiB`.
+13c. Failure markers (M5), with the tray running: give a profile a `start`
+    entry whose `path` does not exist and a `suspend` entry for a running
+    program, apply it from the window. The start entry shows a red mark
+    with `KS110 start failed`; hovering it shows the whole error as in the
+    tray menu; the row has a red edge. Other entries and other profiles
+    show nothing. Put a program at that path and start it by hand, then
+    click into another window and back into kaltstellen: the marker is
+    gone, as in the tray's error list. A program of the same name started
+    from another folder does not clear it. A clean switch removes all
+    markers. With
+    a `suspend` entry whose freeze fails (an elevated program): its
+    marker goes once that program is closed and the window gets the focus
+    again. Switch profiles from the tray menu while the window is open but
+    in the background: the window shows the change when you click into it.
+    Without a tray (`kaltstellen gui` alone) there are no markers; the
+    status line still reports the switch. Check in light and dark mode.
+13d. Drag and drop (M2): drag one `.exe` from Explorer onto the open profile:
+    while dragging, the program table gets a dashed outline; on drop the
+    program is added with the default action, exactly as with `Choose
+    executable…` (a warn-list program such as `anydesk.exe` asks first; a
+    protected one such as `C:\Windows\explorer.exe` is refused with the
+    reason in the status line; a program already in the profile is refused
+    as a duplicate). Drop three `.exe` files at once: all three are added.
+    Drop a `.txt` file, a shortcut (`.lnk`) and a folder together with one
+    `.exe`: the `.exe` is added, the status line says `1 of 4 added …
+    Not added: …` and names each refused item and why; click into another
+    window and back: the summary is still there. Drop an `.exe` from a
+    network share or a USB stick (removable): refused as not on a local disk
+    (a USB hard disk that Windows reports as fixed counts as local). Drop
+    onto the open `Add a program` dialog: the same, and the dialog
+    closes. Drop anywhere else in the window (the sidebar, the
+    header): no page change, nothing opens, the window stays on its page.
+    Drop a link or selected text from a browser: nothing happens. Start
+    the window elevated (`Run as administrator`) and drag from the normal
+    Explorer: Windows refuses the drop (UIPI); that is expected.
 14. With the window open and minimised, choose `Open kaltstellen…` again
     (or run `kaltstellen gui`): the same window comes back to the front, no
     second window opens.

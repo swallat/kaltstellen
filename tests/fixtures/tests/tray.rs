@@ -793,6 +793,42 @@ fn l9_an_error_resolves_by_itself_when_its_cause_is_gone() {
     assert_eq!(t.quit(), Some(0));
 }
 
+#[test]
+fn l9_a_failed_start_resolves_only_when_the_program_runs_from_its_path() {
+    // Two folders with a program of one name (C2): the entry's copy in `a`
+    // is missing, the one in `b` runs. B's process must not resolve A's
+    // error; A's own does, without a switch.
+    let mut t = Tray::new();
+    t.cleanup.push(KillProgram("ks-l9b-tool.exe".to_owned()));
+    let in_a = t.dir.path().join("a").join("ks-l9b-tool.exe");
+    let in_b = t.dir.path().join("b").join("ks-l9b-tool.exe");
+    t.config(&format!(
+        "[[profile]]\nname = \"work\"\n\n  [[profile.app]]\n  exe = \"ks-l9b-tool.exe\"\n  path = '{}'\n  action = \"start\"\n",
+        in_a.display()
+    ));
+    t.start(1);
+    t.click(ID_PROFILE_BASE);
+    t.wait_log("tray: icon error", 1);
+    fs::create_dir_all(in_b.parent().unwrap()).unwrap();
+    fs::copy(HEARTBEAT, &in_b).unwrap();
+    let beat_b = t.dir.path().join("b.beat");
+    let _b = Fixture::spawn(str_of(&in_b), &[str_of(&beat_b)]);
+    assert!(beating(&beat_b));
+    t.post(WM_TIMER, 2);
+    // Answered after the re-check, which a status request runs as well.
+    assert_eq!(t.run(&["status"]).0, 0);
+    assert_eq!(t.logged("error resolved by itself"), 0);
+    fs::create_dir_all(in_a.parent().unwrap()).unwrap();
+    fs::copy(HEARTBEAT, &in_a).unwrap();
+    let beat_a = t.dir.path().join("a.beat");
+    let _a = Fixture::spawn(str_of(&in_a), &[str_of(&beat_a)]);
+    assert!(beating(&beat_a));
+    t.post(WM_TIMER, 2);
+    t.wait_log("tray: error resolved by itself: KS110", 1);
+    t.wait_log("tray: icon active", 1);
+    assert_eq!(t.quit(), Some(0));
+}
+
 /// A hotkey this test thread holds, like another program would; released
 /// on drop. Only Ctrl+Shift+Alt with F22 to F24, which keyboards rarely have.
 struct HeldHotkey(i32);
