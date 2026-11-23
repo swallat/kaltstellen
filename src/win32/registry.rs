@@ -1,11 +1,12 @@
-//! String values under `HKEY_CURRENT_USER`, for start at sign-in (the
-//! per-user Run key). Nothing outside `HKEY_CURRENT_USER` is touched.
+//! String values and subkeys under `HKEY_CURRENT_USER`: the per-user Run
+//! key for start at sign-in and the notification icon registry for
+//! unassigned programs (N1). Nothing outside `HKEY_CURRENT_USER` is touched.
 
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, WIN32_ERROR};
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, WIN32_ERROR};
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
-    REG_VALUE_TYPE, RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegDeleteValueW, RegEnumKeyExW,
-    RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+    HKEY, HKEY_CURRENT_USER, KEY_ENUMERATE_SUB_KEYS, KEY_QUERY_VALUE, KEY_SET_VALUE,
+    REG_OPTION_NON_VOLATILE, REG_SZ, REG_VALUE_TYPE, RegCloseKey, RegCreateKeyExW, RegDeleteTreeW,
+    RegDeleteValueW, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
 };
 use windows::core::PCWSTR;
 
@@ -53,7 +54,9 @@ fn open(subkey: &str, write: bool) -> Result<Option<Key>> {
                 HKEY_CURRENT_USER,
                 PCWSTR(name.as_ptr()),
                 None,
-                KEY_QUERY_VALUE,
+                // Listing subkeys (`subkeys`) needs a right of its own;
+                // without it RegEnumKeyExW is refused (N1 icon registry).
+                KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS,
                 &mut key,
             )
         }
@@ -173,9 +176,13 @@ pub fn subkeys(subkey: &str) -> Result<Vec<String>> {
                 None,
             )
         };
-        if status.is_err() {
-            // ERROR_NO_MORE_ITEMS ends the list; other errors end it too.
+        if status == ERROR_NO_MORE_ITEMS {
             break;
+        }
+        if status.is_err() {
+            // Not the end of the list: say so instead of returning a
+            // shorter list that looks complete.
+            return Err(failed("list", subkey, status));
         }
         names.push(String::from_utf16_lossy(&buffer[..len as usize]));
     }
@@ -217,5 +224,25 @@ mod tests {
         assert_eq!(read(&key, "v").unwrap(), None);
         delete_tree(&root).unwrap();
         assert!(!exists(&root).unwrap(), "nothing left behind");
+    }
+
+    /// N1 reads `NotifyIconSettings` this way: the subkeys must be listed,
+    /// not silently come back empty (a key opened without the right to
+    /// enumerate did exactly that).
+    #[test]
+    fn n1_subkeys_are_listed() {
+        let root = format!("Software\\kaltstellen-test-{}-subkeys", std::process::id());
+        assert_eq!(subkeys(&root).unwrap(), Vec::<String>::new());
+        for name in ["1001", "1002", "1003"] {
+            write(&format!("{root}\\{name}"), "ExecutablePath", "C:\\x\\a.exe").unwrap();
+        }
+        let mut names = subkeys(&root).unwrap();
+        names.sort();
+        let value = read(&format!("{root}\\1002"), "ExecutablePath").unwrap();
+        // Removed before the asserts, so a failure leaves nothing behind.
+        delete_tree(&root).unwrap();
+        assert!(!exists(&root).unwrap(), "nothing left behind");
+        assert_eq!(names, ["1001", "1002", "1003"]);
+        assert_eq!(value.as_deref(), Some("C:\\x\\a.exe"));
     }
 }
