@@ -50,13 +50,23 @@ jobs:
 
   build:
     needs: version
-    runs-on: windows-latest
+    # Each executable is built on a runner of its own architecture, so the
+    # version check below runs it natively.
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       matrix:
+        # `arch` is what `std::env::consts::ARCH` says on that system; the
+        # updater asks for the file with that name (UP1). Each target builds
+        # on a runner of its own architecture. Keep this list in step with
+        # the checksums check in `package`.
         include:
           - target: x86_64-pc-windows-msvc
             arch: x86_64
+            runner: windows-latest
+          - target: aarch64-pc-windows-msvc
+            arch: aarch64
+            runner: windows-11-arm
     env:
       # Marks a release build: only such a build updates itself (spec UP1).
       KALTSTELLEN_RELEASE: "1"
@@ -108,7 +118,11 @@ jobs:
         run: |
           # sha256sum format: 64 lower-case hex digits, two spaces, file name.
           sha256sum kaltstellen-*.exe | tee checksums.txt
-          grep -Eq '^[0-9a-f]{64}  kaltstellen-'"$VERSION"'-windows-x86_64\.exe$' checksums.txt
+          for arch in x86_64 aarch64; do
+            grep -Eq '^[0-9a-f]{64}  kaltstellen-'"$VERSION"'-windows-'"$arch"'\.exe$' checksums.txt
+          done
+          # Exactly these executables and nothing else.
+          test "$(ls kaltstellen-*.exe | wc -l)" -eq 2
           ls -l
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
