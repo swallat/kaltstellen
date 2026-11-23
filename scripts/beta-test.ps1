@@ -89,6 +89,10 @@ Program list to use instead of <backup root>\beta-test.json.
 .PARAMETER Root
 Backup root instead of %LOCALAPPDATA%\kaltstellen-beta-backup (tests).
 
+.PARAMETER NoProgramLists
+collect: leave the output of "kaltstellen list" and "status --unassigned"
+(names of programs that ran) out of the report.
+
 .PARAMETER ReportDir
 Where collect writes the report zip. Default: the Desktop, or the backup
 folder if there is no Desktop.
@@ -123,6 +127,7 @@ param(
     [string]$ProgramList,
     [string]$Root,
     [string]$ReportDir,
+    [switch]$NoProgramLists,
     [switch]$NoEdit,
     [double]$FreezeMinutes = 10,
     [int]$SettleSeconds = 20
@@ -156,6 +161,7 @@ $script:IsUnattended = [bool]$Unattended
 $script:Answers = @{}
 $script:LastAnswerSource = $null
 $script:Ctx = @{}
+$script:SessionEnding = $false
 
 # --- Windows API ------------------------------------------------------------
 
@@ -191,8 +197,30 @@ namespace KsBeta {
         // A message the window must answer, with a timeout; -1 if it did not answer in time.
         public static long Send(IntPtr h, uint msg, long w, long l, uint timeoutMs) {
             IntPtr r; var sw = System.Diagnostics.Stopwatch.StartNew();
-            var ok = SendMessageTimeout(h, msg, new IntPtr(w), new IntPtr(l), 2, timeoutMs, out r);
+            var ok = SendMessageTimeout(h, msg, Word(w), Word(l), 2, timeoutMs, out r);
             return ok == IntPtr.Zero ? -1 : sw.ElapsedMilliseconds;
+        }
+        // The low 32 bits in a 32-bit process (0x80000000 does not fit an int there).
+        static IntPtr Word(long v) { return IntPtr.Size == 8 ? new IntPtr(v) : new IntPtr(unchecked((int)v)); }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern uint GetLongPathName(string s, StringBuilder l, uint n);
+        // C:\Users\ABCDEF~1\... -> the long form; the input if Windows cannot say.
+        public static string LongPath(string path) {
+            var b = new StringBuilder(1024);
+            var n = GetLongPathName(path, b, (uint)b.Capacity);
+            return (n == 0 || n >= b.Capacity) ? path : b.ToString();
+        }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern uint GetShortPathName(string l, StringBuilder s, uint n);
+        public static string ShortPath(string path) {
+            var b = new StringBuilder(1024);
+            var n = GetShortPathName(path, b, (uint)b.Capacity);
+            return (n == 0 || n >= b.Capacity) ? path : b.ToString();
+        }
+        [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool IsWow64Process2(IntPtr p, out ushort process, out ushort native);
+        // IMAGE_FILE_MACHINE_* of the machine itself, 0 where IsWow64Process2 is missing.
+        public static int NativeMachine() {
+            try { ushort p, n; return IsWow64Process2(GetCurrentProcess(), out p, out n) ? n : 0; }
+            catch (EntryPointNotFoundException) { return 0; }
         }
         public static List<Win> Windows() {
             var list = new List<Win>();
@@ -305,19 +333,60 @@ function Assert-Removable([string]$Path) {
         if ($script:State.install -and $script:State.install.created_dir) { $allowed += $script:State.install_dir }
     }
     $allowed += Join-Path $script:BackupRoot 'staging'
+    $long = Get-LongPath $full
     foreach ($root in $allowed) {
-        $r = [IO.Path]::GetFullPath($root).TrimEnd('\')
-        if ($full -ieq $r -or $full.StartsWith($r + '\', [StringComparison]::OrdinalIgnoreCase)) { return }
+        $r = Get-LongPath $root
+        if ((Test-Below $full $r) -or (Test-Below $long $r)) { return }
     }
     throw "refusing to remove ${full}: not a path this script created or backed up"
+}
+
+function Get-LongPath([string]$Path) {
+    if (-not $Path) { return $Path }
+    $full = [IO.Path]::GetFullPath($Path)
+    # Long form of the part that exists (a path to be created keeps its tail).
+    $head = $full; $tail = ''
+    while ($head -and -not (Test-Path -LiteralPath $head)) {
+        $tail = '\' + [IO.Path]::GetFileName($head) + $tail
+        $head = [IO.Path]::GetDirectoryName($head)
+    }
+    if (-not $head) { return $full }
+    ([KsBeta.Native]::LongPath($head)).TrimEnd('\') + $tail
+}
+
+# True if $Path is $Root or lies below it.
+function Test-Below([string]$Path, [string]$Root) {
+    if (-not $Path -or -not $Root) { return $false }
+    $r = $Root.TrimEnd('\')
+    $Path -ieq $r -or $Path.StartsWith($r + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+
+# Deletes a tree without following junctions or symbolic links: a link is
+# removed itself, never what it points to.
+function Remove-TreeItem([IO.FileSystemInfo]$Item) {
+    $isLink = ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+    if (($Item.Attributes -band [IO.FileAttributes]::ReadOnly) -ne 0) {
+        $Item.Attributes = $Item.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly)
+    }
+    if ($Item -is [IO.DirectoryInfo]) {
+        if (-not $isLink) {
+            foreach ($child in $Item.GetFileSystemInfos()) { Remove-TreeItem $child }
+        }
+        [IO.Directory]::Delete($Item.FullName, $false)
+    } else {
+        [IO.File]::Delete($Item.FullName)
+    }
 }
 
 function Remove-Tree([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return }
     Assert-Removable $Path
     for ($i = 0; $i -lt 5; $i++) {
-        try { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop; return }
-        catch { if ($i -eq 4) { throw }; Start-Sleep -Milliseconds 800 }
+        try {
+            $item = Get-Item -LiteralPath $Path -Force
+            Remove-TreeItem $item
+            return
+        } catch { if ($i -eq 4) { throw }; Start-Sleep -Milliseconds 800 }
     }
 }
 
@@ -366,7 +435,7 @@ function Use-State {
     if ($script:State.unattended) { $script:IsUnattended = $true }
     Set-KsEnvironment
     if ($script:State.programs_file -and (Test-Path -LiteralPath $script:State.programs_file)) {
-        $script:Programs = Read-ProgramList $script:State.programs_file -NoFail
+        $script:Programs = Read-ProgramList $script:State.programs_file -TestDir $script:State.test_dir -NoFail
     }
 }
 
@@ -475,12 +544,13 @@ function Show-FreezeWarning {
 # --- Results ------------------------------------------------------------------
 
 function Add-Result {
-    param([string]$TestId, [string]$StepId, [string]$Outcome, $Auto, $Eyes, $Measure, [string]$Note, [string]$Since)
+    param([string]$TestId, [string]$StepId, [string]$Outcome, $Auto, $Eyes, $Measure, [string]$Note, [string]$Since, [string]$Until)
+    if (-not $Until) { $Until = Get-UtcStamp }
     $rec = [ordered]@{
         test = $TestId; step = $StepId; outcome = $Outcome
         auto = $Auto; eyes = $Eyes
         measure = $Measure; note = $Note
-        since = $Since; until = (Get-UtcStamp); time = (Get-UtcStamp)
+        since = $Since; until = $Until; time = (Get-UtcStamp)
     }
     Add-Utf8Line (Join-Path $script:Session 'results.jsonl') ($rec | ConvertTo-Json -Depth 6 -Compress)
     $line = '{0}  {1,-12} {2,-16} {3,-5} auto={4} eyes={5}{6}' -f $rec.time, $TestId, $StepId, $Outcome, $Auto, $Eyes, $(if ($Note) { "  $Note" } else { '' })
@@ -643,7 +713,20 @@ function Get-TrayWindows {
     @(Get-WindowsOf $ours 'kaltstellen-tray')
 }
 
-function Get-HelperPids { @(Get-List $script:State.helper_pids | ForEach-Object { [int]$_ }) }
+# Helper trays: { pid, start_ticks } of trays the script started itself.
+function Get-HelperPids { @(Get-List $script:State.helper_pids | ForEach-Object { if ($_.pid) { [int]$_.pid } else { [int]$_ } }) }
+
+function Get-StartTicks($Process) { try { $Process.StartTime.ToUniversalTime().Ticks } catch { 0 } }
+
+# The process with this PID if it is still the one recorded: same start time
+# and, when given, the same executable.
+function Get-RecordedProcess([int]$Id, [int64]$StartTicks, [string]$Path) {
+    $p = Get-Process -Id $Id -ErrorAction SilentlyContinue
+    if (-not $p) { return $null }
+    if ($StartTicks -and (Get-StartTicks $p) -ne $StartTicks) { return $null }
+    if ($Path -and -not ($p.Path -and (Get-LongPath $p.Path) -ieq (Get-LongPath $Path))) { return $null }
+    $p
+}
 
 function Get-MainTray {
     $helpers = Get-HelperPids
@@ -680,6 +763,9 @@ function Stop-TrayWindow($Tray, [int]$TimeoutS = 25) {
         Write-Note "   the tray (pid $($Tray.Pid)) did not quit in $TimeoutS s; ending it"
         Stop-Process -Id $Tray.Pid -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 500
+        # A killed tray resumes nothing: recover does.
+        $r = Invoke-Ks recover
+        Write-Note "   recover after ending it: exit $($r.Code)"
         return $false
     }
     $true
@@ -799,7 +885,7 @@ function Get-Beat($Program) {
 function Register-Started($Process, $Program) {
     $entry = [pscustomobject]@{
         pid = $Process.Id; exe = $Program.exe; path = $Program.path
-        start_ticks = $(try { $Process.StartTime.ToUniversalTime().Ticks } catch { 0 })
+        start_ticks = (Get-StartTicks $Process)
         disposable = [bool]$Program.disposable
     }
     Set-State 'started' (@(Get-List $script:State.started) + @($entry))
@@ -841,26 +927,37 @@ function Request-Running($Programs, [int]$SettleMs = 1500) {
     , $running
 }
 
-# Ends a program the script started: killed when disposable, otherwise asked
-# to close (WM_CLOSE to its windows).
+# Processes of this program that the script started itself: PID and start
+# time as recorded in the state file.
+function Get-StartedProcesses($Program) {
+    @(foreach ($e in Get-List $script:State.started) {
+        if ($e.exe -ine $Program.exe) { continue }
+        $p = Get-RecordedProcess $e.pid $e.start_ticks $null
+        if ($p) { $p }
+    })
+}
+
+# Ends what the script started of a program: killed when disposable (test
+# fixtures), otherwise asked to close (WM_CLOSE to its windows). Other
+# processes of the same name are never touched here.
 function Close-Program($Program, [switch]$Wait) {
-    $procs = Get-ProgramProcesses $Program.exe
+    $procs = Get-StartedProcesses $Program
     if (-not $procs.Count) { return $true }
     if ($Program.disposable) { $procs | Stop-Process -Force -ErrorAction SilentlyContinue }
     else { foreach ($p in $procs) { $null = $p.CloseMainWindow() } }
     if (-not $Wait) { return $true }
-    [bool](Wait-Until 15 { -not (Get-ProgramProcesses $Program.exe).Count })
+    $ids = @($procs | ForEach-Object { $_.Id })
+    [bool](Wait-Until 15 { -not @($ids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }).Count })
 }
 
+# Closes what the script started; for anything else of that name the owner
+# decides (never forced).
 function Request-Closed($Program) {
+    $null = Close-Program $Program -Wait
     if (-not (Get-ProgramProcesses $Program.exe).Count) { return $true }
-    $ours = @(Get-List $script:State.started | Where-Object { $_.exe -ieq $Program.exe })
-    if ($Program.disposable -or $ours.Count) {
-        if (Close-Program $Program -Wait) { return $true }
-    }
-    if ($script:IsUnattended) { return $false }
+    if ($script:IsUnattended) { Write-Note "   $($Program.exe) runs and was not started by this script: left alone"; return $false }
     while ((Get-ProgramProcesses $Program.exe).Count) {
-        $a = (Read-Host "   Close $($Program.exe), then press Enter (s = go on anyway)").Trim().ToLowerInvariant()
+        $a = (Read-Host "   $($Program.exe) runs (not started by this script). Close it yourself, then press Enter (s = go on anyway)").Trim().ToLowerInvariant()
         if ($a -eq 's') { return $false }
     }
     $true
@@ -910,7 +1007,11 @@ function Get-RunValue([string]$Key) {
 
 # --- Program list and test configuration ---------------------------------------
 
-function Read-ProgramList([string]$Path, [switch]$NoFail) {
+# The trigger "builtin": a renamed copy of ping.exe in the test folder that
+# runs until it is ended, so the trigger test never touches a program of yours.
+$script:BuiltinTrigger = 'ks-beta-trigger.exe'
+
+function Read-ProgramList([string]$Path, [string]$TestDir, [switch]$NoFail) {
     $errors = New-Object System.Collections.Generic.List[string]
     try { $j = ConvertFrom-JsonText (Get-Content -LiteralPath $Path -Raw -Encoding UTF8) }
     catch { throw "$Path is not valid JSON: $($_.Exception.Message)" }
@@ -944,7 +1045,14 @@ function Read-ProgramList([string]$Path, [switch]$NoFail) {
         if ($seen.ContainsKey($k)) { $errors.Add("$($p.exe) is listed twice (suspend and stop exclude each other)") }
         $seen[$k] = $p.role
     }
-    $trigger = & $norm $j.trigger 'trigger'
+    if ($j.trigger -is [string] -and $j.trigger -eq 'builtin') {
+        $trigger = [pscustomobject]@{
+            exe = $script:BuiltinTrigger; path = (Join-Path $TestDir $script:BuiltinTrigger); args = @('-t', '127.0.0.1')
+            disposable = $true; hidden = $true; restart = $true; on_timeout = 'keep'; role = 'trigger'; builtin = $true
+        }
+    } elseif ($j.trigger -is [string]) {
+        $errors.Add("trigger: 'builtin' or an object with exe and path, not '$($j.trigger)'"); $trigger = $null
+    } else { $trigger = & $norm $j.trigger 'trigger' }
     if ($trigger -and $seen.ContainsKey($trigger.exe.ToLowerInvariant())) { $errors.Add("trigger $($trigger.exe) must not be frozen or stopped (it is in $($seen[$trigger.exe.ToLowerInvariant()]))") }
     $large = & $norm $j.large 'large'
     if ($large -and $seen[$large.exe.ToLowerInvariant()] -eq 'stop') { $errors.Add("large $($large.exe) is in stop; it must be a program that may be frozen") }
@@ -1050,6 +1158,7 @@ function New-SampleFiles([string]$Dir) {
     New-Item -ItemType Directory -Force -Path $drop, (Join-Path $Dir 'missing'), (Join-Path $Dir 'beats'), (Join-Path $drop 'a folder') | Out-Null
     $ping = Join-Path $env:SystemRoot 'System32\PING.EXE'
     foreach ($n in 'ks-beta-drop1.exe', 'ks-beta-drop2.exe', 'ks-beta-drop3.exe', 'anydesk.exe') { Copy-Item -LiteralPath $ping -Destination (Join-Path $drop $n) }
+    Copy-Item -LiteralPath $ping -Destination (Join-Path $Dir $script:BuiltinTrigger)
     Write-Utf8 (Join-Path $drop 'notes.txt') "A text file for the drag and drop test; kaltstellen refuses it.`r`n"
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut((Join-Path $drop 'shortcut to drop1.lnk'))
@@ -1064,9 +1173,10 @@ function New-SampleFiles([string]$Dir) {
 
 # --- setup --------------------------------------------------------------------
 
+# The machine's own architecture, also from an emulated (x64 on ARM64) or a
+# 32-bit PowerShell: IsWow64Process2, else the environment of the process.
 function Get-Arch {
-    $a = $null
-    try { $a = [string][Runtime.InteropServices.RuntimeInformation]::OSArchitecture } catch {}
+    $a = switch ([KsBeta.Native]::NativeMachine()) { 0x8664 { 'AMD64' } 0xAA64 { 'ARM64' } 0x014C { 'x86' } default { $null } }
     if (-not $a) { $a = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE } }
     switch -Regex ($a) {
         '^(X64|AMD64)$' { 'x86_64' }
@@ -1132,20 +1242,60 @@ function Get-RunningKaltstellen {
     @(Get-Process -Name kaltstellen -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $script:SessionId })
 }
 
+# Variables set for the user or the machine reach every kaltstellen started
+# from Explorer or at sign-in, also those the script does not start.
+function Show-EnvWarning {
+    foreach ($n in $script:EnvNames + @('KALTSTELLEN_UPDATE_URL', 'KALTSTELLEN_TRIGGER_POLL_MS', 'KALTSTELLEN_TRIGGER_DEBOUNCE_MS')) {
+        foreach ($scope in 'User', 'Machine') {
+            $v = [Environment]::GetEnvironmentVariable($n, $scope)
+            if ($v) { Write-Note "Warning: $n is set for the $($scope.ToLowerInvariant()) ($v); kaltstellen started outside this script uses it." }
+        }
+    }
+}
+
+# The kaltstellen that setup quit, and how to start it again.
+function Show-QuitBefore {
+    foreach ($q in Get-List $script:State.quit_before) {
+        Write-Note "  Setup quit your kaltstellen ($($q.path)). After teardown start it again with:"
+        Write-Note "    & '$($q.path)' tray"
+    }
+}
+
+# Setup failed before it was ready: the executable that was there before
+# goes back in place, after the trays started from the new one have quit.
+function Undo-Install {
+    $i = $script:State.install
+    if (-not $i -or -not $script:State.exe_replaced) { return }
+    $pre = @(Get-List $i.preexisting)
+    if (-not $pre.Count) { return }
+    foreach ($t in Get-TrayWindows) { $null = Stop-TrayWindow $t 15 }
+    foreach ($p in Get-OurProcesses) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 500
+    foreach ($e in $pre) {
+        $saved = Join-Path $script:State.session_dir "backup\install\$($e.name)"
+        Copy-Item -LiteralPath $saved -Destination (Join-Path $script:State.install_dir $e.name) -Force
+        Write-Note "  put back the earlier $($e.name) in $($script:State.install_dir)"
+    }
+    Set-State 'exe_replaced' $false
+}
+
 function Invoke-Setup {
     $existing = Read-State
     if ($existing) {
         throw "a beta test is already set up (phase '$($existing.phase)', $($existing.session_dir)); run 'beta-test.ps1 teardown' first"
     }
-    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    # Unique also for two setups in the same second (tests).
+    $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + ([guid]::NewGuid().ToString('N').Substring(0, 4))
     $arch = Get-Arch
-    $tempRoot = Join-Path ([IO.Path]::GetTempPath()) "kaltstellen-beta-$stamp"
+    Show-EnvWarning
+    # Long names: %TEMP% may be an 8.3 path, which process paths never are.
+    $tempRoot = Join-Path (Get-LongPath ([IO.Path]::GetTempPath())) "kaltstellen-beta-$stamp"
     $sessionDir = Join-Path $script:BackupRoot $stamp
-    $realConfig = Join-Path $env:APPDATA 'kaltstellen'
-    $realData = Join-Path $env:LOCALAPPDATA 'kaltstellen'
-    $install = if ($InstallDir) { [IO.Path]::GetFullPath($InstallDir) }
+    $realConfig = Get-LongPath (Join-Path $env:APPDATA 'kaltstellen')
+    $realData = Get-LongPath (Join-Path $env:LOCALAPPDATA 'kaltstellen')
+    $install = if ($InstallDir) { Get-LongPath $InstallDir }
                elseif ($Sandbox) { Join-Path $tempRoot 'bin' }
-               else { Join-Path $env:LOCALAPPDATA 'Programs\kaltstellen' }
+               else { Get-LongPath (Join-Path $env:LOCALAPPDATA 'Programs\kaltstellen') }
     if ($install -match '(?i)\\Program Files( \(x86\))?\\|\\scoop\\apps\\') { Write-Note "Note: the updater refuses to replace a copy in $install." }
     $configDir = if ($Sandbox) { Join-Path $tempRoot 'config' } else { $realConfig }
     $dataDir = if ($Sandbox) { Join-Path $tempRoot 'data' } else { $realData }
@@ -1171,7 +1321,7 @@ function Invoke-Setup {
         }
     }
     $programs = $null
-    if (Test-Path -LiteralPath $list) { $programs = Read-ProgramList $list }
+    if (Test-Path -LiteralPath $list) { $programs = Read-ProgramList $list -TestDir (Join-Path $tempRoot 'test') }
 
     $running = Get-RunningKaltstellen
     $runKey = if ($Sandbox) { "$regRoot\Run" } else { $script:RealRunKey }
@@ -1195,7 +1345,12 @@ function Invoke-Setup {
     if ($running.Count) { Write-Note "  running kaltstellen processes: $(($running | ForEach-Object { "$($_.Id) $($_.Path)" }) -join '; ')" }
     if ($DryRun) { Write-Info ''; Write-Info '[dry run] nothing was changed.'; return }
 
+    $quitBefore = @()
     if ($running.Count -and -not $Sandbox) {
+        $quitBefore = @(foreach ($r in $running) {
+            $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($r.Id)" -ErrorAction SilentlyContinue
+            [pscustomobject]@{ path = $r.Path; command_line = $(if ($cim) { $cim.CommandLine }) }
+        })
         Write-Note 'kaltstellen runs already. Its configuration is about to be replaced, so it has to quit first.'
         Write-Note 'Quit resumes frozen programs; stopped programs stay stopped (switch to Neutral first if they should come back).'
         if (-not (Confirm-Yes 'Quit the running kaltstellen now?')) { throw 'setup cancelled: kaltstellen is still running' }
@@ -1225,7 +1380,7 @@ function Invoke-Setup {
         registry_root = $regRoot; config_dir = $configDir; data_dir = $dataDir
         exe = (Join-Path $install 'kaltstellen.exe'); install_dir = $install
         install = $null; backup = $null; env = [pscustomobject]$envMap; programs_file = $null
-        started = @(); helper_pids = @(); pending = $null; version = $null
+        started = @(); helper_pids = @(); pending = $null; version = $null; quit_before = $quitBefore
     }
     New-Item -ItemType Directory -Force -Path $script:BackupRoot | Out-Null
     Save-State
@@ -1233,7 +1388,22 @@ function Invoke-Setup {
     $script:ConfigDir = $configDir; $script:DataDir = $dataDir; $script:TestDir = $script:State.test_dir
     Set-KsEnvironment
     try {
-        # 1. The executable.
+        # 1. Backup, verified before anything changes of the real configuration, data and Run value.
+        if (-not $Sandbox) {
+            Write-Title 'Backup'
+            $b = [ordered]@{}
+            $b.config = Backup-Folder $realConfig (Join-Path $sessionDir 'backup\config')
+            $b.data = Backup-Folder $realData (Join-Path $sessionDir 'backup\data')
+            $b.run_value = Get-RunValue $script:RealRunKey
+            $b.verified = $true
+            $b.time = Get-UtcStamp
+            Write-Utf8 (Join-Path $sessionDir 'manifest.json') (([pscustomobject]$b) | ConvertTo-Json -Depth 6)
+            Set-State 'backup' ([pscustomobject]$b)
+            Write-Good "  configuration: $(if ($b.config.existed) { "$(@(Get-List $b.config.files).Count) file(s) backed up and verified" } else { 'did not exist' })"
+            Write-Good "  data:          $(if ($b.data.existed) { "$(@(Get-List $b.data.files).Count) file(s) backed up and verified" } else { 'did not exist' })"
+            Write-Good "  Run value:     $(if ($b.run_value.present) { $b.run_value.data } else { 'absent' })"
+        }
+        # 2. The executable.
         Write-Title 'Executable'
         $dl = Join-Path $sessionDir 'download'
         New-Item -ItemType Directory -Force -Path $dl | Out-Null
@@ -1268,27 +1438,12 @@ function Invoke-Setup {
             }
         }
         Set-State 'install' ([pscustomobject]$installed)
-        if (-not ($file -ieq $script:KsExe)) { Copy-Item -LiteralPath $file -Destination $script:KsExe -Force }
+        if (-not ((Get-LongPath $file) -ieq $script:KsExe)) { Copy-Item -LiteralPath $file -Destination $script:KsExe -Force; Set-State 'exe_replaced' $true }
         $v = Invoke-Ks --version
         Set-State 'version' (($v.Output | Select-Object -First 1))
         Write-Info "  installed $($script:KsExe): $($script:State.version)"
         if (-not $Exe -and $script:State.version -ne "kaltstellen $Version") { Write-Note "  expected 'kaltstellen $Version'" }
 
-        # 2. Backup of the real configuration, data and Run value.
-        if (-not $Sandbox) {
-            Write-Title 'Backup'
-            $b = [ordered]@{}
-            $b.config = Backup-Folder $realConfig (Join-Path $sessionDir 'backup\config')
-            $b.data = Backup-Folder $realData (Join-Path $sessionDir 'backup\data')
-            $b.run_value = Get-RunValue $script:RealRunKey
-            $b.verified = $true
-            $b.time = Get-UtcStamp
-            Write-Utf8 (Join-Path $sessionDir 'manifest.json') (([pscustomobject]$b) | ConvertTo-Json -Depth 6)
-            Set-State 'backup' ([pscustomobject]$b)
-            Write-Good "  configuration: $(if ($b.config.existed) { "$(@(Get-List $b.config.files).Count) file(s) backed up and verified" } else { 'did not exist' })"
-            Write-Good "  data:          $(if ($b.data.existed) { "$(@(Get-List $b.data.files).Count) file(s) backed up and verified" } else { 'did not exist' })"
-            Write-Good "  Run value:     $(if ($b.run_value.present) { $b.run_value.data } else { 'absent' })"
-        }
 
         # 3. Program list, sample files, test configuration.
         Write-Title 'Test configuration'
@@ -1305,6 +1460,9 @@ function Invoke-Setup {
         Write-Utf8 (Join-Path $configDir 'config.toml') (New-TestConfig $programs)
         # Automatic switching starts paused; test 'triggers' switches it on.
         Set-SettingsValue 'triggers_paused' $true
+        # Updates: check and ask for the whole test, so nothing installs by
+        # itself (teardown puts your own settings back).
+        Set-SettingsValue 'update' 'manual'
         $cc = Invoke-Ks check-config
         $cc.Output | ForEach-Object { Write-Info "  $_" }
         if ($cc.Code -ne 0) { throw "the generated configuration is not valid (exit code $($cc.Code)); check the program list" }
@@ -1320,10 +1478,13 @@ function Invoke-Setup {
         Set-State 'phase' 'ready'
     } catch {
         Write-Bad "setup failed: $($_.Exception.Message)"
-        Write-Bad "Run 'beta-test.ps1 teardown' to undo what setup did."
+        try { Undo-Install } catch { Write-Bad "  putting the earlier executable back failed: $($_.Exception.Message)" }
+        Write-Bad "Run 'beta-test.ps1 teardown' to undo the rest of what setup did."
+        Show-QuitBefore
         throw
     }
     Write-Title 'Ready'
+    Show-QuitBefore
     Write-Info "  Next: .\scripts\beta-test.ps1 run list"
     Write-Info "  Way out at any time: $(Get-WayOutCommand)"
     if ($Sandbox) {
@@ -1559,7 +1720,8 @@ function Test-Failure {
     $first = Get-First
     $missing = Join-Path (Join-Path $script:TestDir 'missing') 'ks-beta-missing.exe'
     if (Test-Path -LiteralPath $missing) {
-        Get-ProgramProcesses 'ks-beta-missing.exe' | Stop-Process -Force -ErrorAction SilentlyContinue
+        # Only the copy in the test folder (started by an earlier run of this test).
+        Get-ProgramProcesses 'ks-beta-missing.exe' | Where-Object { $_.Path -and (Get-LongPath $_.Path) -ieq $missing } | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 300
         Remove-Item -LiteralPath $missing -Force
     }
@@ -1672,16 +1834,22 @@ function Start-HelperTray([string]$Hotkey) {
     } finally {
         foreach ($n in $script:EnvNames) { [Environment]::SetEnvironmentVariable($n, $saved[$n], 'Process') }
     }
-    Set-State 'helper_pids' (@(Get-HelperPids) + @($p.Id))
+    $record = [pscustomobject]@{ pid = $p.Id; start_ticks = (Get-StartTicks $p) }
+    Set-State 'helper_pids' (@(Get-List $script:State.helper_pids) + @($record))
     $null = Wait-Until 15 { @(Get-TrayWindows | Where-Object { [int]$_.Pid -eq $p.Id }).Count }
     Start-Sleep -Milliseconds 500
     $p
 }
 
+# Quits the helper trays: only a process that is still the one started (same
+# start time) from the installed executable.
 function Stop-HelperTrays {
-    foreach ($id in Get-HelperPids) {
-        $w = Get-TrayWindows | Where-Object { [int]$_.Pid -eq $id } | Select-Object -First 1
-        if ($w) { $null = Stop-TrayWindow $w 10 } else { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
+    foreach ($h in Get-List $script:State.helper_pids) {
+        if (-not $h.pid) { continue }
+        $p = Get-RecordedProcess $h.pid $h.start_ticks $script:KsExe
+        if (-not $p) { continue }
+        $w = Get-TrayWindows | Where-Object { [int]$_.Pid -eq $p.Id } | Select-Object -First 1
+        if ($w) { $null = Stop-TrayWindow $w 10 } else { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
     }
     Set-State 'helper_pids' @()
 }
@@ -1790,13 +1958,22 @@ function Test-Stop {
         @{ ok = $ok; m = $m; note = $(if ($stayed) { 'with on_timeout = "keep" a program that asks to save stays open and is reported (KS108)' }) }
     } -Ask 'The programs closed (or asked to save and stayed, reported)?'
     Invoke-Step stop restart 'Neutral starts them again (restart_on_neutral)' -Prepare {
+        $script:Ctx.restart_from = [DateTime]::UtcNow.AddSeconds(-1)
         $r = Switch-Profile neutral
         [ordered]@{ exit = $r.Code; ms = $r.Ms }
     } -Check {
         param($since)
         Start-Sleep -Seconds 3
         $m = [ordered]@{}; $ok = $true
-        foreach ($p in $running) { $alive = (Get-ProgramProcesses $p.exe).Count -gt 0; $m[$p.exe] = $alive; if ($p.restart -and -not $alive) { $ok = $false } }
+        foreach ($p in $running) {
+            $procs = Get-ProgramProcesses $p.exe
+            $alive = $procs.Count -gt 0; $m[$p.exe] = $alive; if ($p.restart -and -not $alive) { $ok = $false }
+            # A test fixture that kaltstellen started again for this test is
+            # ended by teardown like one the script started.
+            if ($p.disposable) {
+                foreach ($q in $procs) { try { if ($q.StartTime.ToUniversalTime() -ge $script:Ctx.restart_from) { Register-Started $q $p } } catch {} }
+            }
+        }
         @{ ok = $ok; m = $m }
     } -Ask 'The programs came back and work?'
 }
@@ -2042,9 +2219,11 @@ function Test-T14 {
         $m.taskbar_ping_frozen_ms = [KsBeta.Native]::Ping($tray, 3000)
         $m.explorer_responding = @(Get-Process explorer -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $script:SessionId } | ForEach-Object { $_.Responding })
         $folder = Join-Path $script:TestDir 'dragdrop'
+        # Only the window opened here is measured and closed, not one of yours.
+        $existing = @([KsBeta.Native]::Windows() | Where-Object { $_.Class -eq 'CabinetWClass' } | ForEach-Object { $_.Handle })
         $sw = [Diagnostics.Stopwatch]::StartNew()
         Start-Process explorer.exe -ArgumentList (Quote-Arg $folder)
-        $h = Wait-Until 15 { [KsBeta.Native]::Windows() | Where-Object { $_.Class -eq 'CabinetWClass' -and $_.Title -like '*dragdrop*' } | Select-Object -First 1 } 50
+        $h = Wait-Until 15 { [KsBeta.Native]::Windows() | Where-Object { $_.Class -eq 'CabinetWClass' -and $existing -notcontains $_.Handle -and $_.Title -like '*dragdrop*' } | Select-Object -First 1 } 50
         $m.explorer_window_open_ms = if ($h) { $sw.ElapsedMilliseconds } else { -1 }
         if ($h) {
             Start-Sleep -Seconds 1
@@ -2195,13 +2374,14 @@ function Test-Updates {
     $null = Start-Tray
     $settings = Join-Path $script:ConfigDir 'settings.json'
     Invoke-Step updates modes 'Update modes in the menu (manual-checks "Updates" 1)' -Human -Say @(
-        'In the tray menu choose "Updates: check and ask", then "Updates: off", then "Updates: install automatically" again.',
-        'The check mark moves each time. (Choosing "install automatically" checks GitHub once: that is the product, not this script.)'
+        'The test runs with "Updates: check and ask" (set by setup). In the tray menu choose "Updates: off", then "Updates: check and ask" again.',
+        'The check mark moves each time. Do not choose "install automatically": it would install a newer release by itself.'
     ) -Check {
         param($since)
         $modes = @(Find-Log 'tray: update mode ' $since -All | ForEach-Object { ($_ -split 'update mode ')[-1].Trim() })
         $s = Read-JsonFile $settings
-        @{ ok = ($modes -contains 'manual' -and $modes -contains 'off'); m = [ordered]@{ modes_logged = $modes; settings_update = $(if ($s) { $s.update }) } }
+        $final = if ($s) { $s.update } else { $null }
+        @{ ok = ($modes -contains 'manual' -and $modes -contains 'off' -and $final -eq 'manual'); m = [ordered]@{ modes_logged = $modes; settings_update = $final } }
     } -Ask 'The check mark moved each time?'
 
     $uj = Join-Path $script:DataDir 'update.json'
@@ -2217,9 +2397,11 @@ function Test-Updates {
         ) -Ask 'The menu shows the line as described?'
     } finally {
         if ($had) { Write-Utf8 $uj $old } elseif (Test-Path -LiteralPath $uj) { Remove-Item -LiteralPath $uj -Force }
+        # The tray keeps the offer it read until it reads update.json again.
+        if (Get-MainTray) { Set-Neutral; Stop-Tray; $null = Start-Tray }
     }
 
-    if ($script:IsUnattended -or -not (Confirm-Yes '   Is a newer beta released and do you want to test installing it now?')) {
+    if ($script:IsUnattended -or -not (Confirm-Yes '   Is a newer beta released and do you want to install it now (it is downloaded from GitHub and replaces the installed copy)?')) {
         Add-Skip updates install 'no newer release to install yet (beta-test section 4)'
         return
     }
@@ -2229,7 +2411,7 @@ function Test-Updates {
     $null = Request-Running $script:Programs.suspend
     $auto = Confirm-Yes '   Test the automatic install (y) or the install on request with frozen programs (n)?'
     Invoke-Step updates install $(if ($auto) { 'Automatic install while neutral (step 1a)' } else { 'Install on request with frozen programs (step 4)' }) -Freeze -Human -Say $(if ($auto) {
-            @('Keep "Updates: install automatically". Apply beta-freeze, then choose "Updates: install automatically" again to check now: nothing is installed while the profile is active.',
+            @('Choose "Updates: install automatically". Apply beta-freeze, then choose "Updates: install automatically" again to check now: nothing is installed while the profile is active.',
               'Then choose Neutral: the update installs without a window, the tray icon disappears briefly and comes back. Wait for it, then press Enter.')
         } else {
             @('Choose "Updates: check and ask". Apply beta-freeze. Then run in another terminal:',
@@ -2243,12 +2425,15 @@ function Test-Updates {
         $f = Get-FreezeReport $script:Programs.suspend
         $oldNow = if (Test-Path -LiteralPath $oldExe) { Get-Sha256 $oldExe } else { $null }
         Set-State 'version' $after
+        # Back to check and ask for the rest of the test.
+        $null = Invoke-Ks update --mode manual
         @{ ok = ($after -ne $before -and $trays -eq 1 -and $f.none -and $oldNow -and $oldNow -ne $oldHash)
            m = [ordered]@{ version_before = $before; version_after = $after; trays = $trays; frozen = $f.detail; old_exe_next_to_it = [bool]$oldNow } }
     } -Ask 'As described? Did SmartScreen warn when the new tray started (note it)?' -AskNote
 }
 
 function Send-SessionEnd($Tray) {
+    if (-not $Tray) { throw 'no tray of the test runs; nothing to send the end of the session to' }
     $q = [KsBeta.Native]::Send($Tray.Handle, $script:WM_QUERYENDSESSION, 0, [int64]$script:ENDSESSION_LOGOFF, 10000)
     $e = [KsBeta.Native]::Send($Tray.Handle, $script:WM_ENDSESSION, 1, [int64]$script:ENDSESSION_LOGOFF, 10000)
     Start-Sleep -Milliseconds 500
@@ -2266,13 +2451,13 @@ function Test-Session([string]$Kind) {
     if ($id -eq 't7' -and $tr -and $tr.path -and -not $script:IsUnattended) {
         $useTrigger = Confirm-Yes '   Also step 11 of "Automatic triggers": sign out while the trigger has applied its profile?'
     }
+    # Unpausing restarts the tray, which would resume what is frozen: first.
+    if ($useTrigger) { $null = Request-Closed $tr; Set-TriggersPaused $false }
     $running = Request-Running ($script:Programs.suspend + $script:Programs.stop)
-    $expected = 'beta-session'
     Invoke-Step $id prepare "$(if ($id -eq 't7') { 'Sign-out' } else { 'Shutdown' }) with programs frozen: prepare ($Kind)" -Freeze -Prepare {
         $r = Switch-Profile 'beta-session'
         $m = [ordered]@{ switch_exit = $r.Code }
         if ($useTrigger) {
-            Set-TriggersPaused $false
             $s = Get-UtcStamp
             $null = Start-Program $tr
             $null = Wait-Log 'switch to "beta-trigger" finished' $s 25
@@ -2281,14 +2466,23 @@ function Test-Session([string]$Kind) {
         $m
     } -Check {
         param($since)
-        $f = Get-FreezeReport $script:Programs.suspend
-        @{ ok = $f.all; m = [ordered]@{ frozen = $f.detail; active = (Get-Active) } }
+        # What is frozen at sign-out is what the active profile freezes: with
+        # the trigger, beta-trigger (only the first program).
+        $active = Get-Active
+        $script:Ctx.session_active = $active
+        $script:Ctx.session_frozen = if ($active -eq 'beta-trigger') { @(Get-First) } else { $script:Programs.suspend }
+        $f = Get-FreezeReport $script:Ctx.session_frozen
+        @{ ok = $f.all; m = [ordered]@{ frozen = $f.detail; active = $active } }
     }
+    # The tray offers the active profile, or for one a trigger applied the
+    # profile from before the trigger (U4, decided detail 8).
+    $active = $script:Ctx.session_active
+    $expected = if ($active -eq 'beta-trigger') { 'beta-session' } else { $active }
     $boot = ConvertTo-Stamp (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
     $marker = [pscustomobject]@{
-        test = $id; since = (Get-UtcStamp (-2000)); expected_offer = $expected; boot = $boot
+        test = $id; since = (Get-UtcStamp (-2000)); expected_offer = $expected; active = $active; boot = $boot
         simulated = [bool]$SimulateSessionEnd; trigger = $useTrigger; sandbox = [bool]$script:State.sandbox
-        frozen = @($script:Programs.suspend | ForEach-Object { $_.exe })
+        frozen = @(Get-List $script:Ctx.session_frozen | ForEach-Object { $_.exe })
     }
     Set-State 'pending' $marker
     if ($SimulateSessionEnd) {
@@ -2311,7 +2505,15 @@ function Test-Session([string]$Kind) {
         return
     }
     $arg = if ($id -eq 't7') { @('/l') } elseif ($Restart) { @('/r', '/t', '0') } else { @('/s', '/t', '0') }
+    # From here on the script does nothing more: no further tests, no resume.
+    $script:SessionEnding = $true
     & shutdown.exe @arg
+    if ($LASTEXITCODE -ne 0) {
+        $script:SessionEnding = $false
+        Set-State 'pending' $null
+        Add-Result $id run 'fail' $false $null ([ordered]@{ shutdown_exit = $LASTEXITCODE }) 'shutdown.exe refused; nothing ended' (Get-UtcStamp)
+        Invoke-WayOut
+    }
 }
 
 function Complete-PendingSession {
@@ -2339,15 +2541,24 @@ function Complete-PendingSession {
         resume_ms = $ms; timed_out = $timedOut; stopped_cleared = $(if ($cleared) { $cleared.Substring(24).Trim() })
         rebooted = ($bootNow -ne $p.boot); simulated = $p.simulated
     }
-    Add-Result $id resume $(if ($start -and $end -and -not $timedOut) { 'pass' } else { 'fail' }) ([bool]($start -and $end -and -not $timedOut)) $null $m $(if ($ms) { "resume took $ms ms (the open 4 s wait, open-decisions deferred item 1)" }) $p.since
+    # The report gets the log lines of the session end only, not the time between.
+    $from = if ($start) { $start.Substring(0, 24) } else { $p.since }
+    $to = if ($end) { $end.Substring(0, 24) } else { (ConvertFrom-UtcStamp $from).AddSeconds(10).ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", $script:Invariant) }
+    Add-Result $id resume $(if ($start -and $end -and -not $timedOut) { 'pass' } else { 'fail' }) ([bool]($start -and $end -and -not $timedOut)) $null $m $(if ($ms) { "resume took $ms ms (the open 4 s wait, open-decisions deferred item 1)" }) $from $to
 
     $sessionEnd = if ($start) { $start.Substring(0, 24) } else { $p.since }
     $trayRan = [bool](Get-MainTray)
     $startedAfter = Find-Log 'tray: started (pid' $sessionEnd
+    if ($startedAfter) {
+        # The first lines after sign-in: the tray starting and its offer.
+        $sf = $startedAfter.Substring(0, 24)
+        Add-Result $id sign-in-log 'n/a' $null $null ([ordered]@{}) 'log lines of the tray start after the session end' $sf ((ConvertFrom-UtcStamp $sf).AddSeconds(15).ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", $script:Invariant))
+    }
     if (-not $p.sandbox -and -not $p.simulated) {
         $rv = Get-RunValue $script:RealRunKey
         $ok = $trayRan -and [bool]$startedAfter -and $rv.present
-        Add-Result signin at-sign-in $(if ($ok) { 'pass' } else { 'fail' }) $ok $null ([ordered]@{ tray_running = $trayRan; started_line = $(if ($startedAfter) { $startedAfter.Substring(0, 23) }); run_value = $rv.data }) 'the tray started at sign-in' $p.since
+        $sf = if ($startedAfter) { $startedAfter.Substring(0, 24) } else { Get-UtcStamp }
+        Add-Result signin at-sign-in $(if ($ok) { 'pass' } else { 'fail' }) $ok $null ([ordered]@{ tray_running = $trayRan; started_line = $(if ($startedAfter) { $startedAfter.Substring(0, 23) }); run_value = $rv.data }) 'the tray started at sign-in' $sf $sf
     }
     $t0 = Get-UtcStamp (-500)
     if (-not $trayRan) { $null = Start-Tray }
@@ -2411,6 +2622,8 @@ function Invoke-Run {
     if (-not $Target -or $Target -eq 'list') { Show-TestList; return }
     $ids = if ($Target -eq 'all') { @($script:Catalog.Keys | Where-Object { -not $script:Catalog[$_].session }) } else { @($Target.Split(',') | ForEach-Object { $_.Trim().ToLowerInvariant() }) }
     foreach ($id in $ids) { if (-not $script:Catalog.Contains($id)) { throw "unknown test '$id'; run 'beta-test.ps1 run list'" } }
+    if (@($ids | Where-Object { $script:Catalog[$_].session }).Count -and $ids.Count -gt 1) { throw 't7 and t20 end the session: run each of them on its own' }
+    Show-EnvWarning
     if ($script:State.pending) {
         if (@($ids | Where-Object { $script:Catalog[$_].session }).Count) { throw "a session test ($($script:State.pending.test)) waits for 'collect'; run collect first" }
         Write-Note "A session test ($($script:State.pending.test)) waits for 'collect'; run collect first after signing in again."
@@ -2420,21 +2633,32 @@ function Invoke-Run {
         Write-Title "######## ${id}: $($t.title) ($($t.ref))"
         try { Invoke-Expression $t.fn }
         catch {
+            if ($script:SessionEnding) { return }
             if (Test-Abort $_) { Write-Note 'Run stopped. Everything was resumed.'; return }
             Write-Bad "test $id failed: $($_.Exception.Message)"
             Add-Result $id error 'fail' $false $null ([ordered]@{}) ('error: ' + $_.Exception.Message) (Get-UtcStamp)
             try { Invoke-WayOut } catch {}
         }
+        if ($script:SessionEnding) { return }
     }
     Show-TestList
 }
 
 # --- collect --------------------------------------------------------------------
 
+# The report names neither the profile folder (long or 8.3 form, also with
+# doubled backslashes as in JSON), the user nor the computer.
 function Protect-Text([string]$Text) {
     if (-not $Text) { return $Text }
-    $Text = [regex]::Replace($Text, [regex]::Escape($env:USERPROFILE), '%USERPROFILE%', 'IgnoreCase')
-    $Text = [regex]::Replace($Text, [regex]::Escape($env:USERPROFILE.Replace('\', '\\')), '%USERPROFILE%', 'IgnoreCase')
+    $profiles = @(Get-LongPath $env:USERPROFILE; [KsBeta.Native]::ShortPath($env:USERPROFILE); $env:USERPROFILE) | Where-Object { $_ } | Sort-Object -Unique
+    foreach ($pr in $profiles) {
+        foreach ($form in @($pr, $pr.Replace('\', '\\'))) { $Text = [regex]::Replace($Text, [regex]::Escape($form), '%USERPROFILE%', 'IgnoreCase') }
+    }
+    foreach ($pair in @(@($env:USERNAME, '%USERNAME%'), @($env:COMPUTERNAME, '%COMPUTERNAME%'))) {
+        if ($pair[0] -and $pair[0].Length -ge 2) {
+            $Text = [regex]::Replace($Text, '(?<![A-Za-z0-9])' + [regex]::Escape($pair[0]) + '(?![A-Za-z0-9])', $pair[1], 'IgnoreCase')
+        }
+    }
     $Text
 }
 
@@ -2442,6 +2666,15 @@ function Invoke-Collect {
     Use-State
     Complete-PendingSession
     $results = Get-Results
+    if ($NoProgramLists) {
+        # Output of "kaltstellen list" and "status --unassigned" names running programs.
+        foreach ($r in $results) {
+            if (-not $r.measure) { continue }
+            foreach ($n in @($r.measure.PSObject.Properties | Where-Object { $_.Name -match '^(list |status --unassigned$|unassigned$)' } | ForEach-Object { $_.Name })) {
+                $r.measure.PSObject.Properties.Remove($n)
+            }
+        }
+    }
     $stage = Join-Path $script:BackupRoot 'staging'
     Remove-Tree $stage
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
@@ -2462,12 +2695,14 @@ function Invoke-Collect {
             } else { $merged.Add([pscustomobject]@{ from = $w.from; to = $w.to }) }
         }
         $keep = New-Object System.Collections.Generic.List[string]
-        $i = 0
-        foreach ($l in Get-LogLines '0000') {
-            $ts = $l.Substring(0, [math]::Min(24, $l.Length))
+        $i = 0; $ts = ''
+        # Assigned first: the function returns its lines as one array.
+        $all = Get-LogLines '0000'
+        foreach ($l in $all) {
+            # A line without a time stamp belongs to the line before it.
+            if ($l.Length -ge 24 -and $l[4] -eq '-' -and $l[10] -eq 'T') { $ts = $l.Substring(0, 24) }
             while ($i -lt $merged.Count -and [string]::CompareOrdinal($ts, $merged[$i].to) -gt 0) { $i++ }
-            if ($i -ge $merged.Count) { break }
-            if ([string]::CompareOrdinal($ts, $merged[$i].from) -ge 0) { $keep.Add($l) }
+            if ($i -lt $merged.Count -and [string]::CompareOrdinal($ts, $merged[$i].from) -ge 0) { $keep.Add($l) }
         }
         & $put 'kaltstellen-log-excerpt.txt' (($keep.ToArray()) -join "`r`n")
         $os = Get-CimInstance Win32_OperatingSystem
@@ -2498,8 +2733,11 @@ function Invoke-Collect {
         Write-Title 'Report'
         Write-Info "  $($results.Count) step(s): $pass pass, $fail fail, $($results.Count - $pass - $fail) skipped or n/a"
         Write-Good "  $zip"
-        Write-Info '  It holds the results, the kaltstellen.log lines of the test steps, version, Windows version, state.json and settings.json;'
-        Write-Info '  your profile folder is written as %USERPROFILE%. Look at it before you send it.'
+        Write-Info "  $($keep.Count) kaltstellen.log line(s) in the excerpt"
+        Write-Info '  It holds the results, the kaltstellen.log lines of the test steps, version, Windows version, state.json and settings.json.'
+        if ($NoProgramLists) { Write-Info '  The output of "kaltstellen list" and "status --unassigned" was left out (-NoProgramLists).' }
+        else { Write-Note '  The results include the output of "kaltstellen list" and "status --unassigned": names of programs that ran. -NoProgramLists leaves them out.' }
+        Write-Info '  Your profile folder, user name and computer name are written as %USERPROFILE%, %USERNAME%, %COMPUTERNAME%. Look at it before you send it.'
     } finally { Remove-Tree $stage }
 }
 
@@ -2508,6 +2746,9 @@ function Invoke-Collect {
 function Restore-Folder($Backup) {
     $target = $Backup.path
     if ($Backup.existed) {
+        # The backup must be complete and unchanged before the target is touched.
+        $bad = if (Test-Path -LiteralPath $Backup.backup) { Test-Manifest $Backup.backup $Backup.files } elseif (@(Get-List $Backup.files).Count) { 'the backup folder is missing' } else { $null }
+        if ($bad) { throw "backup $($Backup.backup) does not match its manifest ($bad); $target was left as it is" }
         if (Test-Path -LiteralPath $target) { Clear-Folder $target } else { New-Item -ItemType Directory -Path $target | Out-Null }
         if (Test-Path -LiteralPath $Backup.backup) {
             Get-ChildItem -LiteralPath $Backup.backup -Force | Copy-Item -Destination $target -Recurse -Force
@@ -2566,6 +2807,7 @@ function Invoke-Teardown {
         $r = Invoke-Ks recover
         $n = Invoke-Ks switch neutral
         $done.Add("recover: exit $($r.Code); neutral: exit $($n.Code)")
+        Stop-HelperTrays
         foreach ($t in Get-TrayWindows) {
             if (Stop-TrayWindow $t 25) { $done.Add("tray $($t.Pid) quit") } else { $done.Add("tray $($t.Pid) ended") }
         }
@@ -2575,14 +2817,16 @@ function Invoke-Teardown {
         $done.Add("WARNING: $($script:KsExe) is missing, 'recover' could not run; if anything is still frozen, run recover with another kaltstellen.exe")
     }
     foreach ($p in Get-OurProcesses) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; $done.Add("ended kaltstellen $($p.Id)") }
+    Set-State 'helper_pids' @()
+    # WebView2 processes of the main window that use this data folder (only
+    # those: the command line names the folder) hold files in it.
+    foreach ($id in Get-WebViewProcesses) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue; $done.Add("ended msedgewebview2 $id of the test's data folder") }
     Start-Sleep -Milliseconds 800
     # 2. Programs the test started.
     foreach ($e in Get-List $s.started) {
-        $p = Get-Process -Id $e.pid -ErrorAction SilentlyContinue
+        $p = Get-RecordedProcess $e.pid $e.start_ticks $null
         if (-not $p) { continue }
-        $ticks = try { $p.StartTime.ToUniversalTime().Ticks } catch { 0 }
-        if ($e.start_ticks -and $ticks -ne $e.start_ticks) { continue }
-        $inTemp = $p.Path -and $s.temp_root -and $p.Path.StartsWith($s.temp_root, [StringComparison]::OrdinalIgnoreCase)
+        $inTemp = $p.Path -and (Test-Below (Get-LongPath $p.Path) $s.temp_root)
         if ($e.disposable -or $inTemp) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; $done.Add("ended $($e.exe) ($($e.pid))") }
         else {
             $null = $p.CloseMainWindow()
@@ -2590,16 +2834,8 @@ function Invoke-Teardown {
             else { $done.Add("closed $($e.exe) ($($e.pid))") }
         }
     }
-    # Disposable programs (test fixtures) also when kaltstellen started them (restart_on_neutral).
-    if ($s.programs_file -and (Test-Path -LiteralPath $s.programs_file)) {
-        $pl = Read-ProgramList $s.programs_file -NoFail
-        foreach ($prog in @($pl.suspend) + @($pl.stop) + @($pl.trigger, $pl.large, $pl.tray_program)) {
-            if (-not $prog -or -not $prog.disposable) { continue }
-            foreach ($p in Get-ProgramProcesses $prog.exe) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; $done.Add("ended $($prog.exe) ($($p.Id))") }
-        }
-    }
     if ($s.temp_root) {
-        foreach ($p in Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($s.temp_root + '\', [StringComparison]::OrdinalIgnoreCase) }) {
+        foreach ($p in Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and (Test-Below (Get-LongPath $_.Path) $s.temp_root) }) {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; $done.Add("ended $($p.Name) ($($p.Id)) from the test folder")
         }
     }
@@ -2622,7 +2858,7 @@ function Invoke-Teardown {
         if (Test-Path "HKCU:\$($s.registry_root)") { Remove-Item -LiteralPath "HKCU:\$($s.registry_root)" -Recurse -Force; $done.Add("removed HKCU\$($s.registry_root)") }
     }
     $install = $s.install
-    $inTempInstall = $s.temp_root -and $s.install_dir.StartsWith($s.temp_root, [StringComparison]::OrdinalIgnoreCase)
+    $inTempInstall = Test-Below $s.install_dir $s.temp_root
     if ($Uninstall -and -not $inTempInstall -and $install) {
         foreach ($n in 'kaltstellen.exe', 'kaltstellen.old.exe') {
             $f = Join-Path $s.install_dir $n
@@ -2651,6 +2887,7 @@ function Invoke-Teardown {
     if (-not $Uninstall -and -not $inTempInstall) { Write-Info "  kept $($script:KsExe) (teardown -Uninstall removes it)" }
     Move-Item -LiteralPath $script:StateFile -Destination (Join-Path $s.session_dir 'state.done.json') -Force
     Write-Info "  results and backups stay in $($s.session_dir)"
+    Show-QuitBefore
 }
 
 function Show-Status {

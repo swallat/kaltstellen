@@ -38,22 +38,33 @@ If PowerShell refuses to run scripts, start it with
   script's only network access.
 - Copies `%APPDATA%\kaltstellen`, `%LOCALAPPDATA%\kaltstellen` and the
   Run value `kaltstellen` to `%LOCALAPPDATA%\kaltstellen-beta-backup\<time>\`
-  and checks the copies (SHA-256 of every file) before it changes anything.
-  A running kaltstellen is quit first, after asking. A second setup without
-  teardown is refused.
+  and checks the copies (SHA-256 of every file) before it changes anything,
+  the executable included; if setup fails before it is ready, an executable
+  it replaced is put back. A running kaltstellen is quit first, after
+  asking, and setup says how to start it again afterwards. A second setup
+  without teardown is refused. A `KALTSTELLEN_*` variable set for the user
+  or the machine is reported, because it reaches every kaltstellen.
 - Reads `%LOCALAPPDATA%\kaltstellen-beta-backup\beta-test.json`, the list of
   programs the test may touch: which may be frozen, which may be stopped,
-  one as trigger, a large one for T19, optionally one you start as
-  administrator (T18) and one with a tray icon (T22). On the first setup it
-  is copied from [beta-test.example.json](../scripts/beta-test.example.json)
-  and opened in Notepad. Nothing outside this list is frozen or stopped;
-  stop entries get `on_timeout = "keep"` unless the list says `kill`.
+  a large one for T19, optionally one you start as administrator (T18) and
+  one with a tray icon (T22). The trigger is by default `"builtin"`: a
+  renamed copy of `ping.exe` in the test folder that the script starts and
+  ends itself, so the trigger test never touches a program of yours. On the
+  first setup the list is copied from
+  [beta-test.example.json](../scripts/beta-test.example.json) and opened in
+  Notepad. Nothing outside this list is frozen or stopped; stop entries get
+  `on_timeout = "keep"` unless the list says `kill`. The script closes or
+  ends only processes it started itself (PID and start time recorded); for
+  any other process of a listed name it asks you and never forces it.
 - Writes the test configuration (profiles `beta-freeze`, `beta-stop`,
   `beta-failure`, `beta-dragdrop`, `beta-trigger`, `beta-trim-on`,
   `beta-trim-off`, `beta-elevated`, `beta-session`, `beta-altgr`) and sample
   files for drag and drop in `%TEMP%\kaltstellen-beta-<time>\test`, and
   starts the tray. Automatic switching starts paused, so the trigger
-  program does nothing before test `triggers`.
+  program does nothing before test `triggers`. Updates are set to `check and
+  ask` for the whole test, so nothing installs by itself; the product itself
+  still checks GitHub once a day in this mode (only `off` stops that), and
+  test `updates` installs only if you say so.
 - `-Sandbox` leaves the real folders and the Run key alone: configuration,
   data, executable and test files live in `%TEMP%\kaltstellen-beta-<time>`,
   the Run value in `HKCU\Software\kaltstellen-beta-<time>\Run`, and the
@@ -96,11 +107,12 @@ backup.
 | `updates` | modes in the log, version, `kaltstellen.old.exe`, one tray | install | SmartScreen |
 | `t7`, `t20` | resume time from the log, last profile offered not applied, tray at sign-in | | screens at sign-out or shutdown |
 
-**T7 and T20** end the session. The script prepares them (programs frozen,
+**T7 and T20** end the session and run on their own (`run t7`, never with
+other tests). The script prepares them (programs frozen,
 optionally the trigger active for "Automatic triggers" step 11), records a
 pending marker and signs out (`shutdown /l`) or shuts down
 (`shutdown /s /t 0`, `-Restart` for `/r`) only after you type `SIGNOUT` or
-`SHUTDOWN`. After signing in again, `collect` evaluates them: the time from
+`SHUTDOWN`; after that it does nothing more. After signing in again, `collect` evaluates them: the time from
 `tray: session is ending; resuming everything` to `tray: end of session
 finished` (or `resuming did not finish in time`), whether the tray started
 at sign-in and offers the last profile without applying it.
@@ -108,15 +120,22 @@ at sign-in and offers the last profile without applying it.
 **collect** writes `kaltstellen-beta-report-<time>.zip` to the Desktop
 (`-ReportDir`): the results, the `kaltstellen.log` lines of the test steps,
 `kaltstellen --version`, the Windows version, `state.json` and
-`settings.json`. Your profile folder appears as `%USERPROFILE%`; nothing else
-is collected. Look at it before you send it.
+`settings.json`. For T7 and T20 only the log lines of the session end and
+of the first tray start after it are taken, not the time between. The
+results include the output of `kaltstellen list` and `status
+--unassigned`, which names programs that ran; `collect -NoProgramLists`
+leaves it out. Your profile folder (also in its short 8.3 form), user name
+and computer name appear as `%USERPROFILE%`, `%USERNAME%` and
+`%COMPUTERNAME%`; nothing else is collected. Look at it before you send it.
 
 **teardown** is safe to repeat, also after an abort or a crash: `recover`,
 `neutral`, quit the tray (and windows) it started, end the programs it
 started (fixtures and copies in the test folder are killed, your programs
-are asked to close), put the backed-up folders and the Run value back
-exactly (and remove them if they did not exist before), remove the test
-folder and test registry key. `-Uninstall` also removes the installed
+are asked to close), end the WebView2 processes of the test's data folder,
+check each backup against its manifest and only then put the folders and
+the Run value back exactly (and remove them if they did not exist before),
+remove the test folder (links in it are removed, never followed) and test
+registry key. `-Uninstall` also removes the installed
 executable (and puts back one that setup replaced). Results and backups
 stay in `%LOCALAPPDATA%\kaltstellen-beta-backup`; delete that folder when
 you no longer need them.

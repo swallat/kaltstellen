@@ -10,10 +10,14 @@
 mod common;
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use common::*;
+use kaltstellen::autostart::{RUN_KEY, VALUE};
 use kaltstellen::win32::registry;
 
 const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/beta-test.ps1");
@@ -32,30 +36,80 @@ fn command(ps: &Path) -> Command {
     command
 }
 
+/// The longest one run of the script may take (the slow ARM64 runner
+/// included); a hung run fails the test instead of the whole CI job.
+const RUN_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Runs `command` to the end or until [`RUN_TIMEOUT`] (then it is killed):
+/// its exit success, `None` on the timeout, and its output.
+fn run(mut command: Command) -> (Option<bool>, String) {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cannot run powershell");
+    let drain = |mut pipe: Box<dyn Read + Send>| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = pipe.read_to_end(&mut bytes);
+            String::from_utf8_lossy(&bytes).into_owned()
+        })
+    };
+    let out = drain(Box::new(child.stdout.take().unwrap()));
+    let err = drain(Box::new(child.stderr.take().unwrap()));
+    let deadline = Instant::now() + RUN_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            break Some(status);
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        thread::sleep(Duration::from_millis(200));
+    };
+    let text = format!("{}{}", out.join().unwrap(), err.join().unwrap());
+    (status.map(|s| s.success()), text)
+}
+
 /// Runs the script with `args`; panics with its output unless it exits 0.
 fn script(ps: &Path, args: &[&str]) -> String {
-    let out = command(ps)
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-        ])
-        .arg(SCRIPT)
-        .args(args)
-        .output()
-        .expect("cannot run powershell");
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        out.status.success(),
-        "beta-test.ps1 {args:?} failed:\n{text}"
-    );
+    let mut c = command(ps);
+    c.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+    ])
+    .arg(SCRIPT)
+    .args(args);
+    let (ok, text) = run(c);
+    let ok = ok.unwrap_or_else(|| {
+        panic!("beta-test.ps1 {args:?} did not end within {RUN_TIMEOUT:?}:\n{text}")
+    });
+    assert!(ok, "beta-test.ps1 {args:?} failed:\n{text}");
     text
+}
+
+/// What the real configuration looks like: the Run value and the files of
+/// %APPDATA%\kaltstellen (name and size). The sandbox must not change either.
+fn real_state() -> (Option<String>, Vec<(String, u64)>) {
+    let run = registry::read(RUN_KEY, VALUE).expect("read the Run key");
+    let mut files = Vec::new();
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        let dir = Path::new(&appdata).join("kaltstellen");
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                files.push((entry.file_name().to_string_lossy().into_owned(), len));
+            }
+        }
+    }
+    files.sort();
+    (run, files)
 }
 
 fn str_of(path: &Path) -> &str {
@@ -69,11 +123,9 @@ fn processes_below(ps: &Path, dir: &Path) -> String {
         "Get-Process | Where-Object {{ $_.Path -and $_.Path.StartsWith('{}', 'OrdinalIgnoreCase') }} | ForEach-Object {{ \"$($_.Id) $($_.Path)\" }}",
         str_of(dir).replace('\'', "''")
     );
-    let out = command(ps)
-        .args(["-NoProfile", "-NonInteractive", "-Command", &filter])
-        .output()
-        .expect("cannot run powershell");
-    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    let mut c = command(ps);
+    c.args(["-NoProfile", "-NonInteractive", "-Command", &filter]);
+    run(c).1.trim().to_owned()
 }
 
 /// Runs `teardown` when the test fails half-way, so a failed run leaves
@@ -86,18 +138,18 @@ struct Teardown<'a> {
 impl Drop for Teardown<'_> {
     fn drop(&mut self) {
         if self.root.join("beta-state.json").exists() {
-            let _ = command(self.ps)
-                .args([
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                ])
-                .arg(SCRIPT)
-                .args(["teardown", "-Unattended", "-Root"])
-                .arg(&self.root)
-                .output();
+            let mut c = command(self.ps);
+            c.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(SCRIPT)
+            .args(["teardown", "-Unattended", "-Root"])
+            .arg(&self.root);
+            let _ = run(c);
         }
     }
 }
@@ -126,7 +178,7 @@ fn beta_script_runs_in_a_sandbox_and_leaves_nothing_behind() {
             program("ks-beta-smoke-win.exe", &win, serde_json::json!(["--title", "ks-beta-smoke-win"]), false),
         ],
         "stop": [],
-        "trigger": null,
+        "trigger": "builtin",
         "large": program("ks-beta-smoke-big.exe", &big, serde_json::json!(["{heartbeat}", "--alloc-mb", "64"]), true),
         "elevated": null,
         "tray_program": null,
@@ -142,6 +194,7 @@ fn beta_script_runs_in_a_sandbox_and_leaves_nothing_behind() {
     let report = dir.path().join("report");
     let exe = kaltstellen_exe();
     let common = ["-Root", str_of(&root), "-Unattended"];
+    let real_before = real_state();
 
     let mut args = vec![
         "setup",
@@ -173,10 +226,19 @@ fn beta_script_runs_in_a_sandbox_and_leaves_nothing_behind() {
         &ps,
         &[&["run", "t7", "-SimulateSessionEnd"][..], &common[..]].concat(),
     );
-    script(
+    let collected = script(
         &ps,
         &[&["collect", "-ReportDir", str_of(&report)][..], &common[..]].concat(),
     );
+    let excerpt = collected
+        .lines()
+        .find_map(|l| {
+            l.trim()
+                .strip_suffix(" kaltstellen.log line(s) in the excerpt")
+        })
+        .and_then(|n| n.parse::<usize>().ok())
+        .unwrap_or(0);
+    assert!(excerpt > 0, "empty log excerpt:\n{collected}");
 
     let results = fs::read_to_string(session.join("results.jsonl")).unwrap();
     let records: Vec<serde_json::Value> = results
@@ -229,6 +291,11 @@ fn beta_script_runs_in_a_sandbox_and_leaves_nothing_behind() {
     ] {
         assert!(pids_of(name).is_empty(), "{name} left running");
     }
+    assert_eq!(
+        real_state(),
+        real_before,
+        "the real Run value or %APPDATA%\\kaltstellen changed"
+    );
     // Teardown is idempotent.
     let again = script(&ps, &[&["teardown"][..], &common[..]].concat());
     assert!(again.contains("Nothing to tear down"), "{again}");
