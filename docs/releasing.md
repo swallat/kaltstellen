@@ -43,10 +43,11 @@ The tag sets the version. `Cargo.toml` only holds the placeholder
    ```
 
 2. The workflow checks the tag (form `v<MAJOR.MINOR.PATCH>` or with
-   `-<pre>`, on a commit of `main`), runs the same checks as CI, sets the
-   version, builds the x86_64 and the ARM64 executable, each on a runner of
-   its own architecture, checks that each reports the version, writes `checksums.txt`, attaches a build provenance attestation and
-   publishes the GitHub release. A version with a `-` (`1.2.0-rc.1`) becomes
+   `-<pre>`, on a commit of `main`), runs the same checks as CI (natively
+   on x86_64 and on ARM64), sets the version, builds the x86_64 and the
+   ARM64 executable, each on a runner of its own architecture, checks that
+   each reports the version, writes `checksums.txt`, attaches a build
+   provenance attestation and publishes the GitHub release. A version with a `-` (`1.2.0-rc.1`) becomes
    a pre-release.
 The release is created as a draft and published only after all files are
 uploaded, so the updater never sees a release without its files.
