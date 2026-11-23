@@ -10,7 +10,8 @@
 //!   lower one and hands back to it when it ends, if it still runs.
 //! - A manual switch holds automation until the trigger situation changes
 //!   (a trigger program starts or ends).
-//! - The tray menu item `Automatic switching` pauses everything.
+//! - `Automatic switching` (main window, `kaltstellen automation`) pauses
+//!   everything.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

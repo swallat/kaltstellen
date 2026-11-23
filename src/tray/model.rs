@@ -261,7 +261,8 @@ pub struct Status {
     pub pipe_error: Option<String>,
     /// S5: the profile of the last session, offered for one click.
     pub offer: Option<String>,
-    /// Start at sign-in: `None` if the Run key cannot be read.
+    /// Start at sign-in (for the L8 question): `None` if the Run key cannot
+    /// be read.
     pub autostart: Option<bool>,
     /// Hotkeys another program holds (C5), as `hotkey (profile)`.
     pub hotkeys_unavailable: Vec<String>,
@@ -269,8 +270,6 @@ pub struct Status {
     pub unassigned: usize,
     /// UP1: the update mode.
     pub update_mode: crate::update::Mode,
-    /// UP1: `KALTSTELLEN_UPDATE` decides; the menu cannot change it.
-    pub update_locked: bool,
     /// UP1: a newer version found by the last check.
     pub update: Option<UpdateOffer>,
     /// U4: automation as the menu shows it; `None` while no profile has
@@ -402,7 +401,6 @@ impl Default for Status {
             hotkeys_unavailable: Vec::new(),
             unassigned: 0,
             update_mode: crate::update::Mode::Auto,
-            update_locked: false,
             update: None,
             automation: None,
             back_to: None,
@@ -547,20 +545,16 @@ fn truncate(text: &str, max_units: usize) -> String {
     out
 }
 
-/// What a menu item does.
+/// What a menu item does. Only actions: the settings (start at sign-in,
+/// the update mode, automatic switching) are in the main window (owner,
+/// 2026-11-23).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Switch(String),
-    ToggleAutostart,
     /// Starts the main window (`kaltstellen gui`).
     OpenWindow,
-    /// UP1: switches the daily update check on or off.
-    /// UP1: sets the update mode.
-    UpdateMode(crate::update::Mode),
     /// UP1: opens a console running `kaltstellen update`.
     InstallUpdate,
-    /// U4: pauses or resumes all triggers.
-    ToggleAutomatic,
     /// U4: `Back to <previous>` after an automatic switch, with the
     /// target the menu showed.
     BackTo(String),
@@ -584,21 +578,14 @@ pub const ID_NEUTRAL: u16 = 1;
 pub const ID_QUIT: u16 = 2;
 /// Applies the profile of the last session (S5).
 pub const ID_LAST: u16 = 3;
-/// Switches start at sign-in on or off.
-pub const ID_AUTOSTART: u16 = 4;
+// 4 (start at sign-in), 8, 10, 11 (the update modes) and 12 (automatic
+// switching) were settings; they moved to the main window (owner,
+// 2026-11-23) and are not reused, so a stale click does nothing.
 pub const ID_OPEN: u16 = 6;
 /// `Unassigned programs (N)`: opens the main window.
 pub const ID_UNASSIGNED: u16 = 7;
-/// UP1: install updates automatically.
-pub const ID_UPDATE_AUTO: u16 = 8;
-/// UP1: check and report only.
-pub const ID_UPDATE_MANUAL: u16 = 10;
-/// UP1: no checks.
-pub const ID_UPDATE_OFF: u16 = 11;
 /// UP1: `Install update <version>…`.
 pub const ID_UPDATE_INSTALL: u16 = 9;
-/// U4: `Automatic switching` (checked while not paused).
-pub const ID_AUTOMATIC: u16 = 12;
 /// U4: `Back to <previous>` after an automatic switch.
 pub const ID_BACK: u16 = 13;
 /// Profile `n` of the configuration has ID `ID_PROFILE_BASE + n`.
@@ -612,9 +599,11 @@ pub struct Menu {
 }
 
 impl Menu {
-    /// Spec section 8: profiles (active one checked), `Neutral`, a status
-    /// line when there is something to report, `Quit`. `Open kaltstellen…`
-    /// belongs to the GUI (M3) and is shown disabled.
+    /// Spec L4, L12, UP1: `Back to` and the last-profile offer, profiles
+    /// (active one checked), `Neutral`, a status line and info lines when
+    /// there is something to report, the update offer, `Open kaltstellen…`
+    /// and `Quit`. Only actions: settings are in the main window (owner,
+    /// 2026-11-23).
     pub fn build(profiles: &[String], status: &Status) -> Self {
         let mut menu = Menu::default();
         // U4, decided detail 1: the one-click undo of an automatic switch,
@@ -711,26 +700,16 @@ impl Menu {
                     100,
                 ));
             }
-            if view.held && !view.paused {
+            if view.paused {
+                // The switch itself is in the main window (owner,
+                // 2026-11-23); the menu only says that it is off.
+                menu.disabled("Automatic switching paused".to_owned());
+            } else if view.held {
                 menu.disabled(
                     "Triggers wait after a manual switch until a trigger program starts or ends"
                         .to_owned(),
                 );
             }
-            menu.entry(
-                ID_AUTOMATIC,
-                "Au&tomatic switching".to_owned(),
-                !view.paused,
-                Command::ToggleAutomatic,
-            );
-        }
-        if let Some(on) = status.autostart {
-            menu.entry(
-                ID_AUTOSTART,
-                "&Start at sign-in".to_owned(),
-                on,
-                Command::ToggleAutostart,
-            );
         }
         match &status.update {
             Some(UpdateOffer {
@@ -757,31 +736,6 @@ impl Menu {
                 100,
             )),
             None => {}
-        }
-        for (id, mode, label) in [
-            (
-                ID_UPDATE_AUTO,
-                crate::update::Mode::Auto,
-                "Updates: install &automatically",
-            ),
-            (
-                ID_UPDATE_MANUAL,
-                crate::update::Mode::Manual,
-                "Updates: check and as&k",
-            ),
-            (ID_UPDATE_OFF, crate::update::Mode::Off, "Updates: o&ff"),
-        ] {
-            let checked = status.update_mode == mode;
-            if status.update_locked {
-                menu.items.push(Item::Entry {
-                    id: 0,
-                    label: format!("{label} (set by KALTSTELLEN_UPDATE)"),
-                    checked,
-                    enabled: false,
-                });
-            } else {
-                menu.entry(id, label.to_owned(), checked, Command::UpdateMode(mode));
-            }
         }
         menu.entry(
             ID_OPEN,
@@ -1112,9 +1066,6 @@ mod tests {
                 "R&&D",
                 "&Neutral",
                 "-",
-                "[x] Updates: install &automatically",
-                "Updates: check and as&k",
-                "Updates: o&ff",
                 "&Open kaltstellen…",
                 "&Quit"
             ]
@@ -1132,7 +1083,34 @@ mod tests {
     }
 
     #[test]
-    fn up1_menu_offers_an_update_and_the_three_modes() {
+    fn settings_are_not_in_the_menu() {
+        // Owner, 2026-11-23: start at sign-in, the update mode and
+        // automatic switching are in the main window only, whatever the
+        // tray knows about them.
+        let status = Status {
+            autostart: Some(true),
+            update_mode: crate::update::Mode::Manual,
+            automation: Some(crate::tray::triggers::View {
+                paused: false,
+                held: false,
+                applied: None,
+                waiting: Vec::new(),
+            }),
+            ..Status::default()
+        };
+        let menu = Menu::build(&["focus".to_owned()], &status);
+        assert_eq!(
+            labels(&menu),
+            ["focus", "[x] &Neutral", "-", "&Open kaltstellen…", "&Quit"]
+        );
+        // The IDs the settings had do nothing (a click on a stale menu).
+        for id in [4, 8, 10, 11, 12] {
+            assert_eq!(menu.command(id), None, "{id}");
+        }
+    }
+
+    #[test]
+    fn up1_menu_offers_an_update() {
         let mut status = Status {
             update_mode: crate::update::Mode::Manual,
             update: Some(UpdateOffer {
@@ -1147,26 +1125,11 @@ mod tests {
         let tail = &labels(&menu)[2..];
         assert_eq!(
             tail,
-            [
-                "Install &update 1.2.0…",
-                "Updates: install &automatically",
-                "[x] Updates: check and as&k",
-                "Updates: o&ff",
-                "&Open kaltstellen…",
-                "&Quit"
-            ]
+            ["Install &update 1.2.0…", "&Open kaltstellen…", "&Quit"]
         );
         assert_eq!(
             menu.command(ID_UPDATE_INSTALL),
             Some(&Command::InstallUpdate)
-        );
-        assert_eq!(
-            menu.command(ID_UPDATE_AUTO),
-            Some(&Command::UpdateMode(crate::update::Mode::Auto))
-        );
-        assert_eq!(
-            menu.command(ID_UPDATE_OFF),
-            Some(&Command::UpdateMode(crate::update::Mode::Off))
         );
         // It failed last time: still offered on request, and says so.
         status.update.as_mut().unwrap().failed = true;
@@ -1179,8 +1142,7 @@ mod tests {
             menu.command(ID_UPDATE_INSTALL),
             Some(&Command::InstallUpdate)
         );
-        // Not installable here: a disabled line that says how instead; the
-        // environment fixes the mode.
+        // Not installable here: a disabled line that says how instead.
         status.update = Some(UpdateOffer {
             version: "1.2.0".into(),
             blocked: Some("installed by scoop: scoop update kaltstellen".into()),
@@ -1188,19 +1150,16 @@ mod tests {
             retry_at: None,
         });
         status.update_mode = crate::update::Mode::Off;
-        status.update_locked = true;
         let menu = Menu::build(&[], &status);
         assert_eq!(
-            &labels(&menu)[2..6],
+            &labels(&menu)[2..],
             [
                 "Update 1.2.0 available: installed by scoop: scoop update kaltstellen (disabled)",
-                "Updates: install &automatically (set by KALTSTELLEN_UPDATE) (disabled)",
-                "Updates: check and as&k (set by KALTSTELLEN_UPDATE) (disabled)",
-                "[x] Updates: o&ff (set by KALTSTELLEN_UPDATE) (disabled)"
+                "&Open kaltstellen…",
+                "&Quit"
             ]
         );
         assert_eq!(menu.command(ID_UPDATE_INSTALL), None);
-        assert_eq!(menu.command(ID_UPDATE_AUTO), None);
     }
 
     #[test]
@@ -1338,6 +1297,7 @@ mod tests {
                 .bounded(),
             ),
             last_switch: Some(last),
+            notes: Vec::new(),
         })));
         assert!(line.len() < MAX_LINE, "{}", line.len());
     }
@@ -1404,9 +1364,14 @@ mod tests {
     }
 
     #[test]
-    fn u4_automatic_switching_item_only_with_triggers() {
-        let plain = Menu::build(&[], &Status::default());
-        assert_eq!(plain.command(ID_AUTOMATIC), None);
+    fn u4_automation_info_lines_only_with_triggers() {
+        let plain = labels(&Menu::build(&[], &Status::default()));
+        assert!(
+            !plain
+                .iter()
+                .any(|l| l.contains("rigger") || l.contains("utomatic")),
+            "{plain:?}"
+        );
         let mut status = Status {
             active: "flight".into(),
             automation: Some(crate::tray::triggers::View {
@@ -1421,7 +1386,7 @@ mod tests {
         let all = labels(&menu);
         let at = all
             .iter()
-            .position(|l| l == "[x] Au&tomatic switching")
+            .position(|l| l == "&Open kaltstellen…")
             .expect("item");
         assert_eq!(
             all[at - 2..at],
@@ -1430,7 +1395,6 @@ mod tests {
                 "Trigger for music waits while flight is active (disabled)"
             ]
         );
-        assert_eq!(menu.command(ID_AUTOMATIC), Some(&Command::ToggleAutomatic));
         assert_eq!(status.tooltip(), "kaltstellen: flight (by trigger)");
         assert_eq!(menu.command(ID_BACK), None);
         status.back_to = Some("R&D".into());
@@ -1448,7 +1412,10 @@ mod tests {
         view.applied = None;
         view.waiting.clear();
         let all = labels(&Menu::build(&[], &status));
-        assert!(all.contains(&"Au&tomatic switching".to_owned()), "{all:?}");
+        assert!(
+            all.contains(&"Automatic switching paused (disabled)".to_owned()),
+            "{all:?}"
+        );
         assert!(
             !all.iter().any(|l| l.starts_with("Triggers wait")),
             "{all:?}"
@@ -1459,6 +1426,7 @@ mod tests {
             all.iter().any(|l| l.starts_with("Triggers wait")),
             "{all:?}"
         );
+        assert!(!all.iter().any(|l| l.contains("paused")), "{all:?}");
     }
 
     #[test]
@@ -1502,19 +1470,6 @@ mod tests {
     }
 
     #[test]
-    fn start_at_sign_in_is_a_checked_item_when_known() {
-        let on = Status {
-            autostart: Some(true),
-            ..Status::default()
-        };
-        let menu = Menu::build(&[], &on);
-        assert!(labels(&menu).contains(&"[x] &Start at sign-in".to_owned()));
-        assert_eq!(menu.command(ID_AUTOSTART), Some(&Command::ToggleAutostart));
-        let unknown = Menu::build(&[], &Status::default());
-        assert_eq!(unknown.command(ID_AUTOSTART), None);
-    }
-
-    #[test]
     fn s5_menu_offers_the_last_profile_while_neutral() {
         let profiles = vec!["focus".to_owned()];
         let status = Status {
@@ -1553,9 +1508,6 @@ mod tests {
                 "-",
                 "Last switch: KS110 [start] tool.exe: missing (disabled)",
                 "-",
-                "[x] Updates: install &automatically",
-                "Updates: check and as&k",
-                "Updates: o&ff",
                 "&Open kaltstellen…",
                 "&Quit"
             ]

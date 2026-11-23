@@ -26,6 +26,7 @@ const state = {
   default_action: 'suspend',
   default_trim: true,
   autostart: false,
+  automation: { on: true, triggers: true, note: null },
   applying: false,
   status: 'Mock backend: nothing is saved.',
   update: {
@@ -139,6 +140,7 @@ function handle(message) {
       if (!Number.isInteger(m.priority ?? 0)) return fail('malformed request: priority');
       profile.triggers = triggers;
       profile.priority = m.priority ?? 0;
+      state.automation.triggers = state.profiles.some((p) => p.triggers.length > 0);
       state.status = triggers.length ? `Triggers of "${profile.name}" set; saved.` : `Triggers of "${profile.name}" removed; saved.`;
       return { ok: true };
     }
@@ -244,6 +246,11 @@ function handle(message) {
     case 'install_update':
       if (!state.update.available) return fail('no newer version is known; check first');
       state.status = `Installing ${state.update.available} in a separate window…`;
+      return { ok: true };
+    case 'set_automation':
+      if (typeof m.on !== 'boolean') return fail('malformed request: on');
+      state.automation.on = m.on;
+      state.status = `Automatic switching ${m.on ? 'on' : 'paused'}.`;
       return { ok: true };
     case 'set_autostart':
       state.autostart = !!m.on;

@@ -44,6 +44,9 @@ kaltstellen recover [--no-wait]   resume everything frozen, e.g. after a crash
 kaltstellen quit                  end the running tray as its menu's Quit does
 kaltstellen tray                  notification-area icon with the profile menu
 kaltstellen autostart [on|off]    start the tray at sign-in (per-user Run key)
+kaltstellen automation [on|off]   show, resume or pause automatic switching by
+                                  trigger programs (taken over by a running
+                                  tray at once)
 kaltstellen gui                   window to edit profiles and their programs
                                   (needs the WebView2 runtime of Windows 11)
 
@@ -138,14 +141,19 @@ elevated or under another user requires an elevated terminal.
 
 ## The tray icon
 
-`kaltstellen tray` puts an icon in the notification area. Its menu lists the
-profiles of the configuration (the active one checked), `Neutral` and
-`Quit`; the tooltip names the active profile. It runs once per session, and
-on start it resumes anything a crashed instance left frozen. `Quit` resumes
-everything frozen and leaves closed programs closed. When you sign out or
-shut down, it resumes everything first and offers the last profile again
-after the next sign-in (`Apply last profile` in the menu); it never applies
-it by itself. `Start at sign-in` in the menu adds it to the per-user Run key. Started from a terminal
+`kaltstellen tray` puts an icon in the notification area. Its menu holds
+actions only: the profiles of the configuration (the active one checked),
+`Neutral`, lines that say what went wrong or what automation does, an
+`Install update <version>…` offer when there is one, `Open kaltstellen…`
+and `Quit`; the tooltip names the active profile. Settings (start at
+sign-in, automatic switching, the update mode) are in the main window. It
+runs once per session, and on start it resumes anything a crashed instance
+left frozen. `Quit` resumes everything frozen and leaves closed programs
+closed. When you sign out or shut down, it resumes everything first and
+offers the last profile again after the next sign-in (`Apply last profile`
+in the menu); it never applies it by itself. On its first start it asks
+once whether it should start at sign-in; later, `Start at sign-in` in the
+main window or `kaltstellen autostart on|off` changes the per-user Run key. Started from a terminal
 it keeps that terminal until `Quit`; started from a shortcut it lets go of
 its console window at once, which may still show for a moment. While it
 runs, the command line goes through it. One tile, three states:
@@ -166,8 +174,9 @@ notification while it is on screen) goes back. About 5 to 10 s after the last
 one has ended, the profile that was active before comes back, unless you
 switched yourself in between. A switch of your own always wins: automation
 waits until a trigger program starts or ends. When triggers of two profiles
-run, the higher priority wins. `Automatic switching` in the menu pauses all
-triggers (remembered across restarts). A trigger must not be frozen or
+run, the higher priority wins. `Automatic switching` in the main window (or
+`kaltstellen automation off`) pauses all triggers at once, also in the
+running tray, and is remembered across restarts. A trigger must not be frozen or
 closed by its own profile; `check-config` refuses that.
 
 Logo, wordmark, colours and icons live in [branding/](branding/), together
@@ -203,12 +212,15 @@ froze is thawed; otherwise it waits for the next time you are back on
 HTTPS request to the GitHub API, nothing about you or your configuration is
 sent. Choose the mode with any of:
 
-- the tray menu items `Updates: install automatically`, `check and ask`
-  (shows `Install update <version>…` and installs only on click) or `off`,
-- the main window,
+- the `Updates` section of the main window: `Install automatically`,
+  `Check and ask` (the tray menu then shows `Install update <version>…` and
+  installs only on click) or `Off`,
 - `kaltstellen update --mode auto|manual|off`,
 - the environment variable `KALTSTELLEN_UPDATE=auto|manual|off`, which wins
   over the others.
+
+A running tray takes a mode chosen in the window or on the command line over
+at once, and a mode that checks checks right away.
 
 With the check off, nothing connects unless you run `kaltstellen update`.
 A copy installed by scoop, winget or Chocolatey, or placed below Program
