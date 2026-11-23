@@ -193,19 +193,16 @@ fn alive(procs: &HashSet<Proc>) -> Vec<Proc> {
 }
 
 /// Runs `kaltstellen gui ARGS` to the end, watching the WebView2 processes
-/// it starts (below it, and by data folder about every half second, which
-/// is slower to ask); returns its output and those processes.
+/// it starts below it; returns its output and those processes. Only the
+/// tree, polled quickly: asking by data folder ([`webview_of`]) takes
+/// seconds on the CI runner, long enough for a short window and its
+/// WebView2 processes to come and go unseen.
 fn run_window(world: &World, args: &[&str]) -> (Output, HashSet<Proc>) {
     let mut child = world.command(args).spawn().unwrap();
     let root = root_of(child.id());
     let mut webview = HashSet::new();
-    let mut by_folder = std::time::Instant::now();
     let ended = wait_for(LONG, || {
         webview.extend(descendants(root));
-        if by_folder.elapsed() >= Duration::from_millis(500) {
-            webview.extend(webview_of(world));
-            by_folder = std::time::Instant::now();
-        }
         child.try_wait().unwrap().is_some()
     });
     // A last look below the ended window process.
