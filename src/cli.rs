@@ -668,11 +668,9 @@ fn status_unassigned() -> u8 {
 /// it was frozen for when that is another program (a child process, A7).
 fn frozen_line(entry: &str, image: &str, pid: u32, gone: bool) -> String {
     let name = image.rsplit(['\\', '/']).next().filter(|n| !n.is_empty());
-    let entry_exe = if entry.to_ascii_lowercase().ends_with(".exe") {
-        entry.to_owned()
-    } else {
-        format!("{entry}.exe")
-    };
+    // The same rule the matcher uses (A7), so the entry's own process
+    // never shows as part of itself.
+    let entry_exe = crate::process::with_extension(entry);
     let mut line = match name {
         Some(name) if !name.eq_ignore_ascii_case(&entry_exe) => {
             format!("{name} (pid {pid}, part of {entry})")
@@ -882,6 +880,15 @@ mod tests {
         assert_eq!(
             frozen_line("host.exe", r"C:\A\helper.exe", 8, true),
             "helper.exe (pid 8, part of host.exe), no longer running"
+        );
+        // Entries with another extension or spaces match like the matcher.
+        assert_eq!(
+            frozen_line("saver.scr", r"C:\A\saver.scr", 5, false),
+            "saver.scr (pid 5)"
+        );
+        assert_eq!(
+            frozen_line(" app ", r"C:\A\app.exe", 6, false),
+            " app  (pid 6)"
         );
         // Records written before the image was known.
         assert_eq!(frozen_line("app.exe", "", 9, false), "app.exe (pid 9)");
