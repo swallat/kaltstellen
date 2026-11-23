@@ -16,6 +16,7 @@ use super::document::{Document, EntryEdit, action_name};
 pub use super::icons::Wanted;
 use super::model::{self, AddCheck, Candidate, Failure};
 use crate::config::{App, AppAction, Config, NEUTRAL, OnTimeout};
+use crate::program_info::View;
 use crate::protection::{self, Protection};
 use crate::tray::protocol::LastSwitch;
 use crate::unassigned::Unassigned;
@@ -54,6 +55,12 @@ pub trait Host {
     /// M2: the icon of each program as a PNG `data:` URL, `None` where
     /// there is none, in the order asked.
     fn icons(&self, wanted: &[Wanted], size: u32) -> Vec<Option<String>>;
+    /// M2, N1: what each program is (version resource, signature), `None`
+    /// where no file can be read, in the order asked. Reading happens in
+    /// the background; what is not known yet is `pending`, and the host
+    /// sends the `program_info` event (see [`Bridge::program_info_ready`])
+    /// when there is more.
+    fn program_info(&self, wanted: &[Wanted]) -> Vec<Option<View>>;
     /// M5: the open errors of the last switch, from the running tray;
     /// `Ok(None)` without a tray or without errors, `Err` when the tray did
     /// not answer in time (the markers shown stay as they are).
@@ -184,6 +191,9 @@ pub enum Request {
         programs: Vec<IconProgram>,
         /// Device pixels: the page's size times its DPI scale.
         size: u32,
+    },
+    ProgramInfo {
+        programs: Vec<IconProgram>,
     },
 }
 
@@ -826,34 +836,25 @@ impl<H: Host> Bridge<H> {
                         crate::win32::icon::MAX_SIZE
                     ));
                 }
-                // The page never names a file of its own: a path is used only
-                // if an entry of the configuration has it.
-                let configured: Vec<&Path> = self
-                    .document
-                    .config()
-                    .profiles
-                    .iter()
-                    .flat_map(|p| &p.apps)
-                    .filter_map(|a| a.path.as_deref())
-                    .collect();
-                let mut wanted = Vec::with_capacity(programs.len());
-                for program in programs {
-                    check_text(&[&program.exe, program.path.as_deref().unwrap_or_default()])?;
-                    check_path(program.path.as_deref())?;
-                    let path = program
-                        .path
-                        .map(|p| PathBuf::from(p.trim()))
-                        .filter(|p| configured.iter().any(|c| crate::process::same_path(c, p)));
-                    wanted.push(Wanted {
-                        exe: program.exe,
-                        path,
-                    });
-                }
+                let wanted = self.wanted(programs)?;
                 let icons = self.host.icons(&wanted, size);
                 Ok(Some(Value::Array(
                     icons
                         .into_iter()
                         .map(|icon| icon.map_or(Value::Null, Value::String))
+                        .collect(),
+                )))
+            }
+            Request::ProgramInfo { programs } => {
+                if programs.len() > MAX_ICONS {
+                    return Err(format!("at most {MAX_ICONS} programs per request"));
+                }
+                let wanted = self.wanted(programs)?;
+                Ok(Some(Value::Array(
+                    self.host
+                        .program_info(&wanted)
+                        .into_iter()
+                        .map(|view| view.map_or(Value::Null, |v| json!(v)))
                         .collect(),
                 )))
             }
@@ -863,6 +864,40 @@ impl<H: Host> Bridge<H> {
                 Ok(None)
             }
         }
+    }
+
+    /// The programs of an `icons` or `program_info` request. The page never
+    /// names a file of its own: a path is used only if an entry of the
+    /// configuration has it.
+    fn wanted(&self, programs: Vec<IconProgram>) -> Result<Vec<Wanted>, String> {
+        let configured: Vec<&Path> = self
+            .document
+            .config()
+            .profiles
+            .iter()
+            .flat_map(|p| &p.apps)
+            .filter_map(|a| a.path.as_deref())
+            .collect();
+        let mut wanted = Vec::with_capacity(programs.len());
+        for program in programs {
+            check_text(&[&program.exe, program.path.as_deref().unwrap_or_default()])?;
+            check_path(program.path.as_deref())?;
+            let path = program
+                .path
+                .map(|p| PathBuf::from(p.trim()))
+                .filter(|p| configured.iter().any(|c| crate::process::same_path(c, p)));
+            wanted.push(Wanted {
+                exe: program.exe,
+                path,
+            });
+        }
+        Ok(wanted)
+    }
+
+    /// M2: the host read more program information; the page asks again for
+    /// what was `pending`. No state: nothing of it changed.
+    pub fn program_info_ready(&self) -> String {
+        json!({"v": VERSION, "event": "program_info"}).to_string()
     }
 
     fn start_apply(&mut self, profile: &str) -> Result<(), String> {
@@ -995,6 +1030,25 @@ mod tests {
                     w.path
                         .as_ref()
                         .map(|p| format!("data:{size}:{}:{}", w.exe, p.display()))
+                })
+                .collect()
+        }
+        fn program_info(&self, wanted: &[Wanted]) -> Vec<Option<View>> {
+            // Known for programs with a path, pending for running ones.
+            wanted
+                .iter()
+                .map(|w| match &w.path {
+                    Some(p) => Some(View {
+                        description: Some(format!("{} at {}", w.exe, p.display())),
+                        signature: "unsigned",
+                        ..View::default()
+                    }),
+                    None if w.exe == "running.exe" => Some(View {
+                        signature: "pending",
+                        pending: true,
+                        ..View::default()
+                    }),
+                    None => None,
                 })
                 .collect()
         }
@@ -1214,6 +1268,75 @@ mod tests {
         refused(
             &mut b,
             json!({"v": 1, "id": 6, "type": "icons", "size": 32, "programs": many}),
+        );
+    }
+
+    #[test]
+    fn m2_program_info_only_for_configured_paths_with_pending_and_strict_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        let added = send(
+            &mut b,
+            json!({"v": 1, "id": 9, "type": "add_entry", "profile": "focus", "exe": "a.exe", "path": "C:\\A\\a.exe"}),
+        );
+        assert_eq!(added["ok"], true, "{added}");
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "program_info", "programs": [
+                {"exe": "a.exe", "path": "c:\\a\\A.EXE"},
+                {"exe": "running.exe"},
+                // Not in the configuration: never read.
+                {"exe": "d.exe", "path": "C:\\Other\\d.exe"},
+                {"exe": "e.exe", "path": "\\\\server\\share\\e.exe"}
+            ]}),
+        );
+        assert_eq!(reply["ok"], true, "{reply}");
+        let data = reply["data"].as_array().unwrap();
+        assert_eq!(data.len(), 4);
+        assert_eq!(data[0]["description"], "a.exe at c:\\a\\A.EXE");
+        assert_eq!(data[0]["signature"], "unsigned");
+        assert_eq!(data[0]["pending"], false);
+        assert_eq!(data[1]["signature"], "pending");
+        assert_eq!(data[1]["pending"], true);
+        assert_eq!((&data[2], &data[3]), (&Value::Null, &Value::Null));
+        // Every field is there for the page.
+        let keys: Vec<&str> = data[0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        for key in [
+            "description",
+            "product",
+            "company",
+            "version",
+            "signature",
+            "publisher",
+            "catalog",
+            "problem",
+            "pending",
+        ] {
+            assert!(keys.contains(&key), "{key}");
+        }
+        let event: Value = serde_json::from_str(&b.program_info_ready()).unwrap();
+        assert_eq!(event, json!({"v": 1, "event": "program_info"}));
+        let refused = |b: &mut Bridge<Fake>, request: Value| {
+            let reply = send(b, request);
+            assert_eq!(reply["ok"], false, "{reply}");
+        };
+        refused(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "program_info", "programs": [{"exe": "a.exe", "path": "a.exe"}]}),
+        );
+        refused(
+            &mut b,
+            json!({"v": 1, "id": 3, "type": "program_info", "programs": [], "size": 32}),
+        );
+        let many: Vec<Value> = (0..=MAX_ICONS).map(|_| json!({"exe": "a"})).collect();
+        refused(
+            &mut b,
+            json!({"v": 1, "id": 4, "type": "program_info", "programs": many}),
         );
     }
 

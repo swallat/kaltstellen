@@ -74,6 +74,20 @@ const unassigned = {
   ],
 };
 
+/** M2, N1: what the sample programs are. */
+const mockAbout = {
+  'browser.exe': { description: 'Web Browser', product: 'Browser', company: 'Example Browser Corp', signature: 'valid', publisher: 'Example Browser Corp' },
+  'mail.exe': { description: 'Mail', company: 'Mail Makers', signature: 'valid', publisher: 'Mail Makers Ltd', catalog: false },
+  'chat.exe': { description: 'Chat client', company: 'Chatty', signature: 'invalid', problem: 'the file was changed after signing' },
+  'explorer.exe': { description: 'Windows Explorer', company: 'Microsoft Corporation', signature: 'valid', publisher: 'Microsoft Windows', catalog: true },
+  'anydesk.exe': { description: 'Remote desk', company: 'Remote Example GmbH', signature: 'valid', publisher: 'Remote Example GmbH' },
+  'game-launcher.exe': { description: 'Game Launcher', company: 'Games Inc.', signature: 'unsigned' },
+  'notes.exe': { description: null, product: 'Notes', company: 'Notes Project', signature: 'unsigned' },
+  'tracker.exe': { description: 'Flight tracker', signature: 'unknown', problem: 'not checked: larger than 1024 MiB' },
+};
+const aboutChecked = new Set();
+let aboutWaiting = null;
+
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const find = (name) => state.profiles.find((p) => p.name.toLowerCase() === String(name).trim().toLowerCase());
 
@@ -206,6 +220,25 @@ function handle(message) {
       // A coloured square per program; programs without a path that are
       // not running have none, as on the real host.
       return { ok: true, data: m.programs.map((p) => (p.path || running.some((r) => r.exe === p.exe)) ? mockIcon(p.exe) : null) };
+    }
+    case 'program_info': {
+      if (!Array.isArray(m.programs) || m.programs.length > 256) return fail('at most 256 programs per request');
+      // As the host: nothing for programs without a file; the signature
+      // arrives a moment later, then the `program_info` event.
+      const data = m.programs.map((p) => {
+        if (!p.path && !running.some((r) => r.exe === p.exe) && !mockAbout[p.exe.toLowerCase()]) return null;
+        const about = { product: null, company: null, version: '1.0.0.0', catalog: false, problem: null, publisher: null, ...(mockAbout[p.exe.toLowerCase()] || { description: null, signature: 'unsigned' }) };
+        if (aboutChecked.has(p.exe.toLowerCase())) return { ...about, pending: false };
+        if (!aboutWaiting) {
+          aboutWaiting = setTimeout(() => {
+            aboutWaiting = null;
+            for (const q of m.programs) aboutChecked.add(q.exe.toLowerCase());
+            emit({ v: 1, event: 'program_info' });
+          }, 700);
+        }
+        return { ...about, signature: 'pending', publisher: null, problem: null, pending: true };
+      });
+      return { ok: true, data };
     }
     case 'unassigned': return { ok: true, data: clone(unassigned[profile ? profile.name : ''] || []) };
     case 'dismiss': {

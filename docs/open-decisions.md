@@ -48,6 +48,42 @@ which the owner asked for on 2026-11-23 (spec section 8):
    so a USB hard disk counts as local; a symbolic link or junction on a
    local disk that points to a share is followed.
 
+Choices made while building "what a program is" (M2, N1, command line),
+which the owner asked for on 2026-11-23 with local sources only (spec M2):
+
+1. **Where it is read**: in the window by one background thread, version
+   resources of a batch first, then signatures one file after the other;
+   the page gets `pending` and a `program_info` event when there is more,
+   so the window never waits. On the command line on up to 8 threads.
+2. **Size limit**: files over 1 GiB are not hashed for the signature
+   (`not checked`); measured about 0.4 s for 238 MiB and 0.5 to 1.5 s for
+   369 MiB on the owner's machine.
+3. **Cache**: per window, by file, at most 1024 files, read again when the
+   size or the modification time changes; the page keeps finished answers
+   while it is open.
+4. **Which string table**: the tables of `\VarFileInfo\Translation` in
+   order, then `040904B0`, `040904E4`, `04090000`, `000004B0`; each field
+   from the first table that has it.
+5. **Text from files**: control characters and bidirectional overrides
+   removed, whitespace collapsed, at most 200 characters (also protects
+   the terminal from escape sequences).
+6. **Signature check**: an own signature first, then a Windows catalog by
+   SHA-256, then SHA-1; no revocation check, URL retrieval from the local
+   cache only. A signature whose chain cannot be built from local data
+   counts as not valid (with that reason). "No signature" only when
+   `WinVerifyTrust` and the last error both say so (Microsoft's sample).
+7. **What is shown**: the description (else the product) and the
+   publisher only for a valid signature; the company the file names only
+   where no valid signature names a publisher; `unsigned` in italics and
+   muted, `⚠ signature not valid` in the warning colour; everything in a
+   tooltip. Nothing while the file is unknown.
+8. **Command-line format**: two spaces after what each line of `list` and
+   `status --unassigned` had before, then `<description>, signed by
+   <publisher>`, `<description> (<company>), unsigned` or `signature not
+   valid: <reason>`; nothing when nothing is known. The header of `list`
+   is unchanged. `list` takes longer than before (about 0.1 to 3.5 s
+   instead of under 0.1 s on the owner's machine).
+
 Choices made while building the automatic triggers (U4) on the owner's
 request on 2026-11-23, which
 [design-automatic-triggers.md](design-automatic-triggers.md) does not

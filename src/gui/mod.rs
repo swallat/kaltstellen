@@ -6,6 +6,7 @@
 //! applied by running `kaltstellen switch`, which goes through the tray's
 //! pipe when a tray runs.
 
+pub mod about;
 pub mod assets;
 pub mod bridge;
 pub mod document;
@@ -163,8 +164,21 @@ pub fn main(args: Args) -> u8 {
         let host = RealHost {
             data: data.clone(),
             waker: waker.clone(),
-            results,
+            results: results.clone(),
             icons: std::cell::RefCell::default(),
+            about: {
+                let results = results.clone();
+                let waker = waker.clone();
+                about::Reader::new(move || {
+                    let _ = results.send(Applied {
+                        kind: Kind::Info,
+                        target: String::new(),
+                        code: 0,
+                        stderr: String::new(),
+                    });
+                    waker.wake();
+                })
+            },
         };
         Box::new(GuiPage {
             bridge: Bridge::new(document, host),
@@ -197,6 +211,8 @@ enum Kind {
     Check,
     /// The review watchdog: the page never got ready.
     Watchdog,
+    /// M2: the reader knows more about programs.
+    Info,
 }
 
 struct Applied {
@@ -212,6 +228,8 @@ struct RealHost {
     results: Sender<Applied>,
     /// M2: icons read so far, by file and size.
     icons: std::cell::RefCell<icons::Cache>,
+    /// M2, N1: program information, read in the background.
+    about: about::Reader,
 }
 
 impl Host for RealHost {
@@ -251,6 +269,24 @@ impl Host for RealHost {
             cache.bytes() / 1024
         );
         found
+    }
+
+    fn program_info(&self, wanted: &[bridge::Wanted]) -> Vec<Option<crate::program_info::View>> {
+        let started = std::time::Instant::now();
+        let running = Snapshot::take()
+            .map(|s| icons::running_paths(&s, wanted))
+            .unwrap_or_default();
+        let files: Vec<Option<PathBuf>> =
+            wanted.iter().map(|w| icons::file_of(w, &running)).collect();
+        let views = self.about.views(&files);
+        info!(
+            "gui: program info for {} programs ({} known, {} pending) in {} ms",
+            wanted.len(),
+            views.iter().flatten().filter(|v| !v.pending).count(),
+            views.iter().flatten().filter(|v| v.pending).count(),
+            started.elapsed().as_millis()
+        );
+        views
     }
 
     fn last_switch(&self) -> Result<Option<crate::tray::protocol::LastSwitch>, String> {
@@ -487,7 +523,13 @@ impl Page for GuiPage {
 
     fn wake(&mut self) -> Vec<Answer> {
         let mut answers = Vec::new();
+        let mut info = false;
         while let Ok(applied) = self.inbox.try_recv() {
+            if applied.kind == Kind::Info {
+                // One event for all that arrived meanwhile.
+                info = true;
+                continue;
+            }
             if applied.kind == Kind::Check {
                 answers.push(Answer::Reply(self.bridge.checked()));
                 continue;
@@ -507,6 +549,9 @@ impl Page for GuiPage {
                 applied.code,
                 &applied.stderr,
             )));
+        }
+        if info {
+            answers.push(Answer::Reply(self.bridge.program_info_ready()));
         }
         answers
     }

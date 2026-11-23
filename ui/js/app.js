@@ -185,8 +185,6 @@ function showIcon(holder, url) {
 /** Asks the host for `programs` at `size`, in requests below the size
  * limit; resolves when all answers are in the cache. */
 async function fetchIcons(programs, size) {
-  let batch = [];
-  let bytes = 0;
   const send = async (list) => {
     // Not through `call`: icons change no state and report no errors.
     const reply = await request('icons', { programs: list, size });
@@ -195,19 +193,27 @@ async function fetchIcons(programs, size) {
       if (url) iconCache.set(iconKey(program.exe, program.path, size), url);
     });
   };
-  const sends = [];
+  await Promise.all(batches(programs).map(send));
+}
+
+/** `programs` split into lists of at most 256 and below the size limit
+ * (`icons`, `program_info`). */
+function batches(programs) {
+  const lists = [];
+  let batch = [];
+  let bytes = 0;
   for (const program of programs) {
     const cost = JSON.stringify(program).length + 1;
     if (batch.length === 256 || (batch.length > 0 && bytes + cost > ICON_BATCH_BYTES)) {
-      sends.push(send(batch));
+      lists.push(batch);
       batch = [];
       bytes = 0;
     }
     batch.push(program);
     bytes += cost;
   }
-  if (batch.length > 0) sends.push(send(batch));
-  await Promise.all(sends);
+  if (batch.length > 0) lists.push(batch);
+  return lists;
 }
 
 /** Fills every icon placeholder in `root`: known ones at once, the rest
@@ -256,6 +262,118 @@ function watchScale() {
   }, { once: true });
 }
 
+// What a program is (M2, N1) -------------------------------------------------
+
+/** `exe|path` to what the host knows. Only finished answers are kept: a
+ * pending one is asked again on the `program_info` event, a program
+ * without a readable file (`null`) the next time the list is drawn. */
+const aboutCache = new Map();
+
+function aboutKey(exe, path) {
+  return `${exe.toLowerCase()}|${(path || '').toLowerCase()}`;
+}
+
+/** An empty line under the program's name; `loadAbout` fills it. `path`
+ * only for entries of the configuration, as for icons. */
+function programAbout(exe, path) {
+  const holder = el('span', { class: 'about' });
+  holder.dataset.exe = exe;
+  if (path) holder.dataset.path = path;
+  return holder;
+}
+
+/** The tooltip: every field, and what is verified. */
+function aboutTitle(v) {
+  const lines = [];
+  if (v.description) lines.push(`Description: ${v.description}`);
+  if (v.product) lines.push(`Product: ${v.product}`);
+  if (v.company) lines.push(`Company: ${v.company}`);
+  if (v.version) lines.push(`Version: ${v.version}`);
+  const signature = {
+    valid: `Signed by ${v.publisher || 'an unnamed publisher'}${v.catalog ? ' (through a Windows catalog)' : ''}; the signature is valid.`,
+    invalid: `The file has a signature, but it is not valid: ${v.problem}.`,
+    unsigned: 'The file is not signed.',
+    unknown: `Signature not checked: ${v.problem}.`,
+    pending: 'Checking the signature…',
+  }[v.signature];
+  if (signature) lines.push(signature);
+  if (v.description || v.product || v.company) lines.push('Description, product and company are what the file says about itself; only a valid signature names a verified publisher.');
+  return lines.join('\n');
+}
+
+/** Description (else product), the company where no valid signature names
+ * a publisher, then the signature: the publisher with a check mark, a
+ * warning for a broken signature, a discreet "unsigned". */
+function showAbout(holder, v) {
+  if (!v) {
+    holder.classList.add('loaded');
+    return;
+  }
+  const parts = [];
+  let text = v.description || v.product || '';
+  // Not while the signature is checked: the line would change twice.
+  if (v.signature !== 'valid' && v.signature !== 'pending' && v.company) {
+    if (!text) text = v.company;
+    else if (!text.includes(v.company)) text = `${text} · ${v.company}`;
+  }
+  if (text) parts.push(text);
+  if (v.signature === 'valid') parts.push(el('span', { class: 'publisher', text: `✓ ${v.publisher || 'signed'}` }));
+  if (v.signature === 'invalid') parts.push(el('span', { class: 'sig-invalid', text: '⚠ signature not valid' }));
+  if (v.signature === 'unsigned') parts.push(el('span', { class: 'sig-none', text: 'unsigned' }));
+  const children = [];
+  parts.forEach((part, i) => {
+    if (i > 0) children.push(' · ');
+    children.push(part);
+  });
+  holder.replaceChildren(...children);
+  holder.title = aboutTitle(v);
+  if (!v.pending) holder.classList.add('loaded');
+}
+
+/** Asks the host about `programs` in requests below the size limit;
+ * resolves with `exe|path` to the answer. */
+async function fetchAbout(programs) {
+  const answers = new Map();
+  const send = async (list) => {
+    const reply = await request('program_info', { programs: list });
+    list.forEach((program, i) => {
+      const view = reply.ok ? reply.data[i] : null;
+      answers.set(aboutKey(program.exe, program.path), view);
+      if (view && !view.pending) aboutCache.set(aboutKey(program.exe, program.path), view);
+    });
+  };
+  await Promise.all(batches(programs).map(send));
+  return answers;
+}
+
+/** Fills every program line in `root` that is not final yet: known ones at
+ * once, the rest with one round of requests. Pending ones stay open for
+ * the next `program_info` event. */
+async function loadAbout(root) {
+  const holders = [...root.querySelectorAll('span.about:not(.loaded)')];
+  const programs = [];
+  const asked = new Set();
+  for (const holder of holders) {
+    const key = aboutKey(holder.dataset.exe, holder.dataset.path);
+    if (aboutCache.has(key)) {
+      showAbout(holder, aboutCache.get(key));
+    } else if (!asked.has(key)) {
+      asked.add(key);
+      const program = { exe: holder.dataset.exe };
+      if (holder.dataset.path) program.path = holder.dataset.path;
+      programs.push(program);
+    }
+  }
+  if (programs.length === 0) return;
+  const answers = await fetchAbout(programs);
+  for (const holder of holders) {
+    const key = aboutKey(holder.dataset.exe, holder.dataset.path);
+    if (holder.isConnected && !holder.classList.contains('loaded') && answers.has(key)) {
+      showAbout(holder, answers.get(key));
+    }
+  }
+}
+
 /** M5: an error of the last switch on its entry: code and a few words,
  * the whole error as tooltip. It goes when the tray no longer reports it
  * (resolved, or the next switch went well) at the next state refresh. */
@@ -295,7 +413,7 @@ function renderDetail() {
 
   const rows = profile.entries.map((e, index) => el('tr', { class: e.errors.length ? 'failed' : null },
     el('td', {}, el('div', { class: 'program' }, programIcon(e.exe, e.path),
-      el('span', { class: 'names' }, el('span', { class: 'exe', text: e.exe }), e.path ? el('span', { class: 'path', text: e.path }) : null,
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: e.exe }), programAbout(e.exe, e.path), e.path ? el('span', { class: 'path', text: e.path }) : null,
         ...e.errors.map(failureMarker)))),
     el('td', {}, el('span', { class: `action ${e.action}`, text: actionLabel[e.action] })),
     el('td', { class: 'opts', text: optionsText(e) }),
@@ -304,6 +422,7 @@ function renderDetail() {
       el('button', { type: 'button', class: 'button small danger', 'aria-label': `Remove ${e.exe}`, onclick: () => removeEntry(index), text: 'Remove' }))));
   $('entries').tBodies[0].replaceChildren(...rows);
   loadIcons($('entries'));
+  loadAbout($('entries'));
   $('entries').hidden = rows.length === 0;
   $('entries-empty').hidden = rows.length !== 0;
   renderUnassigned();
@@ -312,13 +431,14 @@ function renderDetail() {
 function renderUnassigned() {
   const rows = unassigned.map((u) => el('tr', {},
     el('td', {}, el('div', { class: 'program' }, programIcon(u.exe, null),
-      el('span', { class: 'names' }, el('span', { class: 'exe', text: u.exe }), u.path ? el('span', { class: 'path', text: u.path }) : null))),
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: u.exe }), programAbout(u.exe, null), u.path ? el('span', { class: 'path', text: u.path }) : null))),
     el('td', {}, u.new ? el('span', { class: 'tag new', text: 'new' }) : 'earlier'),
     el('td', {},
       el('button', { type: 'button', class: 'button small', 'aria-label': `Add ${u.exe}`, onclick: () => addProgram(u.exe, null), text: 'Add' }),
       el('button', { type: 'button', class: 'button small', 'aria-label': `Dismiss ${u.exe}`, onclick: () => dismiss(u.exe), text: 'Dismiss' }))));
   $('unassigned').tBodies[0].replaceChildren(...rows);
   loadIcons($('unassigned'));
+  loadAbout($('unassigned'));
   $('unassigned').hidden = rows.length === 0;
   $('unassigned-empty').hidden = rows.length !== 0;
 }
@@ -553,7 +673,8 @@ async function openAdd() {
   const reply = await call('running');
   const running = reply.ok ? reply.data : [];
   const rows = running.map((p) => el('tr', {},
-    el('td', {}, el('div', { class: 'program' }, programIcon(p.exe, null), el('span', { class: 'exe', text: p.exe }))),
+    el('td', {}, el('div', { class: 'program' }, programIcon(p.exe, null),
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: p.exe }), programAbout(p.exe, null)))),
     el('td', { class: 'num', text: megabytes(p.private_bytes) }),
     el('td', { class: `protection ${p.protection}`, text: protectionText[p.protection] }),
     el('td', {}, el('button', {
@@ -564,6 +685,7 @@ async function openAdd() {
     }))));
   $('running').tBodies[0].replaceChildren(...rows);
   loadIcons($('running'));
+  loadAbout($('running'));
   openDialog($('add-dialog'));
 }
 
@@ -687,7 +809,15 @@ onEvent(async (event) => {
     await loadUnassigned();
   }
   if (event.event === 'update_checked') adopt(event.state);
+  // M2, N1: the host read more about programs; fill what was pending.
+  if (event.event === 'program_info') {
+    aboutEvents++;
+    loadAbout(document.body);
+  }
 });
+
+/** `program_info` events seen (for the test driver). */
+let aboutEvents = 0;
 
 // Test driver: runs bridge requests in order (kaltstellen gui --drive).
 globalThis.kaltstellenDrive = async (steps) => {
@@ -715,6 +845,21 @@ globalThis.kaltstellenDrive = async (steps) => {
       $('entries').dispatchEvent(new DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true }));
       const reply = dropping ? await dropping : { ok: false, error: 'the drop was not taken', state };
       results.push({ type, ok: reply.ok, error: reply.error || null, status: $('status').textContent, data: reply.data ?? null, state: reply.state || state });
+      continue;
+    }
+    if (type === 'program_info') {
+      // M2: asks again until nothing is pending (the host reads in the
+      // background), at most 20 s; reports the events seen meanwhile.
+      let reply = await request(type, fields);
+      const deadline = Date.now() + 20000;
+      while (reply.ok && reply.data.some((v) => v && v.pending) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        reply = await request(type, fields);
+      }
+      // The event may come just after the answer that was final.
+      const until = Date.now() + 2000;
+      while (aboutEvents === 0 && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 50));
+      results.push({ type, ok: reply.ok, error: reply.error || null, status: state.status, data: reply.data ?? null, events: aboutEvents, state });
       continue;
     }
     const reply = await request(type, fields);
