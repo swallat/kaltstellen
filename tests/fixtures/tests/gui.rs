@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use common::*;
 use kaltstellen::config::OnTimeout;
-use kaltstellen::process::Snapshot;
+use kaltstellen::process::{Access, Snapshot, Target};
 use windows::Win32::Foundation::{HWND, LPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetWindowThreadProcessId, IsIconic, SW_MINIMIZE, ShowWindow,
@@ -190,13 +190,21 @@ fn page_ready(world: &World) -> bool {
         .is_ok_and(|log| log.contains("gui: page ready"))
 }
 
-/// The processes of `procs` that still run (same PID and creation time).
-fn alive(procs: &HashSet<Proc>) -> Vec<Proc> {
+/// The processes of `procs` that still run (same PID and creation time),
+/// with their names. A process that has exited but is still listed because
+/// some other process holds a handle to it (WMI, for example) does not
+/// count; one that cannot be opened is taken as running.
+fn alive(procs: &HashSet<Proc>) -> Vec<(Proc, String)> {
     let snapshot = Snapshot::take().unwrap();
     procs
         .iter()
-        .copied()
-        .filter(|&(pid, created)| snapshot.get(pid).is_some_and(|p| p.created == created))
+        .filter_map(|&(pid, created)| snapshot.find(pid, created))
+        .filter(|info| match Target::open(info, Access::Stop) {
+            Ok(Some(target)) => !target.wait_exit(Duration::ZERO),
+            Ok(None) => false,
+            Err(_) => true,
+        })
+        .map(|info| ((info.pid, info.created), info.name.clone()))
         .collect()
 }
 
