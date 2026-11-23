@@ -137,7 +137,8 @@ main session made them; they show the views below in light and dark.
     `.exe`: the `.exe` is added, the status line says `1 of 4 added …
     Not added: …` and names each refused item and why; click into another
     window and back: the summary is still there. Drop an `.exe` from a
-    network share or a USB stick: refused as not on a local disk. Drop
+    network share or a USB stick (removable): refused as not on a local disk
+    (a USB hard disk that Windows reports as fixed counts as local). Drop
     onto the open `Add a program` dialog: the same, and the dialog
     closes. Drop anywhere else in the window (the sidebar, the
     header): no page change, nothing opens, the window stays on its page.

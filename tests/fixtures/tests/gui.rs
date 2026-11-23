@@ -353,7 +353,25 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
     assert_no_webview_left(&world, &webview, "drive");
     let back = world.command(&["switch", "neutral"]).output().unwrap();
     assert_eq!(back.status.code(), Some(0));
-    assert!(beating(&beat));
+    if !beating(&beat) {
+        // Seen once locally under load; say whether the resume is missing
+        // or the heartbeat is only late.
+        let status = world.command(&["status"]).output().unwrap();
+        panic!(
+            "no heartbeat after neutral (beat {:?}, again beating: {}):\n{}{}\nswitch said: {}{}",
+            beat_value(&beat),
+            beating(&beat),
+            String::from_utf8_lossy(&status.stdout),
+            String::from_utf8_lossy(&status.stderr),
+            String::from_utf8_lossy(&back.stdout),
+            String::from_utf8_lossy(&back.stderr)
+        );
+    }
+}
+
+/// `common::beat`, for tests whose `beat` variable hides it.
+fn beat_value(file: &std::path::Path) -> Option<u128> {
+    beat(file)
 }
 
 /// Runs the JSON array `steps` through the page (`--drive`) and returns

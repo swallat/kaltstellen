@@ -407,7 +407,9 @@ impl App {
         let gone = self.status.resolve(&running);
         for err in unreadable.into_inner() {
             let text = err.to_string();
-            if self.unreadable_logged.insert(text.clone()) {
+            // Bounded: a process that keeps restarting has a new PID in
+            // its text each time.
+            if self.unreadable_logged.len() < 64 && self.unreadable_logged.insert(text.clone()) {
                 info!("tray: re-check cannot read a process path, its error stays: {text}");
             }
         }

@@ -39,6 +39,14 @@ which the owner asked for on 2026-11-23 (spec section 8):
 7. **M2 status of a drop**: the summary of a drop becomes the host's
    status line (`drop_done`), so it survives a refresh; refusals the page
    shows itself stay until the next action of the user.
+8. **L9 path check of a failed start**: a failed start resolves only when a
+   process of that name runs from the path it tried (not a same-named
+   program from another folder); for that check the image path of processes
+   of that name is read with query rights during the re-checks only. Adds a
+   detail to the decided L9 rules (spec L9).
+9. **M2 local disk**: "fixed local disk" is what Windows reports as fixed,
+   so a USB hard disk counts as local; a symbolic link or junction on a
+   local disk that points to a share is followed.
 
 ## Deferred by the owner on 2026-11-23
 

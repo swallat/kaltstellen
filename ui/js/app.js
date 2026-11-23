@@ -522,7 +522,8 @@ async function dropFiles(files) {
   if (added > 0 && $('add-dialog').open) $('add-dialog').close();
   // The summary goes into the host's status line, so a refresh keeps it.
   await call('drop_done', { profile, added, not_added: problems });
-  if (problems.length > 0) $('status').className = 'error-text';
+  // With refusals the summary stays red, also after a refresh.
+  if (problems.length > 0) notice($('status').textContent, true);
   return reply;
 }
 
@@ -624,9 +625,10 @@ addEventListener('focus', async () => {
 });
 
 onEvent(async (event) => {
-  // The end of something the user started: its result is the news now.
-  localStatus = null;
   if (event.event === 'applied') {
+    // The end of a switch the user started: its result is the news now.
+    // An update check may also run by itself, so it keeps the message.
+    localStatus = null;
     adopt(event.state);
     await loadUnassigned();
   }
