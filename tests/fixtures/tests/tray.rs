@@ -348,6 +348,32 @@ fn l2_quit_resumes_frozen_programs_and_keeps_stopped_records() {
     assert_eq!(pids_of("ks-tray2-b.exe"), Vec::<u32>::new());
 }
 
+/// `kaltstellen quit` ends the tray of its data directory like the menu's
+/// Quit; without a tray it says so and succeeds.
+#[test]
+fn l2_quit_from_the_command_line() {
+    let mut t = Tray::new();
+    let _a = t.program("ks-tray2q-a.exe");
+    t.config(&profile("quiet", &[("ks-tray2q-a.exe", "suspend")]));
+    t.start(1);
+    t.click(ID_PROFILE_BASE);
+    t.wait_log("tray: switch to \"quiet\" finished", 1);
+    assert!(t.is_frozen("ks-tray2q-a.exe"));
+
+    let (code, out, err) = t.run(&["quit"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let mut child = t.child.take().unwrap();
+    assert!(
+        wait_for(LONG, || child.try_wait().unwrap().is_some()),
+        "the tray ends"
+    );
+    assert!(t.is_beating("ks-tray2q-a.exe"), "quit resumes (L2)");
+
+    let (code, out, _) = t.run(&["quit"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("no tray runs"), "{out}");
+}
+
 #[test]
 fn s3_t5_tray_start_recovers_what_a_killed_tray_froze() {
     let mut t = Tray::new();
