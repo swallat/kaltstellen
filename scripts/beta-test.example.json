@@ -1,0 +1,27 @@
+{
+  "_readme": [
+    "Programs the beta test may touch. kaltstellen freezes or stops nothing that is not listed here.",
+    "Copied to beta-test.json by 'beta-test.ps1 setup'; edit that copy, not this file.",
+    "Each program: exe = executable name as in Task Manager, Details (required).",
+    "  path = full path, lets the script start the program itself (optional).",
+    "  args = arguments for that start (optional); {heartbeat} becomes a file the program writes (test fixtures only).",
+    "  disposable = true: the script may kill what it started of it (test fixtures only; leave it out for real programs).",
+    "suspend: programs that may be frozen (at least one; begin with programs that are not critical).",
+    "stop: programs that may be closed and started again; on_timeout 'keep' (default here) leaves one with unsaved work running.",
+    "trigger: \"builtin\" (default) is a renamed copy of ping.exe in the test folder that the script starts and ends; or a program of your own you can start and end at will (exe, path). It switches the profile 'beta-trigger' automatically. Not in suspend or stop.",
+    "large: a program with a lot of memory for the trim measurement T19 (may also be in suspend).",
+    "elevated: a program you start as administrator for T18 (optional, null to skip).",
+    "tray_program: a program with a notification-area icon that is in no profile, for T22 (optional).",
+    "Replace every <...> placeholder; setup refuses the file while one is left."
+  ],
+  "suspend": [
+    { "exe": "<a program that may be frozen>.exe", "path": "" }
+  ],
+  "stop": [],
+  "trigger": "builtin",
+  "large": null,
+  "elevated": null,
+  "tray_program": null,
+  "hotkey": "Ctrl+Shift+Alt+F9",
+  "altgr_hotkey": "Ctrl+Alt+7"
+}
