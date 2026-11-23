@@ -19,8 +19,20 @@ env:
 
 jobs:
   check:
-    runs-on: windows-latest
+    # The x86_64 job keeps the plain name `check`: the ruleset on main
+    # requires a status check of that name.
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: check
+            runner: windows-latest
+          # The release also ships an ARM64 executable; it is tested natively.
+          - name: check (arm64)
+            runner: windows-11-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
