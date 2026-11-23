@@ -62,9 +62,10 @@ If PowerShell refuses to run scripts, start it with
   files for drag and drop in `%TEMP%\kaltstellen-beta-<time>\test`, and
   starts the tray. Automatic switching starts paused, so the trigger
   program does nothing before test `triggers`. Updates are set to `check and
-  ask` for the whole test, so nothing installs by itself; the product itself
-  still checks GitHub once a day in this mode (only `off` stops that), and
-  test `updates` installs only if you say so.
+  ask` for the test, so nothing installs by itself; the product itself still
+  checks GitHub once a day in this mode (only `off` stops that). Test
+  `updates` sets `off` through the tray (`kaltstellen update --mode off`)
+  for the rest of the test and installs only if you say so.
 - `-Sandbox` leaves the real folders and the Run key alone: configuration,
   data, executable and test files live in `%TEMP%\kaltstellen-beta-<time>`,
   the Run value in `HKCU\Software\kaltstellen-beta-<time>\Run`, and the
@@ -88,23 +89,23 @@ backup.
 
 | Test | Automatic | Guided (you act, the script checks) | Only you |
 | --- | --- | --- | --- |
-| `tray` | config error by check-config | profile from the menu (log, frozen threads), Explorer restart, shortcut start, Quit | icon, tooltip, menu |
-| `signin` | Run value and `autostart on` | the question at the first start | menu while asking |
-| `window` | start time, page ready, one window only, WebView2 processes end | Apply profile, comments kept | look, scaling, keyboard, editing |
+| `tray` | config error by check-config | profile from the menu (log, frozen threads), Explorer restart, shortcut start, Quit | icon, tooltip, menu without settings |
+| `signin` | Run value and `autostart on` (switched on with `kaltstellen autostart on` if you answered No) | the question at the first start | menu while asking, question text |
+| `window` | start time, page ready, one window only, WebView2 processes end; header switches against `kaltstellen autostart` and `kaltstellen automation`, `Automatic switching` disabled without triggers | Apply profile, comments kept | look, scaling, keyboard, editing, header hint |
 | `failure` | KS110, error resolves within 30 s | | red icon, marker, hover text |
 | `dragdrop` | which entries the file gained | the drops | outline, status line |
-| `descriptions` | `list`, `status --unassigned` recorded | | the window |
+| `descriptions` | `list --info`, `status --unassigned` recorded (`n/a` for a build without `list --info`) | | the window |
 | `hotkeys` | taken hotkey warned (second test tray), Ctrl+Alt+7 refused | key press counted once per press | AltGr+7 |
 | `unassigned` | listed as new | | menu item, Add, Dismiss |
 | `stop` | closed, started again on neutral | | |
-| `triggers` | check-config, apply within 5 s, back to neutral, manual switch wins, pause survives a restart, priority in the file | notification click, 4a, 4b, rename | notifications |
+| `triggers` | check-config, apply within 5 s, back to neutral, manual switch wins, pause and resume with `kaltstellen automation off/on` (survives a restart), priority in the file | notification click, 4a, 4b, rename | notifications, header switch, `Automatic switching paused` in the menu |
 | `t14` | taskbar and Explorer answer, no ghost windows | | Start menu |
 | `t19` | available memory with trim on and off, resume time | | felt delay |
 | `t18` | KS102, the rest of the switch | start as administrator | |
 | `t13` | stays frozen for `-FreezeMinutes` (10) | | network, sync, sound, licence |
 | `t15` | PIDs and times recorded | the trace | |
 | `defender` | detections, if readable | | Protection history |
-| `updates` | modes in the log, version, `kaltstellen.old.exe`, one tray | install | SmartScreen |
+| `updates` | `update --mode off` taken over by the tray, version, `kaltstellen.old.exe`, one tray | install | offer in the menu, Mode in the main window, SmartScreen |
 | `t7`, `t20` | resume time from the log, last profile offered not applied, tray at sign-in | | screens at sign-out or shutdown |
 
 **T7 and T20** end the session and run on their own (`run t7`, never with

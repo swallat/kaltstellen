@@ -771,9 +771,30 @@ function Stop-TrayWindow($Tray, [int]$TimeoutS = 25) {
     $true
 }
 
+# What the installed build can do: "kaltstellen help" lists its commands,
+# "<command> --help" its options. Asked once per run.
+$script:Supports = @{}
+function Test-KsSupports([string]$Command, [string]$Option) {
+    $key = "$Command $Option"
+    if (-not $script:Supports.ContainsKey($key)) {
+        $r = if ($Option) { Invoke-Ks $Command --help } else { Invoke-Ks help }
+        $pattern = if ($Option) { '(^|\s)' + [regex]::Escape($Option) + '\b' } else { '(?m)^\s+' + [regex]::Escape($Command) + '\s' }
+        $script:Supports[$key] = ($r.Code -eq 0 -and $r.Text -match $pattern)
+    }
+    $script:Supports[$key]
+}
+
+# Quits the main tray as its menu's Quit does (L2: it resumes what it froze):
+# "kaltstellen quit" where the build has it, else WM_CLOSE to its window.
 function Stop-Tray {
     $t = Get-MainTray
-    if ($t) { $null = Stop-TrayWindow $t }
+    if (-not $t) { return }
+    if (Test-KsSupports quit) {
+        $q = Invoke-Ks quit
+        if (Wait-Until 25 { -not (Get-Process -Id $t.Pid -ErrorAction SilentlyContinue) }) { return }
+        Write-Note "   kaltstellen quit: exit $($q.Code); closing the tray window instead"
+    }
+    $null = Stop-TrayWindow $t
 }
 
 function Get-LogLines([string]$Since, [string]$Until) {
@@ -824,10 +845,17 @@ function Set-SettingsValue([string]$Name, $Value) {
     Write-Utf8 $file ($s | ConvertTo-Json -Depth 4)
 }
 
-# Automatic switching on or off: written to settings.json with the tray quit,
-# read by the tray when it starts again (setup starts it paused, so a trigger
-# program you happen to start does not freeze anything before test 'triggers').
+# Automatic switching on or off (setup starts it paused, so a trigger program
+# you happen to start freezes nothing before test 'triggers'). With
+# "kaltstellen automation" the running tray takes it over at once and writes
+# settings.json itself; without a tray the command writes the file. A build
+# without that command: the file, read by the tray when it starts again.
 function Set-TriggersPaused([bool]$Paused) {
+    if (Test-KsSupports automation) {
+        $r = Invoke-Ks automation $(if ($Paused) { 'off' } else { 'on' })
+        if ($r.Code -ne 0) { throw "kaltstellen automation: exit $($r.Code): $($r.Text)" }
+        return
+    }
     $wasRunning = [bool](Get-MainTray)
     if ($wasRunning) { Set-Neutral; Stop-Tray }
     Set-SettingsValue 'triggers_paused' $(if ($Paused) { $true } else { $null })
@@ -943,11 +971,14 @@ function Get-StartedProcesses($Program) {
 function Close-Program($Program, [switch]$Wait) {
     $procs = Get-StartedProcesses $Program
     if (-not $procs.Count) { return $true }
+    Write-Info "   $(if ($Program.disposable) { 'ending' } else { 'closing' }) $($Program.exe) (pid $(($procs | ForEach-Object { $_.Id }) -join ', '))"
     if ($Program.disposable) { $procs | Stop-Process -Force -ErrorAction SilentlyContinue }
     else { foreach ($p in $procs) { $null = $p.CloseMainWindow() } }
     if (-not $Wait) { return $true }
     $ids = @($procs | ForEach-Object { $_.Id })
-    [bool](Wait-Until 15 { -not @($ids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }).Count })
+    $gone = [bool](Wait-Until 15 { -not @($ids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }).Count })
+    if (-not $gone) { Write-Note "   $($Program.exe) did not end: pid $((@($ids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })) -join ', ')" }
+    $gone
 }
 
 # Closes what the script started; for anything else of that name the owner
@@ -1470,7 +1501,7 @@ function Invoke-Setup {
         # 4. The tray.
         Write-Title 'Tray'
         if (-not $script:IsUnattended) {
-            Write-Note '  The tray asks once whether kaltstellen should start with Windows: answer Yes (test "signin").'
+            Write-Note '  The tray asks once: "Start kaltstellen automatically when you sign in to Windows?" Answer Yes (test "signin").'
             if ($Sandbox) { Write-Note '  (sandbox: the answer goes to a test registry key that Windows never runs)' }
         }
         $t = Start-Tray
@@ -1503,7 +1534,7 @@ function Test-Tray {
     Invoke-Step tray icon 'Icon, tooltip and menu (manual-checks "Tray icon and menu" 1-3)' -Human -Say @(
         'Find the kaltstellen icon in the notification area (maybe in the overflow area): a blue tile, sharp at your scaling and on a second monitor.',
         'Hover: the tooltip reads "kaltstellen: neutral".',
-        'Right click and left click: the menu lists the beta-* profiles, Neutral (checked), Start at sign-in, Open kaltstellen..., Quit; clicking elsewhere closes it.'
+        'Right click and left click: the menu lists the beta-* profiles, Neutral (checked), Open kaltstellen..., Quit, and no settings (no Start at sign-in, Automatic switching or Updates: lines; they are in the main window); clicking elsewhere closes it.'
     ) -Check {
         param($since)
         $t = Get-MainTray
@@ -1573,7 +1604,7 @@ function Test-Tray {
     }
     $null = Start-Tray
 
-    Invoke-Step tray quit 'Quit (step 9)' -Human -Robot { $t = Get-MainTray; $null = [KsBeta.Native]::PostMessage($t.Handle, $script:WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero) } -Say @('Choose Quit in the tray menu: the icon disappears.') -Check {
+    Invoke-Step tray quit 'Quit (step 9)' -Human -Robot { $t = Get-MainTray; if (Test-KsSupports quit) { $null = Invoke-Ks quit } else { $null = [KsBeta.Native]::PostMessage($t.Handle, $script:WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero) } } -Say @('Choose Quit in the tray menu: the icon disappears.') -Check {
         param($since)
         $gone = Wait-Until 20 { -not (Get-MainTray) }
         $line = Wait-Log 'tray: quit requested' $since 3
@@ -1586,17 +1617,26 @@ function Test-Signin {
     $null = Start-Tray
     $exe = $script:KsExe
     Invoke-Step signin question 'Start at sign-in question (L8, manual-checks "Start at sign-in question")' -Say @(
-        'At the first start the tray asked whether kaltstellen should start with Windows (in setup).',
-        'If the question is still open: answer Yes. If you answered No: choose "Start at sign-in" in the tray menu now.'
+        'At the first start the tray asked "Start kaltstellen automatically when you sign in to Windows?" (in setup).',
+        'If the question is still open: answer Yes. If you answered No, the script switches it on after Enter (kaltstellen autostart on).'
     ) -Check {
         param($since)
         $asked = Find-Log 'asking whether to start at sign-in' $script:State.setup_utc
+        $answer = Find-Log 'start at sign-in question answered' $script:State.setup_utc
         $a = Invoke-Ks autostart
+        $byScript = $false
+        if ($a.Text -notmatch ':\s*on\b') {
+            # Answered No (or not at all): on through the command line, as the
+            # question's text suggests; T7 needs it.
+            $null = Invoke-Ks autostart on
+            $a = Invoke-Ks autostart
+            $byScript = $true
+        }
         $rv = Get-RunValue (Get-RunKey)
         $expected = "`"$exe`" tray"
         @{ ok = ($a.Text -match '\bon\b' -and $rv.present -and $rv.data -ieq $expected)
-           m = [ordered]@{ asked_in_log = [bool]$asked; autostart = $a.Text; run_key = "HKCU\$(Get-RunKey)"; run_value = $rv.data } }
-    } -Ask 'The tray icon and its menu worked while the question was open?'
+           m = [ordered]@{ asked_in_log = [bool]$asked; answer = $(if ($answer) { $answer.Substring(24).Trim() }); switched_on_by_script = $byScript; autostart = $a.Text; run_key = "HKCU\$(Get-RunKey)"; run_value = $rv.data } }
+    } -Ask 'The tray icon and its menu worked while the question was open, and the text names "Start at sign-in" in the main window and "kaltstellen autostart on|off"?'
     if ($script:State.sandbox) {
         Add-Skip signin at-sign-in 'sandbox: Windows never runs the test Run key' 'n/a'
     } else {
@@ -1631,6 +1671,56 @@ function Close-Gui {
 function Get-WebViewProcesses {
     $marker = (Join-Path $script:DataDir 'webview2')
     @(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($marker, [StringComparison]::OrdinalIgnoreCase) -ge 0 } | ForEach-Object { [int]$_.ProcessId })
+}
+
+# Step 11: the two switches in the header of the main window follow the
+# command line, and "Automatic switching" is disabled with a hint while no
+# profile has triggers.
+function Test-WindowHeader {
+    $null = Open-Gui
+    $before = Invoke-Ks autostart
+    $wasOn = $before.Text -match ':\s*on\b'
+    Invoke-Step window header-autostart '"Start at sign-in" in the header follows the command line (step 11)' -Prepare {
+        $r = Invoke-Ks autostart $(if ($wasOn) { 'off' } else { 'on' })
+        [ordered]@{ autostart_before = $before.Text; switched = $r.Text }
+    } -Say @(
+        "The script switched start at sign-in $(if ($wasOn) { 'off' } else { 'on' }) with ""kaltstellen autostart"". Click into the window: the header switch ""Start at sign-in"" follows."
+    ) -Check {
+        param($since)
+        $now = Invoke-Ks autostart
+        $back = Invoke-Ks autostart $(if ($wasOn) { 'on' } else { 'off' })
+        $restored = (Invoke-Ks autostart).Text -match $(if ($wasOn) { ':\s*on\b' } else { ':\s*off\b' })
+        @{ ok = (($now.Text -match ':\s*(on|off)\b') -and $restored); m = [ordered]@{ during = $now.Text; restored = $restored } }
+    } -Ask 'The header switch followed (it is back as before now; click into the window again)?'
+
+    if (-not (Test-KsSupports automation)) {
+        Add-Skip window header-automation 'the installed build has no "kaltstellen automation" (no header switch)' 'n/a'
+        return
+    }
+    Invoke-Step window header-automation '"Automatic switching" in the header (step 11)' -Check {
+        param($since)
+        $a = Invoke-Ks automation
+        $noTriggers = $a.Text -match 'no profile has triggers'
+        @{ ok = ($a.Code -eq 0 -and $a.Text -match 'automatic switching: paused' -and ($noTriggers -eq (-not $script:Programs.trigger))); m = [ordered]@{ automation = $a.Text } }
+    } -Say @('The test keeps automatic switching paused until test "triggers": in the header "Automatic switching" is enabled and unchecked.') -Ask 'Enabled and unchecked?'
+
+    $cfg = Join-Path $script:ConfigDir 'config.toml'
+    $original = [IO.File]::ReadAllText($cfg)
+    try {
+        Invoke-Step window header-hint '"Automatic switching" disabled without triggers (step 11)' -Human -Robot {} -Prepare {
+            $noTrigger = $script:Programs.PSObject.Copy()
+            $noTrigger.trigger = $null
+            Write-Utf8 $cfg (New-TestConfig $noTrigger)
+            $null
+        } -Say @(
+            'The script wrote the test configuration without the trigger profile. Click into the window:',
+            '"Automatic switching" is disabled; hovering it shows why (no profile has triggers).'
+        ) -Check {
+            param($since)
+            $a = Invoke-Ks automation
+            @{ ok = ($a.Text -match 'no profile has triggers'); m = [ordered]@{ automation = $a.Text } }
+        } -Ask 'Disabled, and the hint says why?'
+    } finally { Write-Utf8 $cfg $original }
 }
 
 function Test-Window {
@@ -1672,10 +1762,11 @@ function Test-Window {
     } -Ask 'Button, status line and tray icon as described?'
     Set-Neutral
 
-    Invoke-Step window misc 'Start at sign-in, context menu, updates section (steps 11, 13, 13a)' -Human -Say @(
-        '"Start at sign-in" in the header follows the tray menu item.',
+    Test-WindowHeader
+
+    Invoke-Step window misc 'Context menu, updates section (steps 13, 13a)' -Human -Say @(
         'Right click in the page: no browser context menu; Ctrl+P, F5, Ctrl+F do nothing.',
-        'Updates (sidebar): the installed version is shown. "Check now" contacts GitHub (your choice): "Checking...", then the result.'
+        'Updates (sidebar): the installed version is shown, Mode reads "Check and ask" (set for the test). "Check now" contacts GitHub (your choice): "Checking...", then the result.'
     ) -Ask 'All as described?' -AskNote
 
     Invoke-Step window icons 'Program icons (13b)' -Human -Robot {} -Say @(
@@ -1803,21 +1894,32 @@ function Test-DragDrop {
 }
 
 function Test-Descriptions {
+    # "kaltstellen list --info" shows description, product and publisher; a
+    # build without it has no program descriptions at all.
+    if (-not (Test-KsSupports list '--info')) {
+        Add-Skip descriptions show 'the installed build has no "kaltstellen list --info" (no program descriptions)' 'n/a'
+        return
+    }
     $null = Start-Tray
     $running = Request-Running $script:Programs.suspend
     Invoke-Step descriptions show 'Program descriptions (beta-test 1.4)' -Prepare {
         $m = [ordered]@{}
-        foreach ($p in $running) { $m["list $($p.exe)"] = ((Invoke-Ks list ([IO.Path]::GetFileNameWithoutExtension($p.exe))).Output | Select-Object -Skip 1 -First 3) -join ' | ' }
+        foreach ($p in $running) { $m["list --info $($p.exe)"] = ((Invoke-Ks list --info ([IO.Path]::GetFileNameWithoutExtension($p.exe))).Output | Select-Object -First 8) -join ' | ' }
         $m['status --unassigned'] = ((Invoke-Ks status --unassigned).Output | Select-Object -First 12) -join ' | '
         $null = Open-Gui
         $m
     } -Say @(
         'In the window: the description, product and publisher of your programs (profile beta-freeze, "Add program...", the unassigned list).',
-        'Also look at the output of "kaltstellen list" and "kaltstellen status --unassigned" above (recorded in the results).'
-    ) -Ask 'Descriptions, products and publishers shown and right?' -AskNote
+        'Also look at the output of "kaltstellen list --info" and "kaltstellen status --unassigned" (recorded in the results).'
+    ) -Check {
+        param($since)
+        # The command works for each running program.
+        $out = @($running | ForEach-Object { (Invoke-Ks list --info ([IO.Path]::GetFileNameWithoutExtension($_.exe))) })
+        $ok = -not @($out | Where-Object { $_.Code -ne 0 }).Count
+        @{ ok = $ok; m = [ordered]@{ list_info_exit_codes = @($out | ForEach-Object { $_.Code }) } }
+    } -Ask 'Descriptions, products and publishers shown and right?' -AskNote
     Close-Gui
 }
-
 function Start-HelperTray([string]$Hotkey) {
     $dir = Join-Path $script:State.temp_root 'helper'
     New-Item -ItemType Directory -Force -Path (Join-Path $dir 'config'), (Join-Path $dir 'data') | Out-Null
@@ -1997,7 +2099,15 @@ function Test-Triggers {
     Set-Neutral
     Set-TriggersPaused $false
     $null = Request-Running @($first)
-    Invoke-Step triggers menu 'Automatic switching in the menu (step 2)' -Human -Say @('Open the tray menu: "Automatic switching" is there and checked.') -Ask 'Checked?'
+    $hasAutomation = Test-KsSupports automation
+    Invoke-Step triggers header 'Automatic switching in the main window (step 2)' -Prepare { Open-Gui } -Say @(
+        'Click into the main window: "Automatic switching" in the header is enabled and checked. The tray menu has no such item.'
+    ) -Check {
+        param($since)
+        if (-not $hasAutomation) { return @{ ok = $null; m = [ordered]@{ automation = 'the installed build has no kaltstellen automation' } } }
+        $a = Invoke-Ks automation
+        @{ ok = ($a.Text -match 'automatic switching: on'); m = [ordered]@{ automation = $a.Text } }
+    } -Ask 'Enabled and checked, and no such item in the tray menu?'
 
     $startTrigger = {
         if ($tr.path) { $script:Ctx.trigger_started = Get-UtcStamp; $null = Start-Program $tr; return [ordered]@{ started_by = 'script' } }
@@ -2008,6 +2118,13 @@ function Test-Triggers {
     # until it has seen the end before starting it again.
     $closeTrigger = {
         $null = Request-Closed $tr
+        if ($tr.builtin) {
+            # The built-in trigger is the script's own copy in the test folder.
+            foreach ($q in Get-ProgramProcesses $tr.exe | Where-Object { $_.Path -and (Test-Below (Get-LongPath $_.Path) $script:TestDir) }) {
+                Write-Note "   $($tr.exe) (pid $($q.Id)) from the test folder still ran; ending it"
+                Stop-Process -Id $q.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
         Start-Sleep -Milliseconds 6500
     }
     Invoke-Step triggers applies 'The trigger applies its profile (step 3)' -Freeze -Prepare $startTrigger -Say @(
@@ -2112,27 +2229,40 @@ function Test-Triggers {
     }
     Set-Neutral
 
-    Invoke-Step triggers pause 'Pausing automatic switching (step 7)' -Human -Say @(
-        'Uncheck "Automatic switching" in the tray menu.'
-    ) -Check {
-        param($since)
-        Start-Sleep -Milliseconds 800
-        $s = Read-JsonFile (Join-Path $script:ConfigDir 'settings.json')
-        $paused = [bool]($s -and $s.triggers_paused)
-        $null = & $startTrigger
-        Start-Sleep -Seconds 12
-        $a = Get-Active
-        Stop-Tray
-        $t0 = Get-UtcStamp (-200)
-        $null = Start-Tray
-        $kept = Wait-Log 'automatic switching is paused' $t0 5
-        @{ ok = ($paused -and $a -eq 'neutral' -and [bool]$kept); m = [ordered]@{ settings_paused = $paused; active_with_trigger_running = $a; paused_after_restart = [bool]$kept } }
-    } -Ask 'After the restart of the tray (done by the script) the item is still unchecked?'
-    Invoke-Step triggers resume 'Switching it on again (step 7)' -Human -Say @('Check "Automatic switching" again: the running trigger counts as starting and the profile is applied.') -Check {
-        param($since)
-        $ask = Wait-Log 'trigger asks for "beta-trigger"' $since 20
-        @{ ok = [bool]$ask }
-    } -Ask 'The profile was applied?'
+    if (-not $hasAutomation) {
+        Add-Skip triggers pause 'the installed build has no "kaltstellen automation"' 'n/a'
+    } else {
+        Invoke-Step triggers pause 'Pausing automatic switching (step 7)' -Prepare {
+            $script:Ctx.pause_from = Get-UtcStamp
+            $r = Invoke-Ks automation off
+            [ordered]@{ automation_off = ($r.Output -join ' | ') }
+        } -Say @(
+            'The script paused automatic switching with "kaltstellen automation off" (as unchecking it in the main window does).',
+            'The tray menu shows the disabled line "Automatic switching paused" at once; click into the main window: the header switch is unchecked.'
+        ) -Check {
+            param($since)
+            $line = Wait-Log 'tray: automatic switching paused' $script:Ctx.pause_from 5
+            $s = Read-JsonFile (Join-Path $script:ConfigDir 'settings.json')
+            $paused = [bool]($s -and $s.triggers_paused)
+            $null = & $startTrigger
+            Start-Sleep -Seconds 12
+            $a = Get-Active
+            Stop-Tray
+            $t0 = Get-UtcStamp (-200)
+            $null = Start-Tray
+            $kept = Wait-Log 'automatic switching is paused' $t0 5
+            @{ ok = ([bool]$line -and $paused -and $a -eq 'neutral' -and [bool]$kept); m = [ordered]@{ tray_took_it = [bool]$line; settings_paused = $paused; active_with_trigger_running = $a; paused_after_restart = [bool]$kept } }
+        } -Ask 'The disabled line in the tray menu, and after the restart of the tray (done by the script) the header switch is still unchecked?'
+        Invoke-Step triggers resume 'Switching it on again (step 7)' -Prepare {
+            $script:Ctx.resume_from = Get-UtcStamp
+            $r = Invoke-Ks automation on
+            [ordered]@{ automation_on = ($r.Output -join ' | ') }
+        } -Say @('The script switched it on again ("kaltstellen automation on"): the running trigger counts as starting and the profile is applied.') -Check {
+            param($since)
+            $ask = Wait-Log 'trigger asks for "beta-trigger"' $script:Ctx.resume_from 20
+            @{ ok = [bool]$ask }
+        } -Ask 'The profile was applied and the header switch is checked again?'
+    }
     $null = Request-Closed $tr
     Set-Neutral
 
@@ -2373,22 +2503,11 @@ function Test-Defender {
 function Test-Updates {
     $null = Start-Tray
     $settings = Join-Path $script:ConfigDir 'settings.json'
-    Invoke-Step updates modes 'Update modes in the menu (manual-checks "Updates" 1)' -Human -Say @(
-        'The test runs with "Updates: check and ask" (set by setup). In the tray menu choose "Updates: off", then "Updates: check and ask" again.',
-        'The check mark moves each time. Do not choose "install automatically": it would install a newer release by itself.'
-    ) -Check {
-        param($since)
-        $modes = @(Find-Log 'tray: update mode ' $since -All | ForEach-Object { ($_ -split 'update mode ')[-1].Trim() })
-        $s = Read-JsonFile $settings
-        $final = if ($s) { $s.update } else { $null }
-        @{ ok = ($modes -contains 'manual' -and $modes -contains 'off' -and $final -eq 'manual'); m = [ordered]@{ modes_logged = $modes; settings_update = $final } }
-    } -Ask 'The check mark moved each time?'
-
     $uj = Join-Path $script:DataDir 'update.json'
     $had = Test-Path -LiteralPath $uj
     $old = if ($had) { [IO.File]::ReadAllText($uj) } else { $null }
     try {
-        Invoke-Step updates offer 'A newer version is offered (step 2)' -Prepare {
+        Invoke-Step updates offer 'A newer version is offered (manual-checks "Updates" 2)' -Prepare {
             Write-Utf8 $uj '{ "latest": "9.9.9" }'
             $null
         } -Say @(
@@ -2401,6 +2520,23 @@ function Test-Updates {
         if (Get-MainTray) { Set-Neutral; Stop-Tray; $null = Start-Tray }
     }
 
+    # The mode through the running tray, as the main window sets it. Off from
+    # here on: "check and ask" would check GitHub at once when it is chosen.
+    Invoke-Step updates modes 'Update mode through the tray (manual-checks "Updates" 1)' -Prepare {
+        $script:Ctx.mode_from = Get-UtcStamp
+        $r = Invoke-Ks update --mode off
+        [ordered]@{ exit = $r.Code; output = ($r.Output -join ' | ') }
+    } -Say @(
+        'The script set the update mode to off with "kaltstellen update --mode off" (as the main window''s Updates section does); it stays off for the rest of the test.',
+        'Main window, Updates: Mode reads "Off" (click into the window). The tray menu has no mode items.'
+    ) -Check {
+        param($since)
+        $line = Wait-Log 'tray: update mode off' $script:Ctx.mode_from 5
+        $s = Read-JsonFile $settings
+        $final = if ($s) { $s.update } else { $null }
+        @{ ok = ([bool]$line -and $final -eq 'off'); m = [ordered]@{ tray_took_it = [bool]$line; settings_update = $final } }
+    } -Ask 'Mode "Off" in the main window, and no mode items in the tray menu?'
+
     if ($script:IsUnattended -or -not (Confirm-Yes '   Is a newer beta released and do you want to install it now (it is downloaded from GitHub and replaces the installed copy)?')) {
         Add-Skip updates install 'no newer release to install yet (beta-test section 4)'
         return
@@ -2410,12 +2546,13 @@ function Test-Updates {
     $oldHash = if (Test-Path -LiteralPath $oldExe) { Get-Sha256 $oldExe } else { $null }
     $null = Request-Running $script:Programs.suspend
     $auto = Confirm-Yes '   Test the automatic install (y) or the install on request with frozen programs (n)?'
+    $ks = "& '$($script:KsExe)'"
     Invoke-Step updates install $(if ($auto) { 'Automatic install while neutral (step 1a)' } else { 'Install on request with frozen programs (step 4)' }) -Freeze -Human -Say $(if ($auto) {
-            @('Choose "Updates: install automatically". Apply beta-freeze, then choose "Updates: install automatically" again to check now: nothing is installed while the profile is active.',
+            @("Apply beta-freeze. Then set the mode in another terminal ($ks update --mode auto) or in the main window (Mode: Install automatically): it checks at once, and nothing is installed while the profile is active.",
               'Then choose Neutral: the update installs without a window, the tray icon disappears briefly and comes back. Wait for it, then press Enter.')
         } else {
-            @('Choose "Updates: check and ask". Apply beta-freeze. Then run in another terminal:',
-              "  & '$($script:KsExe)' update",
+            @('Apply beta-freeze. Then run in another terminal:',
+              "  $ks update",
               'Expect: the frozen programs run again, the console says "updated to version ...", one new tray icon appears (not two), its menu offers "Apply last profile". Then press Enter.')
         }) -Check {
         param($since)
@@ -2425,13 +2562,12 @@ function Test-Updates {
         $f = Get-FreezeReport $script:Programs.suspend
         $oldNow = if (Test-Path -LiteralPath $oldExe) { Get-Sha256 $oldExe } else { $null }
         Set-State 'version' $after
-        # Back to check and ask for the rest of the test.
-        $null = Invoke-Ks update --mode manual
+        # Off again for the rest of the test.
+        $null = Invoke-Ks update --mode off
         @{ ok = ($after -ne $before -and $trays -eq 1 -and $f.none -and $oldNow -and $oldNow -ne $oldHash)
            m = [ordered]@{ version_before = $before; version_after = $after; trays = $trays; frozen = $f.detail; old_exe_next_to_it = [bool]$oldNow } }
     } -Ask 'As described? Did SmartScreen warn when the new tray started (note it)?' -AskNote
 }
-
 function Send-SessionEnd($Tray) {
     if (-not $Tray) { throw 'no tray of the test runs; nothing to send the end of the session to' }
     $q = [KsBeta.Native]::Send($Tray.Handle, $script:WM_QUERYENDSESSION, 0, [int64]$script:ENDSESSION_LOGOFF, 10000)
@@ -2808,6 +2944,9 @@ function Invoke-Teardown {
         $n = Invoke-Ks switch neutral
         $done.Add("recover: exit $($r.Code); neutral: exit $($n.Code)")
         Stop-HelperTrays
+        # The main tray through "kaltstellen quit" where the build has it.
+        $main = Get-MainTray
+        if ($main) { Stop-Tray; if (-not (Get-Process -Id $main.Pid -ErrorAction SilentlyContinue)) { $done.Add("tray $($main.Pid) quit") } }
         foreach ($t in Get-TrayWindows) {
             if (Stop-TrayWindow $t 25) { $done.Add("tray $($t.Pid) quit") } else { $done.Add("tray $($t.Pid) ended") }
         }
