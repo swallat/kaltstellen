@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use common::*;
 use kaltstellen::config::OnTimeout;
-use kaltstellen::process::Snapshot;
+use kaltstellen::process::{Access, Snapshot, Target};
 use windows::Win32::Foundation::{HWND, LPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetWindowThreadProcessId, IsIconic, SW_MINIMIZE, ShowWindow,
@@ -141,10 +141,15 @@ fn descendants(root: Proc) -> HashSet<Proc> {
 }
 
 /// The WebView2 processes of `world`, by the user data folder on their
-/// command line. Not every runtime starts them as descendants of the
-/// window process (seen on the CI runner), so the tree alone misses them.
-/// Only processes in a snapshot before and one after the query count, so a
-/// PID that ended and was taken by another WebView2 meanwhile is left out.
+/// command line. The tree alone can miss them: on the CI runner a short
+/// window's WebView2 processes were not seen below it (not started there,
+/// or gone between two polls). Only processes in a snapshot before and one
+/// after the query count, so a PID that ended and was taken by another
+/// WebView2 meanwhile is left out. A failed query fails the test, so it
+/// never reads as "none left". It finds running processes; one that is
+/// being torn down may have no readable command line any more and is not
+/// listed (seen on the ARM64 runner), so it does not replace the tree for
+/// processes that are ending.
 fn webview_of(world: &World) -> HashSet<Proc> {
     let snapshot = |s: Snapshot| -> HashSet<Proc> {
         s.processes()
@@ -156,7 +161,8 @@ fn webview_of(world: &World) -> HashSet<Proc> {
     let before = snapshot(Snapshot::take().unwrap());
     let folder = world.path("data").join("webview2");
     let script = format!(
-        "Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | \
+        "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; \
+         Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | \
          Where-Object {{ $_.CommandLine -and $_.CommandLine.Contains('{}') }} | \
          ForEach-Object {{ $_.ProcessId }}",
         folder.to_string_lossy().replace('\'', "''")
@@ -166,6 +172,11 @@ fn webview_of(world: &World) -> HashSet<Proc> {
         .stdin(Stdio::null())
         .output()
         .expect("powershell.exe");
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "the WebView2 query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let pids: HashSet<u32> = String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter_map(|l| l.trim().parse().ok())
@@ -182,13 +193,24 @@ fn page_ready(world: &World) -> bool {
         .is_ok_and(|log| log.contains("gui: page ready"))
 }
 
-/// The processes of `procs` that still run (same PID and creation time).
-fn alive(procs: &HashSet<Proc>) -> Vec<Proc> {
+/// The processes of `procs` that still run (same PID and creation time),
+/// with their names. A process that has exited but is still listed because
+/// some other process holds a handle to it (WMI, for example) does not
+/// count: opening it checks creation time and exit code. One that cannot be
+/// opened is taken as running, with the reason in its name.
+fn alive(procs: &HashSet<Proc>) -> Vec<(Proc, String)> {
     let snapshot = Snapshot::take().unwrap();
     procs
         .iter()
-        .copied()
-        .filter(|&(pid, created)| snapshot.get(pid).is_some_and(|p| p.created == created))
+        .filter_map(|&(pid, created)| snapshot.find(pid, created))
+        .filter_map(|info| {
+            let name = match Target::open(info, Access::Query) {
+                Ok(Some(_)) => info.name.clone(),
+                Ok(None) => return None,
+                Err(err) => format!("{} (open: {err})", info.name),
+            };
+            Some(((info.pid, info.created), name))
+        })
         .collect()
 }
 
@@ -327,12 +349,8 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
         image.len()
     );
 
-    assert!(!webview.is_empty(), "WebView2 processes were started");
-    assert!(
-        wait_for(Duration::from_secs(15), || alive(&webview).is_empty()),
-        "WebView2 processes left behind: {:?}",
-        alive(&webview)
-    );
+    // Below the window and by data folder (the tree may not see WebView2).
+    assert_no_webview_left(&world, &webview, "drive");
     let back = world.command(&["switch", "neutral"]).output().unwrap();
     assert_eq!(back.status.code(), Some(0));
     assert!(beating(&beat));
@@ -361,16 +379,10 @@ fn wp10_screenshot_views_render_in_both_themes() {
             image.starts_with(b"\x89PNG") && image.len() > 10_000,
             "{view}-{theme}"
         );
-        assert!(
-            !webview.is_empty(),
-            "{view}-{theme}: no WebView2 process seen"
-        );
-        // Three windows of the parallel tests may share the machine.
-        assert!(
-            wait_for(Duration::from_secs(30), || alive(&webview).is_empty()),
-            "{view}-{theme}: WebView2 processes left behind: {:?}",
-            alive(&webview)
-        );
+        // Three windows of the parallel tests may share the machine. The
+        // tree can miss a short window's WebView2 (see `webview_of`), so the
+        // processes of this test's data folder must be gone too.
+        assert_no_webview_left(&world, &webview, &format!("{view}-{theme}"));
     }
 }
 
@@ -416,9 +428,18 @@ fn wp10_missing_runtime_invalid_file_and_second_window() {
             fs::read_to_string(world.path("data").join("kaltstellen.log")).unwrap_or_default()
         );
     }
+    // The query by data folder finds this window's WebView2 processes; this
+    // proves it works here, which the leak checks of all three tests rely on.
+    let mut by_folder = HashSet::new();
+    assert!(
+        wait_for(LONG, || {
+            by_folder = webview_of(&world);
+            !by_folder.is_empty()
+        }),
+        "the data-folder query finds no WebView2 process of an open window"
+    );
     let mut webview = descendants(root_of(pid));
-    webview.extend(webview_of(&world));
-    assert!(!webview.is_empty(), "no WebView2 process found");
+    webview.extend(by_folder);
     // M6: a second start brings the open window back, also when minimised.
     assert!(wait_for(LONG, || main_window(pid).is_some()));
     let window = main_window(pid).unwrap();
@@ -448,5 +469,48 @@ fn wp10_missing_runtime_invalid_file_and_second_window() {
         "{}",
         String::from_utf8_lossy(&first.stderr)
     );
-    assert!(wait_for(Duration::from_secs(15), || alive(&webview).is_empty()));
+    assert_no_webview_left(&world, &webview, "second window");
+}
+
+/// How long WebView2 may take to end after its window closed. On the ARM64
+/// runner, with the other window tests running beside it, it took more
+/// than 30 s and less than 2 minutes; a process left behind runs on.
+const WEBVIEW_END: Duration = Duration::from_secs(120);
+
+/// Waits until neither a process of `webview` nor a WebView2 process of
+/// `world`'s data folder runs (at most [`WEBVIEW_END`]); on failure names
+/// what was still running at the last look. The process tree is cheap to
+/// ask and polled first; the data-folder query starts PowerShell and asks
+/// WMI, which loads a slow runner, so it follows once the tree is clear.
+fn assert_no_webview_left(world: &World, webview: &HashSet<Proc>, what: &str) {
+    let start = std::time::Instant::now();
+    let mut below = Vec::new();
+    let tree_clear = wait_for(WEBVIEW_END, || {
+        below = alive(webview);
+        below.is_empty()
+    });
+    assert!(
+        tree_clear,
+        "{what}: WebView2 processes below the window still run after {} s: {below:?}",
+        WEBVIEW_END.as_secs()
+    );
+    // At least 15 s for this phase; a second between queries, so they do
+    // not load the runner that WebView2 is ending on.
+    let mut by_folder = HashSet::new();
+    let budget = WEBVIEW_END
+        .saturating_sub(start.elapsed())
+        .max(Duration::from_secs(15));
+    let folder_clear = wait_for(budget, || {
+        by_folder = webview_of(world);
+        if !by_folder.is_empty() {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        by_folder.is_empty()
+    });
+    assert!(
+        folder_clear,
+        "{what}: WebView2 processes of {} still run after {} s: {by_folder:?}",
+        world.path("data").join("webview2").display(),
+        WEBVIEW_END.as_secs()
+    );
 }

@@ -19,8 +19,24 @@ env:
 
 jobs:
   check:
-    runs-on: windows-latest
-    timeout-minutes: 30
+    # The x86_64 job keeps the plain name `check`: the ruleset on main
+    # requires a status check of that name.
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: check
+            runner: windows-latest
+            timeout: 30
+          # The release also ships an ARM64 executable; it is tested natively.
+          # Slower runner, so more time. Not a required check (the ruleset
+          # names only `check`), so a red ARM64 job does not block a merge.
+          - name: check (arm64)
+            runner: windows-11-arm
+            timeout: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
