@@ -72,6 +72,18 @@
         </form>
 
         <div class="section-head">
+          <h3 id="triggers-title">Triggers</h3>
+        </div>
+        <form class="triggers" id="triggers-form" aria-labelledby="triggers-title">
+          <label for="triggers">Programs</label>
+          <textarea id="triggers" rows="2" spellcheck="false" autocomplete="off" placeholder="for example simulator.exe" aria-describedby="triggers-help"></textarea>
+          <label for="priority">Priority</label>
+          <input id="priority" type="number" step="1" value="0" inputmode="numeric">
+          <button type="submit" class="button small">Set</button>
+          <p class="hint" id="triggers-help">When one of these programs starts, this profile is applied automatically; about 5 s after the last one ended, the profile from before comes back. A program name or a full path, one per line. When triggers of two profiles run, the higher priority wins.</p>
+        </form>
+
+        <div class="section-head">
           <h3>Programs</h3>
           <button type="button" class="button" id="add-program">Add program…</button>
         </div>

@@ -34,7 +34,7 @@ const state = {
   },
   profiles: [
     {
-      name: 'Flight', hotkey: 'Ctrl+Shift+Alt+F1', active: true,
+      name: 'Flight', hotkey: 'Ctrl+Shift+Alt+F1', active: true, triggers: ['simulator.exe'], priority: 10,
       entries: [
         entry('browser.exe', 'suspend'),
         entry('mail.exe', 'suspend', { trim: false }),
@@ -44,13 +44,13 @@ const state = {
       ],
     },
     {
-      name: 'Music production', hotkey: 'Ctrl+Shift+Alt+F2', active: false,
+      name: 'Music production', hotkey: 'Ctrl+Shift+Alt+F2', active: false, triggers: [], priority: 0,
       entries: [
         entry('browser.exe', 'suspend'),
         entry('sync.exe', 'stop', { on_timeout: 'keep' }),
       ],
     },
-    { name: 'Quiet evening', hotkey: null, active: false, entries: [] },
+    { name: 'Quiet evening', hotkey: null, active: false, triggers: [], priority: 0, entries: [] },
   ],
 };
 
@@ -87,7 +87,7 @@ function handle(message) {
       const name = String(m.name || '').trim();
       if (!name) return fail('KS205: a profile needs a name');
       if (find(name) || name.toLowerCase() === 'neutral') return fail(`KS205: profile name "${name}" is used already`);
-      state.profiles.push({ name, hotkey: null, active: false, entries: [] });
+      state.profiles.push({ name, hotkey: null, active: false, triggers: [], priority: 0, entries: [] });
       state.status = `Profile "${name}" created; saved.`;
       return { ok: true };
     }
@@ -95,7 +95,7 @@ function handle(message) {
       const from = find(m.from);
       if (!from) return fail(`no profile named "${m.from}"`);
       if (find(m.to)) return fail(`KS205: profile name "${m.to}" is used already`);
-      state.profiles.push({ ...clone(from), name: m.to.trim(), hotkey: null, active: false });
+      state.profiles.push({ ...clone(from), name: m.to.trim(), hotkey: null, active: false, triggers: [], priority: 0 });
       state.status = `Profile "${from.name}" copied to "${m.to.trim()}"; saved.`;
       return { ok: true };
     }
@@ -124,6 +124,18 @@ function handle(message) {
       }
       profile.hotkey = hotkey || null;
       state.status = hotkey ? `Hotkey of "${profile.name}" set to ${hotkey}; saved.` : `Hotkey of "${profile.name}" removed; saved.`;
+      return { ok: true };
+    }
+    case 'set_triggers': {
+      if (!profile) return fail('no such profile');
+      const triggers = (m.triggers || []).map((t) => String(t).trim()).filter(Boolean);
+      const own = triggers.find((t) => profile.entries.some((e) =>
+        (e.action === 'stop' || e.action === 'suspend') && e.exe.toLowerCase() === t.split('\\').pop().toLowerCase()));
+      if (own) return fail(`KS205: trigger "${own}" is a program that this profile stops or freezes`);
+      if (!Number.isInteger(m.priority ?? 0)) return fail('malformed request: priority');
+      profile.triggers = triggers;
+      profile.priority = m.priority ?? 0;
+      state.status = triggers.length ? `Triggers of "${profile.name}" set; saved.` : `Triggers of "${profile.name}" removed; saved.`;
       return { ok: true };
     }
     case 'check_program': {

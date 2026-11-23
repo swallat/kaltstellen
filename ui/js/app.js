@@ -251,6 +251,13 @@ function renderDetail() {
   const hotkey = $('hotkey');
   if (document.activeElement !== hotkey) hotkey.value = profile.hotkey || '';
   hotkey.removeAttribute('aria-invalid');
+  // U4: trigger programs, one per line, and the priority.
+  const triggers = $('triggers');
+  const priority = $('priority');
+  if (document.activeElement !== triggers) triggers.value = (profile.triggers || []).join('\n');
+  if (document.activeElement !== priority) priority.value = String(profile.priority || 0);
+  triggers.removeAttribute('aria-invalid');
+  priority.removeAttribute('aria-invalid');
   $('apply').disabled = state.applying;
   $('apply').textContent = state.applying ? 'Applying…' : 'Apply profile';
 
@@ -505,6 +512,19 @@ $('hotkey-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const reply = await call('set_hotkey', { profile: current().name, hotkey: $('hotkey').value.trim() || null });
   if (!reply.ok) $('hotkey').setAttribute('aria-invalid', 'true');
+});
+
+$('triggers-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const priority = Number($('priority').value.trim() || '0');
+  if (!Number.isInteger(priority)) {
+    $('priority').setAttribute('aria-invalid', 'true');
+    setStatus('The priority is a whole number.', true);
+    return;
+  }
+  const triggers = $('triggers').value.split(/\r?\n/).map((t) => t.trim()).filter(Boolean);
+  const reply = await call('set_triggers', { profile: current().name, triggers, priority });
+  if (!reply.ok) $('triggers').setAttribute('aria-invalid', 'true');
 });
 
 $('add-program').addEventListener('click', openAdd);
