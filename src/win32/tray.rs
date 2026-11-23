@@ -110,6 +110,8 @@ pub trait Handler {
     /// The notification left the screen (`NIN_BALLOONTIMEOUT`,
     /// `NIN_BALLOONHIDE`, U4).
     fn balloon_gone(&mut self);
+    /// Explorer restarted (`TaskbarCreated`); the icon was added again.
+    fn taskbar_created(&mut self);
 }
 
 /// Sets or stops (`None`) the repeating timer `id`. Window thread only.
@@ -617,6 +619,7 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         notify(window, NIM_ADD);
                     }
                 });
+                with_handler(|h| h.taskbar_created());
                 return LRESULT(0);
             }
             // SAFETY: forwarding the unchanged arguments.

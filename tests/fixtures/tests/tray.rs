@@ -19,7 +19,7 @@ use common::*;
 use kaltstellen::autostart::{self, RUN_KEY, VALUE};
 use kaltstellen::state::Store;
 use kaltstellen::tray::model::{
-    ID_AUTOMATIC, ID_AUTOSTART, ID_LAST, ID_NEUTRAL, ID_OPEN, ID_PROFILE_BASE, ID_QUIT,
+    ID_AUTOMATIC, ID_AUTOSTART, ID_BACK, ID_LAST, ID_NEUTRAL, ID_OPEN, ID_PROFILE_BASE, ID_QUIT,
 };
 use kaltstellen::win32::registry;
 use kaltstellen::win32::tray::{CLASS, WM_TRAY};
@@ -1080,22 +1080,19 @@ fn u4_a_trigger_applies_its_profile_and_the_end_returns() {
     assert!(out.contains("tray: automatic switching on"), "{out}");
 
     let sim = t.program("ks-trig1-sim.exe");
-    t.wait_log("tray: automatic switch to \"flight\" finished", 1);
+    t.wait_log("tray: trigger ks-trig1-sim.exe of \"flight\" started", 1);
+    t.wait_log(
+        "tray: notification: kaltstellen: flight: ks-trig1-sim.exe started: switched to flight. Click here: Back to neutral",
+        1,
+    );
+    assert!(
+        t.log()
+            .contains("tray: automatic switch to \"flight\" finished")
+    );
     assert!(t.is_frozen("ks-trig1-a.exe"));
     assert!(
         t.is_beating("ks-trig1-sim.exe"),
         "the trigger itself runs on"
-    );
-    let log = t.log();
-    assert!(
-        log.contains("tray: trigger ks-trig1-sim.exe of \"flight\" started"),
-        "{log}"
-    );
-    assert!(
-        log.contains(
-            "tray: notification: kaltstellen: flight: ks-trig1-sim.exe started: switched to flight. Click here: Back to neutral"
-        ),
-        "{log}"
     );
     let (_, out, _) = t.run(&["status"]);
     assert!(out.contains("active profile: flight"), "{out}");
@@ -1109,18 +1106,18 @@ fn u4_a_trigger_applies_its_profile_and_the_end_returns() {
     // The trigger ends: back to the profile from before, after the
     // debounce.
     drop(sim);
-    t.wait_log("tray: automatic switch to \"neutral\" finished", 1);
-    assert!(t.is_beating("ks-trig1-a.exe"));
-    assert!(
-        t.log()
-            .contains("tray: notification: kaltstellen: neutral: ks-trig1-sim.exe ended: switched to neutral. Click here: Back to flight"),
-        "{}",
-        t.log()
+    t.wait_log(
+        "tray: notification: kaltstellen: neutral: ks-trig1-sim.exe ended: switched to neutral. Click here: Back to flight",
+        1,
     );
-    // A click while the notification is on screen goes back (manually).
+    assert!(t.is_beating("ks-trig1-a.exe"));
+    // A click before the notification is on screen does nothing and does
+    // not use the way back up; one while it is on screen goes back.
+    t.click_notification();
+    t.wait_log("tray: notification clicked; nothing to go back to", 1);
     t.notification_shown();
     t.click_notification();
-    t.wait_log("tray: notification clicked; back to \"flight\"", 1);
+    t.wait_log("tray: back to \"flight\"", 1);
     t.wait_log("tray: switch to \"flight\" finished", 1);
     assert!(t.is_frozen("ks-trig1-a.exe"));
     assert_eq!(t.quit(), Some(0));
@@ -1144,27 +1141,29 @@ fn u4_manual_switch_and_the_notification_click_hold_automation() {
     t.start(1);
     t.wait_log("tray: trigger poll every", 1);
     let sim = t.program("ks-trig2-sim.exe");
-    t.wait_log("tray: automatic switch to \"flight\" finished", 1);
+    t.wait_log("tray: notification: kaltstellen: flight:", 1);
     assert!(t.is_frozen("ks-trig2-a.exe"));
 
-    // A click before the notification was shown does nothing.
-    t.click_notification();
-    t.wait_log("tray: notification clicked; nothing to go back to", 1);
-    // Another request makes the notification's way back void.
+    // `Back to neutral` by a click on the notification on screen: a manual
+    // switch, which holds automation while the trigger keeps running.
     t.notification_shown();
-    t.click(ID_NEUTRAL);
-    t.wait_log("tray: switch to \"neutral\" finished", 1);
     t.click_notification();
-    t.wait_log("tray: notification clicked; nothing to go back to", 2);
+    t.wait_log("tray: back to \"neutral\"", 1);
+    t.wait_log("tray: switch to \"neutral\" finished", 1);
     assert!(t.is_beating("ks-trig2-a.exe"));
-
-    // The manual switch holds automation while the trigger keeps running.
     let (_, out, _) = t.run(&["status"]);
     assert!(
         out.contains("automatic switching held by a manual switch"),
         "{out}"
     );
+    // The way back is used up: another click does nothing.
+    t.click_notification();
+    t.wait_log("tray: notification clicked; nothing to go back to", 1);
+    // Several polls later (the status line is answered between them):
+    // still held, nothing applied again.
     std::thread::sleep(Duration::from_millis(1500));
+    let (_, out, _) = t.run(&["status"]);
+    assert!(out.contains("active profile: neutral"), "{out}");
     assert_eq!(
         t.logged("tray: automatic switch to \"flight\" finished"),
         1,
@@ -1187,18 +1186,60 @@ fn u4_manual_switch_and_the_notification_click_hold_automation() {
 
     // A trigger starts again: automation applies its profile from "work".
     let _alt = t.program("ks-trig2-alt.exe");
-    t.wait_log("tray: automatic switch to \"flight\" finished", 2);
-    assert!(t.log().contains("Click here: Back to work"), "{}", t.log());
+    t.wait_log("Click here: Back to work", 1);
     assert!(t.is_frozen("ks-trig2-a.exe"));
     assert!(t.is_beating("ks-trig2-b.exe"));
-    // Shown, then gone by itself: a later click (from the notification
-    // centre) does nothing.
+    // Two notifications on screen: the click cannot tell which one.
     t.notification_shown();
+    t.notification_shown();
+    t.click_notification();
+    t.wait_log("tray: notification clicked; nothing to go back to", 2);
+    // Both gone: a later click (from the notification centre) does
+    // nothing either; the menu item stays.
     t.notification_timed_out();
-    t.wait_log("tray: notification gone; its way back no longer applies", 1);
+    t.notification_timed_out();
+    t.wait_log("tray: notification gone; Back to stays in the menu", 2);
     t.click_notification();
     t.wait_log("tray: notification clicked; nothing to go back to", 3);
     assert!(t.is_frozen("ks-trig2-a.exe"));
+    t.click(ID_BACK);
+    t.wait_log("tray: back to \"work\"", 1);
+    t.wait_log("tray: switch to \"work\" finished", 2);
+    assert!(t.is_frozen("ks-trig2-b.exe"));
+    assert_eq!(t.quit(), Some(0));
+}
+
+#[test]
+fn u4_back_to_in_the_menu_works_without_the_notification() {
+    let mut t = Tray::new();
+    let _a = t.program("ks-trig9-a.exe");
+    t.config(&triggered(
+        "flight",
+        0,
+        &["ks-trig9-sim.exe"],
+        &[("ks-trig9-a.exe", "suspend")],
+    ));
+    t.start(1);
+    t.wait_log("tray: trigger poll every", 1);
+    let _sim = t.program("ks-trig9-sim.exe");
+    t.wait_log("tray: notification: kaltstellen: flight:", 1);
+    assert!(t.is_frozen("ks-trig9-a.exe"));
+    // No notification was ever shown (Do Not Disturb): the menu item
+    // `Back to neutral` still goes back, as a manual switch.
+    t.click(ID_BACK);
+    t.wait_log("tray: menu asks to go back", 1);
+    t.wait_log("tray: back to \"neutral\"", 1);
+    t.wait_log("tray: switch to \"neutral\" finished", 1);
+    assert!(t.is_beating("ks-trig9-a.exe"));
+    let (_, out, _) = t.run(&["status"]);
+    assert!(
+        out.contains("automatic switching held by a manual switch"),
+        "{out}"
+    );
+    // Used up by that request: the item is gone.
+    t.click(ID_BACK);
+    t.wait_log("tray: command 13 has no meaning; ignored", 1);
+    assert_eq!(t.logged("tray: back to"), 1);
     assert_eq!(t.quit(), Some(0));
 }
 
@@ -1237,10 +1278,16 @@ fn u4_an_automatic_request_does_not_replace_a_waiting_manual_one() {
     let mut t = Tray::new();
     t.cleanup.push(KillProgram("ks-trig8-slow.exe".to_owned()));
     let slow = copy_fixture(WINDOW, t.dir.path(), "ks-trig8-slow.exe");
-    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "3000"]) else {
+    // Long enough for the steps below also on a slow runner; the switch
+    // to "slow" waits for it.
+    let Some(_slow) = window_fixture(str_of(&slow), &["--close-delay-ms", "10000"]) else {
         return;
     };
     let _b = t.program("ks-trig8-b.exe");
+    // Copied now, started while the slow switch runs.
+    t.cleanup.push(KillProgram("ks-trig8-sim.exe".to_owned()));
+    let sim_exe = copy_fixture(HEARTBEAT, t.dir.path(), "ks-trig8-sim.exe");
+    let sim_beat = t.beat_file("ks-trig8-sim.exe");
     t.config(&format!(
         "{}{}{}",
         profile("slow", &[("ks-trig8-slow.exe", "stop")]),
@@ -1253,7 +1300,7 @@ fn u4_an_automatic_request_does_not_replace_a_waiting_manual_one() {
     t.wait_log("tray: running switch to \"slow\"", 1);
     t.click(ID_PROFILE_BASE + 1);
     t.wait_log("tray: switch to \"work\" waits", 1);
-    let sim = t.program("ks-trig8-sim.exe");
+    let sim = Fixture::spawn(str_of(&sim_exe), &[str_of(&sim_beat)]);
     t.wait_log(
         "tray: automatic switch to \"flight\" ignored, a manual request waits",
         1,
@@ -1348,17 +1395,16 @@ fn u4_automatic_switching_can_be_paused_and_stays_paused() {
         t.settings()
     );
     let _sim = t.program("ks-trig4-sim.exe");
-    std::thread::sleep(Duration::from_millis(1000));
-    assert_eq!(t.logged("automatic switch to"), 0);
+    // The poll is stopped while paused; Quit is the later marker.
     assert!(t.is_beating("ks-trig4-a.exe"));
     assert_eq!(t.quit(), Some(0));
+    assert_eq!(t.logged("automatic switch to"), 0);
 
     // Remembered across a restart (settings.json).
     t.start(2);
     assert_eq!(t.logged("tray: automatic switching is paused"), 1);
     let (_, out, _) = t.run(&["status"]);
     assert!(out.contains("tray: automatic switching paused"), "{out}");
-    std::thread::sleep(Duration::from_millis(600));
     assert_eq!(t.logged("automatic switch to"), 0);
 
     // On again: a trigger that runs counts as starting.

@@ -35,12 +35,17 @@ cover. Each is marked `[assumed]` in spec L12 or C9:
 7. **Return target gone** (L12): a profile from before the trigger that is
    no longer in the configuration becomes `neutral`.
    The same for `Back to` in a notification.
-8. **Notification** (L12): shown for every automatic switch, the return
-   included; none when another request already waits; a failed switch
-   says so. The click works only while the notification is on screen
-   (decided after review: the click message does not say which
-   notification was clicked), and until the next request; clicks in the
-   notification centre do nothing.
+8. **Notification and undo** (L12): shown for every automatic switch, the
+   return included; none when another request already waits; a failed
+   switch says so. The one-click undo of decided detail 1 is kept by the
+   menu item `Back to <previous>` at the top of the menu, valid until the
+   next request, the next automatic switch or the end of the session. The
+   notification click does the same only while it is the only
+   notification of the tray on screen (chosen after review: the click does
+   not say which notification was clicked, the order of the show, hide and
+   timeout messages of stacked notifications is not documented, and with
+   Do Not Disturb no notification shows); clicks in the notification
+   centre do nothing.
 9. **S5 offer** (L12, L7): an automatic switch does not use up the offer;
    when the profile from before the trigger was `neutral`, the earlier
    offer stays.

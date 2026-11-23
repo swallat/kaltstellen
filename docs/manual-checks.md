@@ -154,12 +154,23 @@ trigger = ["notepad.exe"]
    `kaltstellen: trigger test`, `notepad.exe started: switched to trigger
    test. Click here: Back to neutral`. The menu shows `Applied by trigger
    notepad.exe; back to neutral when it ends`.
-4. Click the notification while it is on screen: `neutral` is applied. The
-   menu shows `Triggers wait after a manual switch …`; nothing switches
-   back while Notepad keeps running. Clicking a notification in the
-   notification centre after it left the screen does nothing (the log says
-   `notification clicked; nothing to go back to`): the click does not say
-   which notification it was.
+4. The menu starts with `Back to neutral`. Click the notification while it
+   is on screen (the only one): `neutral` is applied. The menu shows
+   `Triggers wait after a manual switch …` and no `Back to` any more;
+   nothing switches back while Notepad keeps running. Clicking a
+   notification in the notification centre after it left the screen does
+   nothing (the log says `notification clicked; nothing to go back to`):
+   the click does not say which notification it was. Repeat with the menu
+   item `Back to neutral` instead of the click: the same.
+4a. Two notifications in quick succession: start Notepad, close it, start
+   it again within the debounce plus a few seconds so two automatic
+   switches follow each other (or use two trigger programs with different
+   priorities). While both are on screen a click does nothing; the menu
+   item `Back to …` names the profile of the latest one and works. Note
+   the order in which the toasts appear and leave.
+4b. Do Not Disturb (Focus) on, or a full-screen game running: start
+   Notepad. The profile is applied, no notification appears, the menu
+   item `Back to neutral` works.
 5. Close Notepad, wait 10 s, start it again: the profile is applied again.
    Close it: 5 to 10 s later `neutral` comes back, with a notification.
 6. Start Notepad, switch to another profile from the menu, close Notepad:
@@ -168,7 +179,8 @@ trigger = ["notepad.exe"]
    start the tray again: the item is still unchecked. Check it: Notepad
    counts as starting and the profile is applied.
 8. With Focus assist (Do not disturb) on, the notification goes to the
-   notification centre only; the switch still happens.
+   notification centre only; the switch still happens and `Back to` is in
+   the menu (see 4b).
 9. In the main window, the profile shows the section `Triggers` with
    `notepad.exe` and priority `0`; change the priority to `5`, `Set`: the
    file has `priority = 5` and keeps its comments; enter the program the

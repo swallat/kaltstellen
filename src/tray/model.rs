@@ -257,6 +257,9 @@ pub struct Status {
     /// U4: automation as the menu shows it; `None` while no profile has
     /// triggers.
     pub automation: Option<super::triggers::View>,
+    /// U4: `Back to <previous>` of the last automatic switch, while its
+    /// way back is valid.
+    pub back_to: Option<String>,
 }
 
 /// L9: when an error of the last switch counts as resolved without a switch,
@@ -358,6 +361,7 @@ impl Default for Status {
             update_locked: false,
             update: None,
             automation: None,
+            back_to: None,
         }
     }
 }
@@ -482,6 +486,8 @@ pub enum Command {
     InstallUpdate,
     /// U4: pauses or resumes all triggers.
     ToggleAutomatic,
+    /// U4: `Back to <previous>` after an automatic switch.
+    BackTo,
     Quit,
 }
 
@@ -517,6 +523,8 @@ pub const ID_UPDATE_OFF: u16 = 11;
 pub const ID_UPDATE_INSTALL: u16 = 9;
 /// U4: `Automatic switching` (checked while not paused).
 pub const ID_AUTOMATIC: u16 = 12;
+/// U4: `Back to <previous>` after an automatic switch.
+pub const ID_BACK: u16 = 13;
 /// Profile `n` of the configuration has ID `ID_PROFILE_BASE + n`.
 pub const ID_PROFILE_BASE: u16 = 100;
 
@@ -533,6 +541,17 @@ impl Menu {
     /// belongs to the GUI (M3) and is shown disabled.
     pub fn build(profiles: &[String], status: &Status) -> Self {
         let mut menu = Menu::default();
+        // U4, decided detail 1: the one-click undo of an automatic switch,
+        // also when its notification was not shown (Do Not Disturb).
+        if let Some(previous) = &status.back_to {
+            menu.entry(
+                ID_BACK,
+                format!("&Back to {}", escape(previous)),
+                false,
+                Command::BackTo,
+            );
+            menu.items.push(Item::Separator);
+        }
         // S5: offered after sign-in or a cancelled shutdown, never applied
         // by itself; only while nothing else is active.
         if let Some(last) = &status.offer
@@ -1128,6 +1147,15 @@ mod tests {
         );
         assert_eq!(menu.command(ID_AUTOMATIC), Some(&Command::ToggleAutomatic));
         assert_eq!(status.tooltip(), "kaltstellen: flight (by trigger)");
+        assert_eq!(menu.command(ID_BACK), None);
+        status.back_to = Some("R&D".into());
+        let menu = Menu::build(&[], &status);
+        assert_eq!(
+            labels(&menu)[..2],
+            ["&Back to R&&D".to_owned(), "-".to_owned()]
+        );
+        assert_eq!(menu.command(ID_BACK), Some(&Command::BackTo));
+        status.back_to = None;
         let view = status.automation.as_mut().unwrap();
         view.paused = true;
         view.held = true;

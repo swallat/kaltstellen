@@ -249,6 +249,8 @@ pub fn main() -> u8 {
             polling: false,
             images: HashMap::new(),
             notice: None,
+            balloons: 0,
+            polls: 0,
             shown_tip: String::new(),
         };
         app.refresh_autostart();
@@ -338,21 +340,38 @@ struct App {
     /// PID and creation time, so each is opened once (A7). A read that
     /// failed is tried again at the next polls, at most
     /// [`IMAGE_ATTEMPTS`] times (`Err` counts the attempts).
-    images: HashMap<(u32, u64), Result<PathBuf, u8>>,
+    images: HashMap<(u32, u64), Result<PathBuf, ImageFailure>>,
+    /// U4: polls so far; failed image reads count once per poll.
+    polls: u64,
     /// U4: the last automatic switch's notification and its way back.
     notice: Option<Notice>,
+    /// U4: notifications of this tray on screen, from `NIN_BALLOONSHOW`
+    /// and `NIN_BALLOONTIMEOUT`/`NIN_BALLOONHIDE`; never below 0, reset
+    /// when Explorer restarts.
+    balloons: u32,
     /// The tooltip last drawn; an unchanged icon and tooltip are not sent
     /// to the shell again (the poll redraws every few seconds).
     shown_tip: String,
 }
 
-/// U4: the notification of the last automatic switch. A click on it is
-/// honoured only while it is on screen: `NIN_BALLOONUSERCLICK` does not
-/// say which notification was clicked, and an older one in the
-/// notification centre may say something else.
+/// U4: the way back of the last automatic switch. The menu offers it
+/// (`Back to <previous>`) until the next request, the next notification or
+/// the end of the session. A click on the notification is honoured only
+/// while it is on screen as the only one: `NIN_BALLOONUSERCLICK` does not
+/// say which notification was clicked, and an older one may say something
+/// else.
 struct Notice {
     back_to: String,
+    /// `NIN_BALLOONSHOW` arrived and the notification has not left yet.
     shown: bool,
+}
+
+/// U4: a failed image path read: attempts so far, and the poll of the
+/// last one.
+#[derive(Debug, Clone, Copy)]
+struct ImageFailure {
+    attempts: u8,
+    poll: u64,
 }
 
 /// U4: how often reading the image path of a process is tried.
@@ -742,6 +761,10 @@ impl App {
             }
             Some(MenuCommand::ToggleAutostart) => self.toggle_autostart(),
             Some(MenuCommand::ToggleAutomatic) => self.toggle_automatic(),
+            Some(MenuCommand::BackTo) => {
+                info!("tray: menu asks to go back");
+                self.go_back();
+            }
             Some(MenuCommand::OpenWindow) => open_window(),
             Some(MenuCommand::UpdateMode(mode)) => self.set_update_mode(mode),
             Some(MenuCommand::InstallUpdate) => {
@@ -770,9 +793,12 @@ impl App {
 
     /// The profile that is active once the running and the waiting job
     /// are done (U4 compares triggers against it).
+    /// A waiting manual request is not counted: the end of the session
+    /// drops it, and an automatic request never replaces it anyway.
     fn will_be_active(&self) -> String {
         self.controller
             .pending()
+            .filter(|j| j.is_automatic())
             .or(self.controller.running())
             .map_or_else(|| self.status.active.clone(), |j| j.leads_to().to_owned())
     }
@@ -858,12 +884,20 @@ impl App {
             self.images
                 .retain(|(pid, created), _| snapshot.find(*pid, *created).is_some());
         }
+        self.polls += 1;
+        let poll = self.polls;
         let images = &mut self.images;
         let mut image = |info: &ProcessInfo| -> Option<PathBuf> {
-            let entry = images.entry((info.pid, info.created)).or_insert(Err(0));
+            let fresh = ImageFailure {
+                attempts: 0,
+                poll: 0,
+            };
+            let entry = images.entry((info.pid, info.created)).or_insert(Err(fresh));
             match entry {
                 Ok(path) => return Some(path.clone()),
-                Err(attempts) if *attempts >= IMAGE_ATTEMPTS => return None,
+                // Tried at this poll already (another trigger of the same
+                // name), or often enough.
+                Err(f) if f.poll == poll || f.attempts >= IMAGE_ATTEMPTS => return None,
                 Err(_) => {}
             }
             match Target::open(info, Access::Query)
@@ -876,11 +910,12 @@ impl App {
                 // Gone meanwhile: the next snapshot no longer lists it.
                 Ok(None) => None,
                 Err(err) => {
-                    if let Err(attempts) = entry {
-                        if *attempts == 0 {
+                    if let Err(failure) = entry {
+                        if failure.attempts == 0 {
                             info!("tray: trigger check: {err}");
                         }
-                        *attempts += 1;
+                        failure.attempts += 1;
+                        failure.poll = poll;
                     }
                     None
                 }
@@ -983,10 +1018,33 @@ impl App {
         if !logged_only && !window::balloon(&title, &text) {
             warn!("tray: the notification could not be shown");
         }
-        self.notice = back.then(|| Notice {
+        self.set_notice(back.then(|| Notice {
             back_to: automatic.previous.clone(),
             shown: false,
-        });
+        }));
+    }
+
+    /// U4: the way back of the last automatic switch, for the menu item
+    /// `Back to <previous>` and the notification click.
+    fn set_notice(&mut self, notice: Option<Notice>) {
+        self.status.back_to = notice.as_ref().map(|n| n.back_to.clone());
+        self.notice = notice;
+    }
+
+    /// U4, decided detail 1: `Back to <previous>` from the menu or the
+    /// notification. A manual switch: it holds automation like any other;
+    /// a profile that left the file meanwhile becomes neutral.
+    fn go_back(&mut self) {
+        let Some(previous) = self.notice.as_ref().map(|n| n.back_to.clone()) else {
+            info!("tray: nothing to go back to");
+            return;
+        };
+        if self.controller.is_quitting() {
+            return;
+        }
+        let target = self.known_or_neutral(&previous);
+        info!("tray: back to \"{target}\"");
+        self.submit(Job::switch(&target), None);
     }
 
     fn submit(&mut self, job: Job, waiter: Option<Waiter>) {
@@ -1001,7 +1059,7 @@ impl App {
             self.save_offer();
         }
         // U4: the last notification's `Back to` means nothing any more.
-        self.notice = None;
+        self.set_notice(None);
         // U4, conflict rule 1: everything but a trigger is manual here
         // (menu, hotkey, command line, window, `Back to`) and holds
         // automation until the trigger situation changes.
@@ -1355,33 +1413,43 @@ impl window::Handler for App {
     }
 
     fn balloon_clicked(&mut self) {
-        // Honoured only while the latest notification is on screen: the
-        // click does not say which one was clicked (U4).
-        let Some(previous) = self.notice.take_if(|n| n.shown).map(|n| n.back_to) else {
+        // The click does not say which notification was clicked (U4): it
+        // is honoured only while the latest one is on screen and no other
+        // notification of the tray is. The menu item always works.
+        let valid = self.balloons == 1 && self.notice.as_ref().is_some_and(|n| n.shown);
+        // The clicked notification is dismissed; the shell reports no
+        // timeout for it.
+        self.balloon_gone();
+        if !valid {
             info!("tray: notification clicked; nothing to go back to");
             return;
-        };
-        if self.controller.is_quitting() {
-            return;
         }
-        // A manual switch: it holds automation like any other (U4). A
-        // profile that left the file meanwhile becomes neutral.
-        let target = self.known_or_neutral(&previous);
-        info!("tray: notification clicked; back to \"{target}\"");
-        self.submit(Job::switch(&target), None);
+        info!("tray: notification clicked");
+        self.go_back();
     }
 
     fn balloon_shown(&mut self) {
+        self.balloons = self.balloons.saturating_add(1);
         if let Some(notice) = &mut self.notice {
             notice.shown = true;
         }
     }
 
     fn balloon_gone(&mut self) {
-        // A notice not shown yet belongs to a newer notification; the one
-        // that went away is the one it replaced.
-        if self.notice.take_if(|n| n.shown).is_some() {
-            info!("tray: notification gone; its way back no longer applies");
+        self.balloons = self.balloons.saturating_sub(1);
+        if self.balloons == 0
+            && let Some(notice) = &mut self.notice
+            && std::mem::take(&mut notice.shown)
+        {
+            info!("tray: notification gone; Back to stays in the menu");
+        }
+    }
+
+    fn taskbar_created(&mut self) {
+        // Explorer restarted: no notification of the old one is on screen.
+        self.balloons = 0;
+        if let Some(notice) = &mut self.notice {
+            notice.shown = false;
         }
     }
 
@@ -1441,7 +1509,7 @@ impl window::Handler for App {
         // but the one from before the trigger (U4, decided detail 8).
         self.arm_poll();
         // A notification's way back means nothing after this.
-        self.notice = None;
+        self.set_notice(None);
         // While an automatic switch runs or waits (a return to the profile
         // from before, for example), the profile it leads to counts.
         let automatic_ahead = [self.controller.running(), self.controller.pending()]

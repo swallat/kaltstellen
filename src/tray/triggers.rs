@@ -284,7 +284,11 @@ impl Automation {
                     Some(Action::Switch {
                         profile,
                         previous: active.to_owned(),
-                        reason: format!("{program} started"),
+                        reason: if changed {
+                            format!("{program} started")
+                        } else {
+                            format!("priorities changed, {program} runs")
+                        },
                     })
                 }
             }
@@ -297,7 +301,8 @@ impl Automation {
                     // lower one that still runs.
                     let reason = match &ended_program {
                         Some(ended) => format!("{ended} ended, {program} still runs"),
-                        None => format!("{program} started"),
+                        None if changed => format!("{program} started"),
+                        None => format!("priorities changed, {program} runs"),
                     };
                     if same_profile(&owner.base, &profile) {
                         // The winner is the profile from before the first
@@ -305,6 +310,9 @@ impl Automation {
                         // not own it, so nothing returns from it later.
                         self.owner = None;
                         if same_profile(active, &profile) {
+                            log.push(format!(
+                                "\"{profile}\" is active already; automation no longer owns it"
+                            ));
                             return (None, log);
                         }
                     } else {
@@ -639,9 +647,14 @@ mod tests {
         assert_eq!(r.at(0, &list(5, 1), "neutral"), switch("a", "neutral"));
         assert_eq!(r.at(1, &list(5, 1), "a"), None);
         assert_eq!(r.at(2, &list(1, 5), "a"), switch("b", "a"));
+        let (action, _) = r.a.poll(r.t0 + S * 3, &seen(&list(5, 1)), "b");
+        let Some(Action::Switch { reason, .. }) = action else {
+            panic!("decided again");
+        };
+        assert_eq!(reason, "priorities changed, a.exe runs");
         // Held by a manual switch: a priority change alone does not act.
         r.a.manual();
-        assert_eq!(r.at(3, &list(5, 1), "x"), None);
+        assert_eq!(r.at(4, &list(1, 5), "x"), None);
         assert!(r.a.view("x").held);
     }
 
