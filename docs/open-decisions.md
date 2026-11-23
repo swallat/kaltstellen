@@ -87,7 +87,8 @@ reasoning is. Implementation choices made without the owner are marked
   the tray quits (`quit_if_idle`); no automatic install while the session
   ends; one install at a time. A version that could not be installed after
   it was verified is **tried again regularly**, not over and over (waits:
-  open item 4); on request it can be installed at any time.
+  open item 4): the tray's timer tries it when the wait ends; on request it
+  can be installed at any time.
 - **UP1 in the main window**: a section `Updates` at the bottom of the
   sidebar; the window checks by running `kaltstellen update --check
   --quiet`; choosing a mode that checks starts a check at once; `Install`

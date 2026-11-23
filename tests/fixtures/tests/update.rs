@@ -658,7 +658,7 @@ fn up1_a_version_that_did_not_start_waits_and_is_tried_again_later() {
     // When the two days are over, a tray that just sits in neutral tries it
     // again by itself, on its own timer (no check, no switch). The tray
     // the update started again is ended first, so nothing reads the record
-    // while it is edited: two days minus 4 s ago.
+    // while it is edited: the wait ends 10 s from now.
     drop(KillProgram(
         s.exe.file_name().unwrap().to_string_lossy().into_owned(),
     ));
@@ -666,15 +666,32 @@ fn up1_a_version_that_did_not_start_waits_and_is_tried_again_later() {
     let mut record: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(record["failures"], 2, "{record}");
-    let at = record["failed_at"].as_u64().unwrap();
-    record["failed_at"] = (at - 2 * 24 * 60 * 60 + 4).into();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    record["failed_at"] = (now - 2 * 24 * 60 * 60 + 10).into();
     fs::write(&file, record.to_string()).unwrap();
-    let installs = s
-        .log()
-        .matches("tray: installing update 9.9.9 automatically")
-        .count();
+    let count = |s: &Setup, text: &str| s.log().matches(text).count();
+    let held = count(
+        &s,
+        "tray: update 9.9.9 could not be installed here recently",
+    );
+    let armed = count(&s, "tray: failed update tried again in");
+    let installs = count(&s, "tray: installing update 9.9.9 automatically");
     s.start_tray_with(&fake);
-    s.wait_log("tray: failed update tried again in", 1);
+    // The new tray holds it back first and arms its timer for it ...
+    s.wait_log(
+        "tray: update 9.9.9 could not be installed here recently",
+        held + 1,
+    );
+    s.wait_log("tray: failed update tried again in", armed + 1);
+    assert_eq!(
+        count(&s, "tray: installing update 9.9.9 automatically"),
+        installs,
+        "installed before the wait was over"
+    );
+    // ... and the timer tries it again.
     s.wait_log("tray: installing update 9.9.9 automatically", installs + 1);
     s.wait_log(
         "(3 time(s) in a row); the automatic install tries it again in 4 day(s)",

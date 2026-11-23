@@ -121,7 +121,11 @@ pub fn save(dir: &Path, record: &Record) -> Result<()> {
     fs::create_dir_all(dir)
         .and_then(|()| fs::write(&tmp, text))
         .and_then(|()| fs::rename(&tmp, &file))
-        .map_err(|e| io_error(&file, e))
+        .map_err(|e| {
+            // Named after the process: nothing else would remove it.
+            let _ = fs::remove_file(&tmp);
+            io_error(&file, e)
+        })
 }
 
 /// Remembers that `version` could not be installed here at `now` (UP1); the

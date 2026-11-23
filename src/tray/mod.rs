@@ -556,13 +556,17 @@ impl App {
     }
 
     /// UP1: how long until a held-back version may be installed
-    /// automatically again; `None` when nothing is held back or the mode
-    /// does not install by itself.
+    /// automatically again; `None` when nothing is held back, the mode does
+    /// not install by itself, or this copy cannot install it.
     fn retry_delay(&self) -> Option<Duration> {
         if self.status.update_mode != crate::update::Mode::Auto {
             return None;
         }
-        let retry_at = self.status.update.as_ref()?.retry_at?;
+        let offer = self.status.update.as_ref()?;
+        if offer.blocked.is_some() {
+            return None;
+        }
+        let retry_at = offer.retry_at?;
         Some(Duration::from_secs(
             retry_at.saturating_sub(crate::update::record::now()),
         ))
@@ -602,7 +606,8 @@ impl App {
     /// tray returns to `neutral` and after every later check. The install
     /// itself asks again right before the tray quits (`quit_if_idle`).
     /// A version that could not be installed here is left alone for a
-    /// while (1, 2, 4, then 7 days), then tried again.
+    /// while (1, 2, 4, then 7 days); the timer tries it again when the wait
+    /// ends (`timer`), or the next return to `neutral` or check does.
     fn maybe_install_update(&mut self) {
         let Some(offer) = self.status.update.clone() else {
             return;
@@ -630,7 +635,10 @@ impl App {
             self.idle_in_neutral(),
         );
         if now {
-            if self.update_started.as_deref() != Some(offer.version.as_str()) {
+            // An install that runs already is not started or logged again.
+            if !self.updates.installing()
+                && self.update_started.as_deref() != Some(offer.version.as_str())
+            {
                 info!("tray: installing update {} automatically", offer.version);
                 self.update_started = Some(offer.version.clone());
                 self.updates.install_unattended();
@@ -1014,16 +1022,36 @@ impl window::Handler for App {
             .is_some_and(|delay| delay.is_zero())
         {
             // The check's result decides on an install and sets the timer.
-            self.updates.start_check();
+            if self.updates.start_check() {
+                return;
+            }
+            // It could not be started: again a day later, and a held-back
+            // version is still tried when its wait ends.
+            let retry = self.retry_delay();
+            let check = crate::update::record::INTERVAL;
+            window::set_timer(retry.map_or(check, |r| r.min(check)));
             return;
         }
-        if self.retry_delay().is_some_and(|delay| delay.is_zero()) {
+        // While a check runs, its end decides with fresh data (`wake`), and
+        // the install must not write `update.json` alongside it.
+        if !self.updates.checking() {
             // UP1: a version that could not be installed has waited long
-            // enough; `update.json` is read again first.
+            // enough. `update.json` is read again first; the wait may also
+            // have ended unseen, when the menu read it meanwhile.
+            let due = self.retry_delay().is_some_and(|delay| delay.is_zero());
+            let held = self.update_held.clone();
             self.refresh_update();
-            self.update_started = None;
-            self.update_held = None;
-            self.maybe_install_update();
+            let released = held.is_some_and(|(version, _)| {
+                self.status
+                    .update
+                    .as_ref()
+                    .is_some_and(|o| o.version == version && o.retry_at.is_none())
+            });
+            if due || released {
+                self.update_started = None;
+                self.update_held = None;
+                self.maybe_install_update();
+            }
         }
         // Otherwise update.json changed meanwhile (a check from the command
         // line): the timer follows it.

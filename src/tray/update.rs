@@ -77,10 +77,16 @@ impl Updates {
         Some(record::next_check(record::now(), self.started, last))
     }
 
+    /// Whether a check child runs.
+    pub fn checking(&self) -> bool {
+        self.ended.is_some()
+    }
+
     /// Starts `kaltstellen update --check --quiet` without a console.
-    pub fn start_check(&mut self) {
+    /// Returns whether a check runs now (also one that ran already).
+    pub fn start_check(&mut self) -> bool {
         if self.ended.is_some() {
-            return;
+            return true;
         }
         let child = std::env::current_exe().and_then(|exe| {
             Command::new(exe)
@@ -95,12 +101,13 @@ impl Updates {
             Ok(child) => child,
             Err(err) => {
                 warn!("tray: cannot start the update check: {err}");
-                return;
+                return false;
             }
         };
         info!("tray: update check started (pid {})", child.id());
         // Only while the check runs.
         self.ended = Some(watch(child, &self.waker));
+        true
     }
 
     /// Whether a check child ended since the last call.
