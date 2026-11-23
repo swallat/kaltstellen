@@ -84,7 +84,7 @@ same (later commits only change a test). Sizes in MiB.
   the question was asked, and a second start does not ask again. Starting
   after a real sign-in is still open.
 - T22: no real program that lives in the notification area could be started
-  on this VM (OneDrive is blocked by policy, see the first run); still open.
+  on this VM (OneDrive is blocked by policy); still open.
 - Not possible here: real sign-out and shutdown (T7, T20) would end this
   session; T15, T18 and the pipe test with a second account need
   administrator rights, which this user does not have.
