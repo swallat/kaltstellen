@@ -800,6 +800,7 @@ pub fn start(path: &Path, args: &[String], cwd: Option<&Path>) -> Result<u32> {
         };
         Error::new(code, format!("{}: {}", path.display(), err.message()))
             .program(&program)
+            .path(path.to_string_lossy())
             .step(Step::Start)
     })?;
     drop(Handle(created.hThread));

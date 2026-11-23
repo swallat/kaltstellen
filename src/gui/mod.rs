@@ -253,6 +253,19 @@ impl Host for RealHost {
         found
     }
 
+    fn last_switch(&self) -> Result<Option<crate::tray::protocol::LastSwitch>, String> {
+        // M5: the tray keeps the error state (L9); without a tray there is
+        // none, and the status line alone reports a switch.
+        let endpoints = crate::tray::Endpoints::current().map_err(|e| e.to_string())?;
+        match crate::tray::client::status_now(&endpoints) {
+            Ok(status) => Ok(status.and_then(|s| s.last_switch)),
+            Err(err) => {
+                warn!("gui: no status from the tray, markers kept: {err}");
+                Err(err.to_string())
+            }
+        }
+    }
+
     fn unassigned(&self, config: &Config, profile: &str) -> Vec<Unassigned> {
         crate::unassigned::refresh(&self.data, config, profile)
     }
@@ -383,6 +396,34 @@ struct GuiPage {
 }
 
 impl GuiPage {
+    /// The DevTools calls for the `drop_real` step the page names: drag
+    /// enter, over and drop at its point, with that step's `paths`.
+    fn drive_drop(&self, notice: &Value) -> Option<Answer> {
+        let steps: Vec<Value> = serde_json::from_str(self.drive.as_deref()?).ok()?;
+        let step = steps.get(usize::try_from(notice.get("step")?.as_u64()?).ok()?)?;
+        if step.get("type")?.as_str()? != "drop_real" {
+            return None;
+        }
+        let paths: Vec<&str> = step
+            .get("paths")?
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        let (x, y) = (notice.get("x")?.as_f64()?, notice.get("y")?.as_f64()?);
+        let calls = ["dragEnter", "dragOver", "drop"]
+            .iter()
+            .map(|kind| {
+                let params = serde_json::json!({
+                    "type": kind, "x": x, "y": y,
+                    "data": {"items": [], "files": paths, "dragOperationsMask": 1},
+                });
+                ("Input.dispatchDragEvent".to_owned(), params.to_string())
+            })
+            .collect();
+        Some(Answer::DevTools(calls))
+    }
+
     fn finish(&self) -> Answer {
         match &self.screenshot {
             Some(path) => Answer::CaptureAndClose(path.clone()),
@@ -392,7 +433,7 @@ impl GuiPage {
 }
 
 impl Page for GuiPage {
-    fn message(&mut self, json: &str) -> Answer {
+    fn message(&mut self, json: &str, files: Vec<PathBuf>) -> Answer {
         // Two notices of the page itself; everything else is a request.
         let notice = serde_json::from_str::<Value>(json)
             .ok()
@@ -424,6 +465,13 @@ impl Page for GuiPage {
                 }
                 self.finish()
             }
+            Some((kind, value)) if kind == "drive_drop" && self.drive.is_some() => {
+                // M2 test driver: a drop of files on disk, as Explorer's
+                // would arrive. The paths come from the drive file read at
+                // start, never from the page; the page only says which step
+                // and where.
+                self.drive_drop(&value).unwrap_or(Answer::Nothing)
+            }
             Some((kind, value)) if kind == "log" => {
                 let message = value.get("message").and_then(Value::as_str).unwrap_or("");
                 warn!(
@@ -433,7 +481,7 @@ impl Page for GuiPage {
                 Answer::Nothing
             }
             Some(_) => Answer::Nothing,
-            None => Answer::Reply(self.bridge.handle(json)),
+            None => Answer::Reply(self.bridge.handle_with_files(json, files)),
         }
     }
 

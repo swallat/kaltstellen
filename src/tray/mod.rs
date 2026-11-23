@@ -234,6 +234,7 @@ pub fn main() -> u8 {
             updates: update::Updates::new(waker.clone()),
             waker: waker.clone(),
             autostart_answer: None,
+            unreadable_logged: std::collections::HashSet::new(),
             update_started: None,
             update_waiting: None,
             update_held: None,
@@ -316,6 +317,9 @@ struct App {
     session_ending: bool,
     /// L8: the answer to the start-at-sign-in question, while it is open.
     autostart_answer: Option<Receiver<bool>>,
+    /// L9: processes whose path could not be read for a re-check, logged
+    /// once each until the next switch.
+    unreadable_logged: std::collections::HashSet<String>,
 }
 
 /// L8: answers the start-at-sign-in question without a dialog (`yes`,
@@ -366,7 +370,11 @@ impl App {
     }
 
     /// L9: drops the errors of the last switch whose cause is gone, from
-    /// the handle-free snapshot (no process is opened, A7).
+    /// the handle-free snapshot (no process is opened, A7). A failed start
+    /// that names its path needs a process of that name running from that
+    /// path: only for those processes the image path is read, with
+    /// `PROCESS_QUERY_LIMITED_INFORMATION` (A7's fallback). One whose path
+    /// cannot be read does not resolve it; that is logged once.
     fn recheck_errors(&mut self) {
         if !self.status.resolvable() {
             window::set_recheck(None);
@@ -376,19 +384,36 @@ impl App {
             return;
         };
         let session = snapshot.own_session();
-        let running = |exe: &str| {
+        let unreadable = std::cell::RefCell::new(Vec::new());
+        let running = |exe: &str, path: Option<&str>| {
             let exe = exe.to_lowercase();
             let exe = if exe.ends_with(".exe") {
                 exe
             } else {
                 format!("{exe}.exe")
             };
-            snapshot
-                .processes()
-                .iter()
-                .any(|p| Some(p.session_id) == session && p.name.to_lowercase() == exe)
+            match path {
+                None => snapshot
+                    .processes()
+                    .iter()
+                    .any(|p| Some(p.session_id) == session && p.name.to_lowercase() == exe),
+                Some(path) => {
+                    let (found, errors) = snapshot.program_at(&exe, Path::new(path));
+                    unreadable.borrow_mut().extend(errors);
+                    !found.is_empty()
+                }
+            }
         };
-        for gone in self.status.resolve(&running) {
+        let gone = self.status.resolve(&running);
+        for err in unreadable.into_inner() {
+            let text = err.to_string();
+            // Bounded: a process that keeps restarting has a new PID in
+            // its text each time.
+            if self.unreadable_logged.len() < 64 && self.unreadable_logged.insert(text.clone()) {
+                info!("tray: re-check cannot read a process path, its error stays: {text}");
+            }
+        }
+        for gone in gone {
             info!("tray: error resolved by itself: {}", gone.text);
         }
         self.arm_recheck();
@@ -803,6 +828,7 @@ impl App {
             window::exit();
             return;
         }
+        self.unreadable_logged.clear();
         self.status.finished(
             done.outcome.active,
             done.outcome.errors.iter().map(SwitchError::of).collect(),
@@ -869,10 +895,14 @@ impl App {
             let _ = reply.send(body);
         };
         if let Command::Status = command {
+            // M5: errors whose cause is gone drop out first (L9), so the
+            // main window marks only what is still wrong.
+            self.recheck_errors();
             respond(Body::Status(TrayStatus {
                 state: self.store.peek().unwrap_or_default(),
                 running: self.controller.running().map(ToString::to_string),
                 waiting: self.controller.pending().map(ToString::to_string),
+                last_switch: self.status.last_switch(),
             }));
             return;
         }

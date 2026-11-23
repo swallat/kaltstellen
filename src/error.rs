@@ -211,6 +211,9 @@ impl fmt::Display for Step {
 pub struct Error {
     pub code: Code,
     pub program: Option<String>,
+    /// The full path of the program, where the step knew it (a start);
+    /// lets the main window tell two entries of one name apart (M5).
+    pub path: Option<String>,
     pub step: Option<Step>,
     pub reason: String,
 }
@@ -222,6 +225,7 @@ impl Error {
         Self {
             code,
             program: None,
+            path: None,
             step: None,
             reason: reason.into(),
         }
@@ -229,6 +233,11 @@ impl Error {
 
     pub fn program(mut self, program: impl Into<String>) -> Self {
         self.program = Some(program.into());
+        self
+    }
+
+    pub fn path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
         self
     }
 

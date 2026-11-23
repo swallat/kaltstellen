@@ -6,6 +6,7 @@
 export const VERSION = 1;
 
 let send = null;
+let sendWithFiles = null;
 let nextId = 1;
 const pending = new Map();
 const listeners = new Set();
@@ -29,10 +30,14 @@ export async function connect() {
   if (native) {
     native.addEventListener('message', (event) => dispatch(event.data));
     send = (message) => native.postMessage(message);
+    // M2: the host reads the paths of these file objects; the page only
+    // knows their names.
+    sendWithFiles = (message, files) => native.postMessageWithAdditionalObjects(message, files);
     return 'native';
   }
   const mock = await import('./mock.js');
   send = mock.connect(dispatch);
+  sendWithFiles = (message, files) => send({ ...message, mock_names: [...files].map((f) => f.name) });
   return 'mock';
 }
 
@@ -45,6 +50,23 @@ export function request(type, fields = {}) {
   return new Promise((resolve) => {
     pending.set(id, resolve);
     send({ v: VERSION, id, type, ...fields });
+  });
+}
+
+/**
+ * M2: a request with dropped files attached (`drop_files`). Resolves with
+ * a failed reply of its own when the files cannot be handed over.
+ */
+export function requestWithFiles(type, fields, files) {
+  const id = nextId++;
+  return new Promise((resolve) => {
+    pending.set(id, resolve);
+    try {
+      sendWithFiles({ v: VERSION, id, type, ...fields }, files);
+    } catch (err) {
+      pending.delete(id);
+      resolve({ ok: false, error: `the dropped files could not be handed over: ${err && err.message || err}` });
+    }
   });
 }
 

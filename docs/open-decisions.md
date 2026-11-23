@@ -7,7 +7,46 @@ reasoning is. Implementation choices made without the owner are marked
 
 ## Open
 
-None. Everything the owner has not decided yet is deferred (below).
+Details chosen while building M2 drag and drop and M5 failure markers,
+which the owner asked for on 2026-11-23 (spec section 8):
+
+1. **M5 where the markers come from**: the tray's error state (L9) over the
+   pipe (`status` gets the field `last_switch`); no copy in `state.json`.
+   Without a running tray, no markers.
+2. **M5 when they refresh**: when the page asks for its state (start, the
+   window getting the focus again, at most every 2 s) and when a switch
+   from the window has ended; the tray re-checks L9 resolution before it
+   answers. The window does not wait for a starting tray, waits at most
+   0.5 s for a busy pipe and 1 s for the answer (about 1.5 s at worst).
+   When the tray does not answer in time, the last known markers stay;
+   only an answer replaces them. A switch from the tray menu or a hotkey
+   while the window is open but not focused shows up when it gets the
+   focus again (no timer).
+3. **M5 which entries**: only the profile the last switch made active;
+   matched by executable name, and by path where both the error and the
+   entry have one (failed starts). Errors without a program, failed
+   resumes (`KS106`, programs of the profile left behind) and errors of
+   child processes under their own name get no marker.
+4. **M5 look**: a red mark with the code and a few words per error
+   (`KS110 start failed`), the full error as tooltip, a red edge on the row.
+5. **M2 drop target**: anywhere in the window while a profile is shown,
+   including the open `Add a program` dialog; nothing during other
+   dialogs; at most 64 files per drop; shortcuts (`.lnk`) are refused like
+   other non-`.exe` files instead of being resolved; only files on a fixed
+   local disk (as for icons), checked before any file access.
+6. **M2 navigation**: the page takes every drop, so the WebView never opens
+   a dropped file; the existing navigation guard stays as the second line.
+7. **M2 status of a drop**: the summary of a drop becomes the host's
+   status line (`drop_done`), so it survives a refresh; refusals the page
+   shows itself stay until the next action of the user.
+8. **L9 path check of a failed start**: a failed start resolves only when a
+   process of that name runs from the path it tried (not a same-named
+   program from another folder); for that check the image path of processes
+   of that name is read with query rights during the re-checks only. Adds a
+   detail to the decided L9 rules (spec L9).
+9. **M2 local disk**: "fixed local disk" is what Windows reports as fixed,
+   so a USB hard disk counts as local; a symbolic link or junction on a
+   local disk that points to a share is followed.
 
 ## Deferred by the owner on 2026-11-23
 
