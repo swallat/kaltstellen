@@ -81,7 +81,8 @@ function Stop-DevTray {
     }
     foreach ($p in $ours) {
         Write-Warning ("kaltstellen.exe of this repository still runs (PID $($p.ProcessId)): " +
-            'a tray of the other mode (run again with or without -Real, and -Clean or Quit in its menu) ' +
+            'a tray of the other mode (run again with or without -Real, and -Clean or Quit in its menu), ' +
+            'a build from before `kaltstellen quit` existed (Neutral, then Quit in its menu) ' +
             'or a main window (close it).')
     }
     $others = @(Get-Kaltstellen | Where-Object { -not ($_.ExecutablePath -and ($_.ExecutablePath -ieq $exe)) })
@@ -132,7 +133,12 @@ try {
     Push-Location $Repo
     try {
         if (-not $NoPull) {
-            $null = git rev-parse --abbrev-ref '@{u}' 2>$null
+            # Without an upstream git writes to stderr; under Stop, Windows
+            # PowerShell 5.1 would turn that into an error of this script.
+            & {
+                $ErrorActionPreference = 'Continue'
+                git rev-parse --abbrev-ref '@{u}' 2>$null | Out-Null
+            }
             if ($LASTEXITCODE -ne 0) {
                 Write-Warning 'This branch has no upstream; building without git pull.'
             } elseif ((Invoke-Native 'git' @('pull', '--ff-only')) -ne 0) {
@@ -160,5 +166,12 @@ try {
         Write-Host "Tray started. Way out: .\scripts\dev-run.ps1 -Recover$mode   End and clean up: .\scripts\dev-run.ps1 -Clean$mode"
     }
 } finally {
-    foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
+    foreach ($name in $names) {
+        # Removed, not set to "" (pwsh 7 passes $null on as an empty value).
+        if ($null -eq $saved[$name]) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process')
+        }
+    }
 }
