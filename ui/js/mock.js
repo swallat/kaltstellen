@@ -164,6 +164,13 @@ function handle(message) {
     case 'pick_executable':
       return { ok: true, data: { exe: 'editor.exe', path: 'C:\\Program Files\\Editor\\editor.exe', protection: 'none' } };
     case 'running': return { ok: true, data: clone(running) };
+    case 'icons': {
+      if (!Array.isArray(m.programs) || m.programs.length > 256) return fail('at most 256 icons per request');
+      if (!(m.size >= 16 && m.size <= 96)) return fail(`icon size ${m.size} is outside 16 to 96`);
+      // A coloured square per program; programs without a path that are
+      // not running have none, as on the real host.
+      return { ok: true, data: m.programs.map((p) => (p.path || running.some((r) => r.exe === p.exe)) ? mockIcon(p.exe) : null) };
+    }
     case 'unassigned': return { ok: true, data: clone(unassigned[profile ? profile.name : ''] || []) };
     case 'dismiss': {
       const list = unassigned[profile ? profile.name : ''] || [];
@@ -241,4 +248,12 @@ export function connect(deliver) {
     if (reply === null) return;
     setTimeout(() => deliver({ v: 1, id: message.id, ...reply, state: view() }), 30);
   };
+}
+
+/** A square in a colour derived from the name, as an SVG `data:` URL. */
+function mockIcon(exe) {
+  let hue = 0;
+  for (const c of exe) hue = (hue * 31 + c.charCodeAt(0)) % 360;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect x="1" y="1" width="14" height="14" rx="3" fill="hsl(${hue} 60% 50%)"/></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }

@@ -124,6 +124,120 @@ function optionsText(e) {
   return parts.join(' · ');
 }
 
+
+// Program icons (M2) ----------------------------------------------------------
+
+/** CSS pixels of a program icon; the host gets device pixels. */
+const ICON_SIZE = 20;
+/** Sizes icons usually come in; the next one up is asked for and the image
+ * is scaled down, which stays sharp at fractional scales such as 125 %. */
+const ICON_SIZES = [16, 20, 24, 32, 40, 48, 64, 96];
+/** Largest request in bytes, well below the bridge's 64 KiB per message. */
+const ICON_BATCH_BYTES = 32 * 1024;
+/** `exe|path|size` to a `data:` URL. Only found icons are kept: a program
+ * that starts later gets its icon the next time the list is drawn. */
+const iconCache = new Map();
+/** `exe|path|size` of icons asked for and not answered yet. */
+const iconPending = new Map();
+
+function iconKey(exe, path, size) {
+  return `${exe.toLowerCase()}|${(path || '').toLowerCase()}|${size}`;
+}
+
+function iconSize() {
+  const wanted = Math.ceil(ICON_SIZE * (window.devicePixelRatio || 1));
+  return ICON_SIZES.find((s) => s >= wanted) ?? ICON_SIZES[ICON_SIZES.length - 1];
+}
+
+/** A placeholder of the icon's size; `loadIcons` puts the icon in. `path`
+ * only for entries of the configuration: the host uses no other. */
+function programIcon(exe, path) {
+  const holder = el('span', { class: 'icon', 'aria-hidden': 'true' });
+  holder.dataset.exe = exe;
+  if (path) holder.dataset.path = path;
+  return holder;
+}
+
+function showIcon(holder, url) {
+  if (!url) return;
+  holder.replaceChildren(el('img', { src: url, alt: '', width: ICON_SIZE, height: ICON_SIZE }));
+  holder.classList.add('loaded');
+}
+
+/** Asks the host for `programs` at `size`, in requests below the size
+ * limit; resolves when all answers are in the cache. */
+async function fetchIcons(programs, size) {
+  let batch = [];
+  let bytes = 0;
+  const send = async (list) => {
+    // Not through `call`: icons change no state and report no errors.
+    const reply = await request('icons', { programs: list, size });
+    list.forEach((program, i) => {
+      const url = reply.ok ? reply.data[i] : null;
+      if (url) iconCache.set(iconKey(program.exe, program.path, size), url);
+    });
+  };
+  const sends = [];
+  for (const program of programs) {
+    const cost = JSON.stringify(program).length + 1;
+    if (batch.length === 256 || (batch.length > 0 && bytes + cost > ICON_BATCH_BYTES)) {
+      sends.push(send(batch));
+      batch = [];
+      bytes = 0;
+    }
+    batch.push(program);
+    bytes += cost;
+  }
+  if (batch.length > 0) sends.push(send(batch));
+  await Promise.all(sends);
+}
+
+/** Fills every icon placeholder in `root`: known ones at once, the rest
+ * with as few requests as possible. A missing icon leaves the placeholder. */
+async function loadIcons(root) {
+  const size = iconSize();
+  const waiting = [];
+  const programs = [];
+  const asked = [];
+  for (const holder of root.querySelectorAll('span.icon:not(.loaded)')) {
+    const key = iconKey(holder.dataset.exe, holder.dataset.path, size);
+    if (iconCache.has(key)) {
+      showIcon(holder, iconCache.get(key));
+      continue;
+    }
+    waiting.push(holder);
+    if (!iconPending.has(key)) {
+      const program = { exe: holder.dataset.exe };
+      if (holder.dataset.path) program.path = holder.dataset.path;
+      programs.push(program);
+      asked.push(key);
+    }
+  }
+  if (waiting.length === 0) return;
+  if (programs.length > 0) {
+    const done = fetchIcons(programs, size);
+    for (const key of asked) iconPending.set(key, done);
+    done.finally(() => { for (const key of asked) iconPending.delete(key); });
+  }
+  const keys = new Set(waiting.map((h) => iconKey(h.dataset.exe, h.dataset.path, size)));
+  await Promise.all([...keys].map((key) => iconPending.get(key)).filter(Boolean));
+  for (const holder of waiting) {
+    if (holder.isConnected) {
+      showIcon(holder, iconCache.get(iconKey(holder.dataset.exe, holder.dataset.path, size)));
+    }
+  }
+}
+
+/** Another scale (a monitor with other scaling, zoom): draw the lists again
+ * so their icons are asked for in the new size. */
+function watchScale() {
+  const query = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+  query.addEventListener('change', () => {
+    if (state) render();
+    watchScale();
+  }, { once: true });
+}
+
 function renderDetail() {
   const profile = current();
   $('empty').hidden = !!profile;
@@ -140,13 +254,15 @@ function renderDetail() {
   $('apply').textContent = state.applying ? 'Applying…' : 'Apply profile';
 
   const rows = profile.entries.map((e, index) => el('tr', {},
-    el('td', {}, el('span', { class: 'exe', text: e.exe }), e.path ? el('span', { class: 'path', text: e.path }) : null),
+    el('td', {}, el('div', { class: 'program' }, programIcon(e.exe, e.path),
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: e.exe }), e.path ? el('span', { class: 'path', text: e.path }) : null))),
     el('td', {}, el('span', { class: `action ${e.action}`, text: actionLabel[e.action] })),
     el('td', { class: 'opts', text: optionsText(e) }),
     el('td', {},
       el('button', { type: 'button', class: 'button small', 'aria-label': `Edit ${e.exe}`, onclick: () => editEntry(index), text: 'Edit' }),
       el('button', { type: 'button', class: 'button small danger', 'aria-label': `Remove ${e.exe}`, onclick: () => removeEntry(index), text: 'Remove' }))));
   $('entries').tBodies[0].replaceChildren(...rows);
+  loadIcons($('entries'));
   $('entries').hidden = rows.length === 0;
   $('entries-empty').hidden = rows.length !== 0;
   renderUnassigned();
@@ -154,12 +270,14 @@ function renderDetail() {
 
 function renderUnassigned() {
   const rows = unassigned.map((u) => el('tr', {},
-    el('td', {}, el('span', { class: 'exe', text: u.exe }), u.path ? el('span', { class: 'path', text: u.path }) : null),
+    el('td', {}, el('div', { class: 'program' }, programIcon(u.exe, null),
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: u.exe }), u.path ? el('span', { class: 'path', text: u.path }) : null))),
     el('td', {}, u.new ? el('span', { class: 'tag new', text: 'new' }) : 'earlier'),
     el('td', {},
       el('button', { type: 'button', class: 'button small', 'aria-label': `Add ${u.exe}`, onclick: () => addProgram(u.exe, null), text: 'Add' }),
       el('button', { type: 'button', class: 'button small', 'aria-label': `Dismiss ${u.exe}`, onclick: () => dismiss(u.exe), text: 'Dismiss' }))));
   $('unassigned').tBodies[0].replaceChildren(...rows);
+  loadIcons($('unassigned'));
   $('unassigned').hidden = rows.length === 0;
   $('unassigned-empty').hidden = rows.length !== 0;
 }
@@ -320,7 +438,7 @@ async function openAdd() {
   const reply = await call('running');
   const running = reply.ok ? reply.data : [];
   const rows = running.map((p) => el('tr', {},
-    el('td', { class: 'exe', text: p.exe }),
+    el('td', {}, el('div', { class: 'program' }, programIcon(p.exe, null), el('span', { class: 'exe', text: p.exe }))),
     el('td', { class: 'num', text: megabytes(p.private_bytes) }),
     el('td', { class: `protection ${p.protection}`, text: protectionText[p.protection] }),
     el('td', {}, el('button', {
@@ -330,6 +448,7 @@ async function openAdd() {
       text: 'Add',
     }))));
   $('running').tBodies[0].replaceChildren(...rows);
+  loadIcons($('running'));
   openDialog($('add-dialog'));
 }
 
@@ -413,7 +532,7 @@ globalThis.kaltstellenDrive = async (steps) => {
       event = await new Promise((resolve) => onEvent((e) => { if (e.event === 'applied') resolve(e); }));
     }
     adopt((event || reply).state);
-    results.push({ type, ok: reply.ok, error: reply.error || null, status: (event || reply).state.status });
+    results.push({ type, ok: reply.ok, error: reply.error || null, status: (event || reply).state.status, data: reply.data ?? null });
   }
   await loadUnassigned();
   await settle();
@@ -450,6 +569,7 @@ async function start() {
   if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
   const mode = await connect();
   document.documentElement.dataset.backend = mode;
+  watchScale();
   const reply = await request('get_state');
   adopt(reply.state);
   await loadUnassigned();

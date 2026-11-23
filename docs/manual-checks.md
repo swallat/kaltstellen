@@ -101,6 +101,15 @@ main session made them; they show the views below in light and dark.
     writes `settings.json` like the tray items; with `KALTSTELLEN_UPDATE`
     set the selector is disabled. With a newer version known, `Install
     <version>` opens the console window of the update.
+13b. Program icons (M2): next to each program in a profile, in `Add
+    program` and in the unassigned list the program's icon appears, sharp
+    at 100 %, 150 % and 200 % scaling and after moving the window to a
+    monitor with another scaling (the lists are drawn again). A program
+    on a network drive, a program without
+    a path that does not run, or a file without an icon, shows a grey
+    square of the same size; rows do not move when the icons arrive. The
+    log (`kaltstellen.log`) has one line per request: `gui: N icons at S px
+    (… found, … read) in … ms; cache … icons, … KiB`.
 14. With the window open and minimised, choose `Open kaltstellen…` again
     (or run `kaltstellen gui`): the same window comes back to the front, no
     second window opens.

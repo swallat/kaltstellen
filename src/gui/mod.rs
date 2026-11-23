@@ -9,6 +9,7 @@
 pub mod assets;
 pub mod bridge;
 pub mod document;
+pub mod icons;
 pub mod model;
 
 use std::path::{Path, PathBuf};
@@ -163,6 +164,7 @@ pub fn main(args: Args) -> u8 {
             data: data.clone(),
             waker: waker.clone(),
             results,
+            icons: std::cell::RefCell::default(),
         };
         Box::new(GuiPage {
             bridge: Bridge::new(document, host),
@@ -208,6 +210,8 @@ struct RealHost {
     data: PathBuf,
     waker: Waker,
     results: Sender<Applied>,
+    /// M2: icons read so far, by file and size.
+    icons: std::cell::RefCell<icons::Cache>,
 }
 
 impl Host for RealHost {
@@ -221,6 +225,32 @@ impl Host for RealHost {
         Snapshot::take()
             .map(|s| model::candidates(s.processes(), s.own_session().unwrap_or(0)))
             .unwrap_or_default()
+    }
+
+    fn icons(&self, wanted: &[bridge::Wanted], size: u32) -> Vec<Option<String>> {
+        let started = std::time::Instant::now();
+        let running = Snapshot::take()
+            .map(|s| icons::running_paths(&s, wanted))
+            .unwrap_or_default();
+        let mut cache = self.icons.borrow_mut();
+        let before = cache.len();
+        let found: Vec<Option<String>> = wanted
+            .iter()
+            .map(|w| {
+                icons::file_of(w, &running)
+                    .and_then(|file| cache.get(&file, size, crate::win32::icon::of_file))
+            })
+            .collect();
+        info!(
+            "gui: {} icons at {size} px ({} found, {} read) in {} ms; cache {} icons, {} KiB",
+            wanted.len(),
+            found.iter().filter(|i| i.is_some()).count(),
+            cache.len().saturating_sub(before),
+            started.elapsed().as_millis(),
+            cache.len(),
+            cache.bytes() / 1024
+        );
+        found
     }
 
     fn unassigned(&self, config: &Config, profile: &str) -> Vec<Unassigned> {

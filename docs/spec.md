@@ -247,6 +247,7 @@ hotkey = "Ctrl+Shift+Alt+F1"
 
 - **M1** Profiles are created, copied, renamed and deleted in the GUI or in the file. Deleting the active profile first switches to `neutral`.
 - **M2** Add a program by choosing from running programs (name, memory, protection status) or by choosing an executable file. Drag and drop is post-v1 **[decided]** (blocked from non-elevated Explorer to elevated windows anyway).
+  - Program icons **[assumed]**: each program in a profile, in the running-programs list and in the unassigned list shows the icon of its executable, read by the host as data from files on a fixed local disk only and handed to the page as an image; a program without one shows a placeholder of the same size. Details in [gui-bridge.md](gui-bridge.md) (`icons`) and open-decisions item 12.
 - **M3** Each entry has a per-program action drop-down; `default_action` pre-fills new entries.
 - **M4** Hard-protected programs cannot be added; warn-list programs ask for confirmation (P6).
 - **M5** *(post-v1 [decided])* per-entry failure markers; version 1 shows errors only in the status line.

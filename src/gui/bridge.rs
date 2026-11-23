@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::document::{Document, EntryEdit, action_name};
+pub use super::icons::Wanted;
 use super::model::{self, AddCheck, Candidate};
 use crate::config::{App, AppAction, Config, NEUTRAL, OnTimeout};
 use crate::protection::{self, Protection};
@@ -47,6 +48,21 @@ pub trait Host {
     /// Opens the visible update (a console window running `kaltstellen
     /// update`), as the tray's `Install update…` does.
     fn install_update(&self) -> Result<(), String>;
+    /// M2: the icon of each program as a PNG `data:` URL, `None` where
+    /// there is none, in the order asked.
+    fn icons(&self, wanted: &[Wanted], size: u32) -> Vec<Option<String>>;
+}
+
+/// Most programs one `icons` request may name.
+const MAX_ICONS: usize = 256;
+
+/// One program of an `icons` request.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IconProgram {
+    pub exe: String,
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 /// UP1 in the main window.
@@ -136,6 +152,11 @@ pub enum Request {
     },
     CheckUpdates,
     InstallUpdate,
+    Icons {
+        programs: Vec<IconProgram>,
+        /// Device pixels: the page's size times its DPI scale.
+        size: u32,
+    },
 }
 
 /// One entry as the page shows it.
@@ -646,6 +667,47 @@ impl<H: Host> Bridge<H> {
                 self.status = format!("Installing {version} in a separate window…");
                 Ok(None)
             }
+            Request::Icons { programs, size } => {
+                if programs.len() > MAX_ICONS {
+                    return Err(format!("at most {MAX_ICONS} icons per request"));
+                }
+                if !(16..=crate::win32::icon::MAX_SIZE).contains(&size) {
+                    return Err(format!(
+                        "icon size {size} is outside 16 to {}",
+                        crate::win32::icon::MAX_SIZE
+                    ));
+                }
+                // The page never names a file of its own: a path is used only
+                // if an entry of the configuration has it.
+                let configured: Vec<&Path> = self
+                    .document
+                    .config()
+                    .profiles
+                    .iter()
+                    .flat_map(|p| &p.apps)
+                    .filter_map(|a| a.path.as_deref())
+                    .collect();
+                let mut wanted = Vec::with_capacity(programs.len());
+                for program in programs {
+                    check_text(&[&program.exe, program.path.as_deref().unwrap_or_default()])?;
+                    check_path(program.path.as_deref())?;
+                    let path = program
+                        .path
+                        .map(|p| PathBuf::from(p.trim()))
+                        .filter(|p| configured.iter().any(|c| crate::process::same_path(c, p)));
+                    wanted.push(Wanted {
+                        exe: program.exe,
+                        path,
+                    });
+                }
+                let icons = self.host.icons(&wanted, size);
+                Ok(Some(Value::Array(
+                    icons
+                        .into_iter()
+                        .map(|icon| icon.map_or(Value::Null, Value::String))
+                        .collect(),
+                )))
+            }
             Request::SetAutostart { on } => {
                 self.host.set_autostart(on)?;
                 self.status = format!("Start at sign-in {}.", if on { "on" } else { "off" });
@@ -765,6 +827,73 @@ mod tests {
             *self.installs.borrow_mut() += 1;
             Ok(())
         }
+        fn icons(&self, wanted: &[Wanted], size: u32) -> Vec<Option<String>> {
+            // An icon for programs with a path, none otherwise.
+            wanted
+                .iter()
+                .map(|w| {
+                    w.path
+                        .as_ref()
+                        .map(|p| format!("data:{size}:{}:{}", w.exe, p.display()))
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn m2_icons_in_order_with_null_for_none_and_strict_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        let added = send(
+            &mut b,
+            json!({"v": 1, "id": 9, "type": "add_entry", "profile": "focus", "exe": "a.exe", "path": "C:\\A\\a.exe"}),
+        );
+        assert_eq!(added["ok"], true, "{added}");
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "icons", "size": 40, "programs": [
+                {"exe": "a.exe", "path": "c:\\a\\A.EXE"},
+                {"exe": "b.exe"},
+                {"exe": "c.exe", "path": "  "},
+                // Not in the configuration: the page cannot make the host
+                // open a file or a share of its choice.
+                {"exe": "d.exe", "path": "C:\\Other\\d.exe"},
+                {"exe": "e.exe", "path": "\\\\server\\share\\e.exe"}
+            ]}),
+        );
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(
+            reply["data"],
+            json!(["data:40:a.exe:c:\\a\\A.EXE", null, null, null, null])
+        );
+        let refused = |b: &mut Bridge<Fake>, request: Value| {
+            let reply = send(b, request);
+            assert_eq!(reply["ok"], false, "{reply}");
+        };
+        // Relative paths, sizes out of range, unknown fields, too many.
+        refused(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "icons", "size": 32,
+                   "programs": [{"exe": "a.exe", "path": "a.exe"}]}),
+        );
+        refused(
+            &mut b,
+            json!({"v": 1, "id": 3, "type": "icons", "size": 8, "programs": []}),
+        );
+        refused(
+            &mut b,
+            json!({"v": 1, "id": 4, "type": "icons", "size": 97, "programs": []}),
+        );
+        refused(
+            &mut b,
+            json!({"v": 1, "id": 5, "type": "icons", "size": 32,
+                   "programs": [{"exe": "a.exe", "file": "x"}]}),
+        );
+        let many: Vec<Value> = (0..=MAX_ICONS).map(|_| json!({"exe": "a"})).collect();
+        refused(
+            &mut b,
+            json!({"v": 1, "id": 6, "type": "icons", "size": 32, "programs": many}),
+        );
     }
 
     const CONFIG: &str =
