@@ -919,7 +919,11 @@ fn run(command: Command) -> Result<bool> {
             } else {
                 vec![None; processes.len()]
             };
-            let about = program_info::read_many(images.iter().flatten().map(PathBuf::as_path));
+            let about = if info {
+                program_info::read_many(images.iter().flatten().map(PathBuf::as_path))
+            } else {
+                std::collections::HashMap::new()
+            };
             println!("{:>8} {:>8} {:>7}  NAME", "PID", "PARENT", "SESSION");
             for (p, image) in processes.iter().zip(&images) {
                 let text = image

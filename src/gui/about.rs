@@ -76,37 +76,60 @@ impl Reader {
             let (tx, rx) = channel();
             let cache = Arc::clone(&self.cache);
             let notify = Arc::clone(&self.notify);
-            std::thread::spawn(move || work(&cache, &rx, notify.as_ref()));
+            std::thread::spawn(move || {
+                work(GiveUp {
+                    cache: &cache,
+                    jobs: Some(rx),
+                    notify: notify.as_ref(),
+                });
+            });
             *sender = Some(tx);
         }
         if let Some(Err(err)) = sender.as_ref().map(|s| s.send(jobs)) {
             // The reader failed: nothing more will come, so these are
-            // finished as unreadable instead of staying pending.
+            // finished as unreadable instead of staying pending, and the
+            // page is told so it stops showing them as being checked.
             lock(&self.cache).give_up(err.0.iter().map(|(path, _)| path.as_path()));
+            (self.notify)();
         }
     }
 }
 
-/// Finishes what a failed reader leaves behind.
-struct GiveUp<'a>(&'a Mutex<Cache>);
+/// The reader's end of the work: its jobs, and what a failed reader leaves
+/// behind is finished on the way out.
+struct GiveUp<'a> {
+    cache: &'a Mutex<Cache>,
+    jobs: Option<Receiver<Vec<Job>>>,
+    notify: &'a (dyn Fn() + Send + Sync),
+}
 
 impl Drop for GiveUp<'_> {
     fn drop(&mut self) {
         if std::thread::panicking() {
-            lock(self.0).give_up([]);
+            // First close the channel, so a later `views` cannot queue into
+            // it (its send fails and gives up at once); then finish what was
+            // queued and tell the page.
+            drop(self.jobs.take());
+            lock(self.cache).give_up([]);
+            (self.notify)();
         }
     }
 }
 
-/// The reader thread: ends when the window drops its [`Reader`] (checked
-/// between files, so a closing window does not wait for a long queue).
-fn work(cache: &Mutex<Cache>, jobs: &Receiver<Vec<Job>>, notify: &(dyn Fn() + Send + Sync)) {
-    let _give_up = GiveUp(cache);
+/// The reader thread: ends when the window drops its [`Reader`]. The
+/// channel is checked before every file, so a closing window does not wait
+/// for a long queue, and programs asked for meanwhile get their version
+/// resources first.
+fn work(reader: GiveUp<'_>) {
+    let (cache, notify) = (reader.cache, reader.notify);
+    let Some(jobs) = reader.jobs.as_ref() else {
+        return;
+    };
     let mut queue: VecDeque<Job> = VecDeque::new();
+    let mut arrived: Vec<Vec<Job>> = Vec::new();
     loop {
         // Wait only when there is nothing to do.
-        let mut arrived: Vec<Vec<Job>> = Vec::new();
-        if queue.is_empty() {
+        if queue.is_empty() && arrived.is_empty() {
             match jobs.recv() {
                 Ok(batch) => arrived.push(batch),
                 Err(_) => return,
@@ -122,7 +145,7 @@ fn work(cache: &Mutex<Cache>, jobs: &Receiver<Vec<Job>>, notify: &(dyn Fn() + Se
         if !arrived.is_empty() {
             // Version resources first, so descriptions show at once.
             let started = Instant::now();
-            let batch: Vec<Job> = arrived.into_iter().flatten().collect();
+            let batch: Vec<Job> = std::mem::take(&mut arrived).into_iter().flatten().collect();
             for (path, stamp) in &batch {
                 if lock(cache).missing(path, *stamp).is_some_and(|m| m.0) {
                     let version =
@@ -145,6 +168,14 @@ fn work(cache: &Mutex<Cache>, jobs: &Receiver<Vec<Job>>, notify: &(dyn Fn() + Se
                 let signature = program_info::signature_of(&path, stamp.len);
                 lock(cache).set_signature(&path, stamp, signature);
                 checked += 1;
+            }
+            match jobs.try_recv() {
+                Ok(batch) => {
+                    arrived.push(batch);
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => return,
+                Err(TryRecvError::Empty) => {}
             }
             if started.elapsed() >= NOTIFY_EVERY {
                 break;
@@ -239,5 +270,37 @@ mod tests {
             assert!(!view.pending && !hand_over);
             assert_eq!(view.signature, "unknown");
         }
+    }
+
+    #[test]
+    fn m2_a_panicking_reader_closes_its_channel_finishes_entries_and_tells_the_page() {
+        let cache = Mutex::new(Cache::default());
+        let stamp = Stamp {
+            len: 1,
+            modified: None,
+        };
+        let a = PathBuf::from(r"C:\A\a.exe");
+        assert!(lock(&cache).lookup(&a, stamp).0.pending);
+        let (tx, rx) = channel::<Vec<Job>>();
+        let calls = AtomicUsize::new(0);
+        let notify = || {
+            calls.fetch_add(1, Ordering::SeqCst);
+        };
+        std::thread::scope(|scope| {
+            let reader = scope.spawn(|| {
+                let _guard = GiveUp {
+                    cache: &cache,
+                    jobs: Some(rx),
+                    notify: &notify,
+                };
+                panic!("a reader that fails (expected in this test)");
+            });
+            assert!(reader.join().is_err());
+        });
+        assert!(tx.send(Vec::new()).is_err(), "nobody can queue any more");
+        let (view, hand_over) = lock(&cache).lookup(&a, stamp);
+        assert!(!view.pending && !hand_over);
+        assert_eq!(view.signature, "unknown");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

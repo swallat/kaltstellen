@@ -83,8 +83,13 @@ which the owner asked for on 2026-11-23 with local sources only (spec M2):
    here** for results that mean "cannot be decided from local data"
    (`CERT_E_UNTRUSTEDROOT`, `CERT_E_CHAINING`,
    `CRYPT_E_NO_REVOCATION_CHECK`, `CRYPT_E_REVOCATION_OFFLINE`,
-   `CRYPT_E_SECURITY_SETTINGS`), shown neutrally, since offline or
-   unknown roots are no sign of tampering; **not valid** for everything
+   `CRYPT_E_SECURITY_SETTINGS`, whose text says that a local security
+   setting blocks the check), shown neutrally, since offline or unknown
+   roots are no sign of tampering. The trade-off: a program signed with a
+   self-made certificate (its own root, `CERT_E_UNTRUSTEDROOT`), as an
+   impostor would use, is also shown neutrally as "not verifiable here"
+   rather than as a warning; its claimed publisher is never shown, and the
+   company it names appears as unverified text. **Not valid** for everything
    else (changed file, expired, revoked, distrusted, test certificate,
    unknown errors). "No signature" only when `WinVerifyTrust` and the
    last error both say so (Microsoft's sample).

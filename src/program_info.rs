@@ -216,7 +216,7 @@ pub fn reason(code: i32) -> String {
         0x800B_0004 => "it is not trusted",
         0x8009_6004 => "its certificate's signature is not valid",
         0x8009_6005 => "its time stamp is not valid",
-        0x8009_2026 => "the security settings of this computer block it",
+        0x8009_2026 => "a security setting of this computer blocks the check",
         other => return format!("error 0x{other:08X}"),
     };
     text.to_owned()
@@ -640,6 +640,11 @@ mod tests {
         );
         assert_eq!(bad.kind(), "invalid");
         assert_eq!(reason(0x8000_4005_u32 as i32), "error 0x80004005");
+        // A policy that forbids the check is "not verifiable", and says so.
+        assert_eq!(
+            reason(0x8009_2026_u32 as i32),
+            "a security setting of this computer blocks the check"
+        );
         // Offline or unknown chains are "cannot be verified", not tampering.
         for code in [
             0x800B_0109_u32, // CERT_E_UNTRUSTEDROOT
