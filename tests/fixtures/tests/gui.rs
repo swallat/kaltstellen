@@ -200,6 +200,7 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
         {{"type": "install_update"}},
         {{"type": "apply", "profile": "play"}},
         {{"type": "add_entry", "profile": "play", "exe": "explorer.exe"}},
+        {{"type": "add_entry", "profile": "play", "exe": "notepad.exe", "path": {notepad}}},
         {{"type": "icons", "size": 32, "programs": [
             {{"exe": "notepad.exe", "path": {notepad}}},
             {{"exe": "ks-no-such-program.exe"}}
@@ -237,7 +238,7 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
         .collect();
     assert_eq!(
         ok,
-        vec![true, true, false, true, false, true, false, true],
+        vec![true, true, false, true, false, true, false, true, true],
         "{results}"
     );
     assert!(
@@ -257,12 +258,12 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
     );
     assert_eq!(results[5]["status"], "Applied \"play\".", "{results}");
     assert!(
-        results[7]["data"][0]
+        results[8]["data"][0]
             .as_str()
             .is_some_and(|u| u.starts_with("data:image/png;base64,")),
         "{results}"
     );
-    assert!(results[7]["data"][1].is_null(), "{results}");
+    assert!(results[8]["data"][1].is_null(), "{results}");
 
     let config = world.config();
     assert!(config.starts_with("# Owner's notes stay."), "{config}");

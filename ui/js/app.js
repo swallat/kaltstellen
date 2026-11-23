@@ -129,18 +129,28 @@ function optionsText(e) {
 
 /** CSS pixels of a program icon; the host gets device pixels. */
 const ICON_SIZE = 20;
-/** `exe|path|size` to a `data:` URL, or null when the program has none. */
+/** Sizes icons usually come in; the next one up is asked for and the image
+ * is scaled down, which stays sharp at fractional scales such as 125 %. */
+const ICON_SIZES = [16, 20, 24, 32, 40, 48, 64, 96];
+/** Largest request in bytes, well below the bridge's 64 KiB per message. */
+const ICON_BATCH_BYTES = 32 * 1024;
+/** `exe|path|size` to a `data:` URL. Only found icons are kept: a program
+ * that starts later gets its icon the next time the list is drawn. */
 const iconCache = new Map();
+/** `exe|path|size` of icons asked for and not answered yet. */
+const iconPending = new Map();
 
 function iconKey(exe, path, size) {
   return `${exe.toLowerCase()}|${(path || '').toLowerCase()}|${size}`;
 }
 
 function iconSize() {
-  return Math.min(256, Math.max(16, Math.round(ICON_SIZE * (window.devicePixelRatio || 1))));
+  const wanted = Math.ceil(ICON_SIZE * (window.devicePixelRatio || 1));
+  return ICON_SIZES.find((s) => s >= wanted) ?? ICON_SIZES[ICON_SIZES.length - 1];
 }
 
-/** A placeholder of the icon's size; `loadIcons` puts the icon in. */
+/** A placeholder of the icon's size; `loadIcons` puts the icon in. `path`
+ * only for entries of the configuration: the host uses no other. */
 function programIcon(exe, path) {
   const holder = el('span', { class: 'icon', 'aria-hidden': 'true' });
   holder.dataset.exe = exe;
@@ -154,42 +164,80 @@ function showIcon(holder, url) {
   holder.classList.add('loaded');
 }
 
+/** Asks the host for `programs` at `size`, in requests below the size
+ * limit; resolves when all answers are in the cache. */
+async function fetchIcons(programs, size) {
+  let batch = [];
+  let bytes = 0;
+  const send = async (list) => {
+    // Not through `call`: icons change no state and report no errors.
+    const reply = await request('icons', { programs: list, size });
+    list.forEach((program, i) => {
+      const url = reply.ok ? reply.data[i] : null;
+      if (url) iconCache.set(iconKey(program.exe, program.path, size), url);
+    });
+  };
+  const sends = [];
+  for (const program of programs) {
+    const cost = JSON.stringify(program).length + 1;
+    if (batch.length === 256 || (batch.length > 0 && bytes + cost > ICON_BATCH_BYTES)) {
+      sends.push(send(batch));
+      batch = [];
+      bytes = 0;
+    }
+    batch.push(program);
+    bytes += cost;
+  }
+  if (batch.length > 0) sends.push(send(batch));
+  await Promise.all(sends);
+}
+
 /** Fills every icon placeholder in `root`: known ones at once, the rest
- * with one request. A missing icon leaves the placeholder. */
+ * with as few requests as possible. A missing icon leaves the placeholder. */
 async function loadIcons(root) {
   const size = iconSize();
   const waiting = [];
+  const programs = [];
+  const asked = [];
   for (const holder of root.querySelectorAll('span.icon:not(.loaded)')) {
     const key = iconKey(holder.dataset.exe, holder.dataset.path, size);
-    if (iconCache.has(key)) showIcon(holder, iconCache.get(key));
-    else waiting.push(holder);
+    if (iconCache.has(key)) {
+      showIcon(holder, iconCache.get(key));
+      continue;
+    }
+    waiting.push(holder);
+    if (!iconPending.has(key)) {
+      const program = { exe: holder.dataset.exe };
+      if (holder.dataset.path) program.path = holder.dataset.path;
+      programs.push(program);
+      asked.push(key);
+    }
   }
   if (waiting.length === 0) return;
-  const programs = [];
-  const seen = new Map();
-  for (const holder of waiting) {
-    const key = iconKey(holder.dataset.exe, holder.dataset.path, size);
-    if (seen.has(key)) continue;
-    seen.set(key, programs.length);
-    const program = { exe: holder.dataset.exe };
-    if (holder.dataset.path) program.path = holder.dataset.path;
-    programs.push(program);
+  if (programs.length > 0) {
+    const done = fetchIcons(programs, size);
+    for (const key of asked) iconPending.set(key, done);
+    done.finally(() => { for (const key of asked) iconPending.delete(key); });
   }
-  for (let start = 0; start < programs.length; start += 256) {
-    const batch = programs.slice(start, start + 256);
-    // Not through `call`: icons change no state and report no errors.
-    const reply = await request('icons', { programs: batch, size });
-    if (!reply.ok) continue;
-    batch.forEach((program, i) => {
-      iconCache.set(iconKey(program.exe, program.path, size), reply.data[i] ?? null);
-    });
-  }
+  const keys = new Set(waiting.map((h) => iconKey(h.dataset.exe, h.dataset.path, size)));
+  await Promise.all([...keys].map((key) => iconPending.get(key)).filter(Boolean));
   for (const holder of waiting) {
     if (holder.isConnected) {
       showIcon(holder, iconCache.get(iconKey(holder.dataset.exe, holder.dataset.path, size)));
     }
   }
 }
+
+/** Another scale (a monitor with other scaling, zoom): draw the lists again
+ * so their icons are asked for in the new size. */
+function watchScale() {
+  const query = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+  query.addEventListener('change', () => {
+    if (state) render();
+    watchScale();
+  }, { once: true });
+}
+
 function renderDetail() {
   const profile = current();
   $('empty').hidden = !!profile;
@@ -222,7 +270,7 @@ function renderDetail() {
 
 function renderUnassigned() {
   const rows = unassigned.map((u) => el('tr', {},
-    el('td', {}, el('div', { class: 'program' }, programIcon(u.exe, u.path),
+    el('td', {}, el('div', { class: 'program' }, programIcon(u.exe, null),
       el('span', { class: 'names' }, el('span', { class: 'exe', text: u.exe }), u.path ? el('span', { class: 'path', text: u.path }) : null))),
     el('td', {}, u.new ? el('span', { class: 'tag new', text: 'new' }) : 'earlier'),
     el('td', {},
@@ -521,6 +569,7 @@ async function start() {
   if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
   const mode = await connect();
   document.documentElement.dataset.backend = mode;
+  watchScale();
   const reply = await request('get_state');
   adopt(reply.state);
   await loadUnassigned();

@@ -166,7 +166,7 @@ function handle(message) {
     case 'running': return { ok: true, data: clone(running) };
     case 'icons': {
       if (!Array.isArray(m.programs) || m.programs.length > 256) return fail('at most 256 icons per request');
-      if (!(m.size >= 16 && m.size <= 256)) return fail(`icon size ${m.size} is outside 16 to 256`);
+      if (!(m.size >= 16 && m.size <= 96)) return fail(`icon size ${m.size} is outside 16 to 96`);
       // A coloured square per program; programs without a path that are
       // not running have none, as on the real host.
       return { ok: true, data: m.programs.map((p) => (p.path || running.some((r) => r.exe === p.exe)) ? mockIcon(p.exe) : null) };

@@ -12,15 +12,19 @@ use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
     GetObjectW, HBITMAP, HGDIOBJ, ReleaseDC,
 };
+use windows::Win32::Storage::FileSystem::GetDriveTypeW;
 use windows::Win32::UI::Shell::SHDefExtractIconW;
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
 use windows::core::PCWSTR;
 
 use super::wide;
 
-/// Largest size asked for; the page asks for its own size times the DPI
-/// scale.
-pub const MAX_SIZE: u32 = 256;
+/// Largest size asked for (a 20 px icon at 400 %, or zoomed in); the page
+/// asks for its own size times the DPI scale, rounded up to a size icons
+/// usually have. Bounds the memory of one icon to 36 KiB.
+pub const MAX_SIZE: u32 = 96;
+/// `GetDriveTypeW`: a fixed local disk.
+const DRIVE_FIXED: u32 = 3;
 
 /// An icon as RGBA, `width * height * 4` bytes, rows from the top.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,11 +66,33 @@ impl Drop for ScreenDc {
     }
 }
 
+/// Whether `path` is `X:\…` on a fixed local disk. Icons are read on the
+/// window thread: a network share (`\\server\…`, a mapped drive) could hang
+/// the window until a time-out and would send credentials to that server,
+/// and device paths (`\\?\`, `\\.\`) are not files to read icons from.
+pub fn on_a_local_disk(path: &Path) -> bool {
+    let text = path.to_string_lossy();
+    let bytes = text.as_bytes();
+    let drive_letter = bytes.len() > 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/');
+    if !drive_letter {
+        return false;
+    }
+    let root = wide(&format!("{}:\\", char::from(bytes[0])));
+    // SAFETY: `root` is NUL-terminated and outlives the call.
+    unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) == DRIVE_FIXED }
+}
+
 /// The first icon of `exe` at `size` pixels (the nearest size the file has,
 /// scaled by the system). `None` if the file has no icon or cannot be read;
 /// that is never an error for the caller.
 pub fn of_file(exe: &Path, size: u32) -> Option<Pixels> {
     let size = size.clamp(16, MAX_SIZE);
+    if !on_a_local_disk(exe) {
+        return None;
+    }
     let name = wide(&exe.to_string_lossy());
     let mut handle = HICON::default();
     // SAFETY: `name` is NUL-terminated and outlives the call; one out
@@ -94,7 +120,9 @@ fn pixels(icon: &Icon) -> Option<Pixels> {
     unsafe { GetIconInfo(icon.0, &mut info) }.ok()?;
     let color = Bitmap(info.hbmColor);
     let mask = Bitmap(info.hbmMask);
-    // A monochrome icon has no colour bitmap: the placeholder is shown.
+    // A monochrome icon (no colour bitmap, AND and XOR masks in one
+    // bitmap of double height) is rare in programs today: the page shows
+    // its placeholder, which is never an error.
     if color.0.is_invalid() {
         return None;
     }
@@ -189,6 +217,18 @@ mod tests {
         }
         // Out of range sizes are clamped.
         assert_eq!(of_file(&notepad, 1).unwrap().width, 16);
+        assert_eq!(of_file(&notepad, 512).unwrap().width, MAX_SIZE);
+        // Only files on a fixed local disk: no shares, no device paths.
+        assert!(on_a_local_disk(&notepad));
+        for elsewhere in [
+            r"\\server\share\a.exe",
+            r"\\?\C:\a.exe",
+            r"\\.\pipe\x",
+            "a.exe",
+        ] {
+            assert!(!on_a_local_disk(Path::new(elsewhere)), "{elsewhere}");
+            assert!(of_file(Path::new(elsewhere), 32).is_none());
+        }
         // No such file, and a file without an icon resource.
         assert!(of_file(Path::new(r"C:\no\such\program.exe"), 32).is_none());
         let dir = tempfile::tempdir().unwrap();

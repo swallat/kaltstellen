@@ -677,16 +677,27 @@ impl<H: Host> Bridge<H> {
                         crate::win32::icon::MAX_SIZE
                     ));
                 }
+                // The page never names a file of its own: a path is used only
+                // if an entry of the configuration has it.
+                let configured: Vec<&Path> = self
+                    .document
+                    .config()
+                    .profiles
+                    .iter()
+                    .flat_map(|p| &p.apps)
+                    .filter_map(|a| a.path.as_deref())
+                    .collect();
                 let mut wanted = Vec::with_capacity(programs.len());
                 for program in programs {
                     check_text(&[&program.exe, program.path.as_deref().unwrap_or_default()])?;
                     check_path(program.path.as_deref())?;
+                    let path = program
+                        .path
+                        .map(|p| PathBuf::from(p.trim()))
+                        .filter(|p| configured.iter().any(|c| crate::process::same_path(c, p)));
                     wanted.push(Wanted {
                         exe: program.exe,
-                        path: program
-                            .path
-                            .map(|p| PathBuf::from(p.trim()))
-                            .filter(|p| !p.as_os_str().is_empty()),
+                        path,
                     });
                 }
                 let icons = self.host.icons(&wanted, size);
@@ -833,18 +844,27 @@ mod tests {
     fn m2_icons_in_order_with_null_for_none_and_strict_input() {
         let dir = tempfile::tempdir().unwrap();
         let (mut b, _) = bridge(&dir);
+        let added = send(
+            &mut b,
+            json!({"v": 1, "id": 9, "type": "add_entry", "profile": "focus", "exe": "a.exe", "path": "C:\\A\\a.exe"}),
+        );
+        assert_eq!(added["ok"], true, "{added}");
         let reply = send(
             &mut b,
             json!({"v": 1, "id": 1, "type": "icons", "size": 40, "programs": [
-                {"exe": "a.exe", "path": "C:\\A\\a.exe"},
+                {"exe": "a.exe", "path": "c:\\a\\A.EXE"},
                 {"exe": "b.exe"},
-                {"exe": "c.exe", "path": "  "}
+                {"exe": "c.exe", "path": "  "},
+                // Not in the configuration: the page cannot make the host
+                // open a file or a share of its choice.
+                {"exe": "d.exe", "path": "C:\\Other\\d.exe"},
+                {"exe": "e.exe", "path": "\\\\server\\share\\e.exe"}
             ]}),
         );
         assert_eq!(reply["ok"], true, "{reply}");
         assert_eq!(
             reply["data"],
-            json!(["data:40:a.exe:C:\\A\\a.exe", null, null])
+            json!(["data:40:a.exe:c:\\a\\A.EXE", null, null, null, null])
         );
         let refused = |b: &mut Bridge<Fake>, request: Value| {
             let reply = send(b, request);
@@ -862,7 +882,7 @@ mod tests {
         );
         refused(
             &mut b,
-            json!({"v": 1, "id": 4, "type": "icons", "size": 512, "programs": []}),
+            json!({"v": 1, "id": 4, "type": "icons", "size": 97, "programs": []}),
         );
         refused(
             &mut b,

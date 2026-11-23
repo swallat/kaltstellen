@@ -104,7 +104,8 @@ main session made them; they show the views below in light and dark.
 13b. Program icons (M2): next to each program in a profile, in `Add
     program` and in the unassigned list the program's icon appears, sharp
     at 100 %, 150 % and 200 % scaling and after moving the window to a
-    monitor with another scaling and reopening the list. A program without
+    monitor with another scaling (the lists are drawn again). A program
+    on a network drive, a program without
     a path that does not run, or a file without an icon, shows a grey
     square of the same size; rows do not move when the icons arrive. The
     log (`kaltstellen.log`) has one line per request: `gui: N icons at S px
