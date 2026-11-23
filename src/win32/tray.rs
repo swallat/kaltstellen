@@ -23,8 +23,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE,
-    NIM_MODIFY, NIM_SETVERSION, NIN_BALLOONUSERCLICK, NIN_SELECT, NINF_KEY, NOTIFYICON_VERSION_4,
-    NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIM_MODIFY, NIM_SETVERSION, NIN_BALLOONHIDE, NIN_BALLOONSHOW, NIN_BALLOONTIMEOUT,
+    NIN_BALLOONUSERCLICK, NIN_SELECT, NINF_KEY, NOTIFYICON_VERSION_4, NOTIFYICONDATAW,
+    Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
@@ -104,13 +105,19 @@ pub trait Handler {
     fn poll(&mut self);
     /// The user clicked the notification shown with [`balloon`] (U4).
     fn balloon_clicked(&mut self);
+    /// The notification is on screen (`NIN_BALLOONSHOW`, U4).
+    fn balloon_shown(&mut self);
+    /// The notification left the screen (`NIN_BALLOONTIMEOUT`,
+    /// `NIN_BALLOONHIDE`, U4).
+    fn balloon_gone(&mut self);
 }
 
 /// Sets or stops (`None`) the repeating timer `id`. Window thread only.
-fn repeat(id: usize, interval: Option<std::time::Duration>, what: &str) {
+/// Returns whether the timer runs as asked.
+fn repeat(id: usize, interval: Option<std::time::Duration>, what: &str) -> bool {
     let hwnd = WINDOW.with_borrow(|w| w.as_ref().map(|w| w.hwnd));
     let Some(hwnd) = hwnd else {
-        return;
+        return false;
     };
     // SAFETY: the window belongs to this thread; no callback.
     unsafe {
@@ -121,10 +128,13 @@ fn repeat(id: usize, interval: Option<std::time::Duration>, what: &str) {
                     .max(10);
                 if SetTimer(Some(hwnd), id, ms, None) == 0 {
                     warn!("cannot set the {what} timer");
+                    return false;
                 }
+                true
             }
             None => {
                 let _ = KillTimer(Some(hwnd), id);
+                true
             }
         }
     }
@@ -138,16 +148,37 @@ pub fn set_recheck(interval: Option<std::time::Duration>) {
 
 /// U4: the repeating poll of trigger programs while some profile has
 /// triggers and automatic switching is on; `None` stops it. Setting it
-/// again restarts the interval. Window thread only.
-pub fn set_poll(interval: Option<std::time::Duration>) {
-    repeat(POLL_ID, interval, "trigger poll");
+/// again restarts the interval. Window thread only. False if the timer
+/// could not be set.
+pub fn set_poll(interval: Option<std::time::Duration>) -> bool {
+    repeat(POLL_ID, interval, "trigger poll")
+}
+
+/// Copies `text` into a NUL-terminated fixed buffer, cut at a character
+/// boundary so a surrogate pair is never split.
+fn fill_wide(dst: &mut [u16], text: &str) {
+    let room = dst.len().saturating_sub(1);
+    let mut at = 0;
+    for c in text.chars() {
+        let mut units = [0u16; 2];
+        let units = c.encode_utf16(&mut units);
+        if at + units.len() > room {
+            break;
+        }
+        dst[at..at + units.len()].copy_from_slice(units);
+        at += units.len();
+    }
+    for unit in &mut dst[at..] {
+        *unit = 0;
+    }
 }
 
 /// U4: shows a notification from the tray icon (a balloon; on Windows 10
-/// and 11 a toast that ends up in the notification centre). A click on it
-/// arrives as [`Handler::balloon_clicked`]. The title is cut to 63 and the
-/// text to 255 UTF-16 units. Window thread only; false if the shell
-/// refused it (no notification area).
+/// and 11 a toast that ends up in the notification centre). The shell
+/// reports it with [`Handler::balloon_shown`], [`Handler::balloon_gone`]
+/// and [`Handler::balloon_clicked`]. The title is cut to 63 and the text to
+/// 255 UTF-16 units, at character boundaries. Window thread only; false if
+/// the shell refused it (no notification area).
 pub fn balloon(title: &str, text: &str) -> bool {
     WINDOW.with_borrow(|window| {
         let Some(window) = window else {
@@ -161,19 +192,8 @@ pub fn balloon(title: &str, text: &str) -> bool {
             dwInfoFlags: NIIF_INFO,
             ..Default::default()
         };
-        let units = data.szInfoTitle.len() - 1;
-        for (dst, src) in data
-            .szInfoTitle
-            .iter_mut()
-            .take(units)
-            .zip(title.encode_utf16())
-        {
-            *dst = src;
-        }
-        let units = data.szInfo.len() - 1;
-        for (dst, src) in data.szInfo.iter_mut().take(units).zip(text.encode_utf16()) {
-            *dst = src;
-        }
+        fill_wide(&mut data.szInfoTitle, title);
+        fill_wide(&mut data.szInfo, text);
         // SAFETY: `data` is fully initialised and lives across the call.
         unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) }.as_bool()
     })
@@ -525,6 +545,10 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 );
             } else if event == NIN_BALLOONUSERCLICK {
                 with_handler(|h| h.balloon_clicked());
+            } else if event == NIN_BALLOONSHOW {
+                with_handler(|h| h.balloon_shown());
+            } else if event == NIN_BALLOONTIMEOUT || event == NIN_BALLOONHIDE {
+                with_handler(|h| h.balloon_gone());
             }
             LRESULT(0)
         }
@@ -604,6 +628,21 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn u4_notification_text_is_cut_at_a_character_boundary() {
+        let mut buffer = [0xFFFFu16; 4];
+        // Two units, then a surrogate pair that no longer fits.
+        fill_wide(&mut buffer, "ab\u{1F600}");
+        assert_eq!(buffer, [u16::from(b'a'), u16::from(b'b'), 0, 0]);
+        let mut buffer = [0xFFFFu16; 4];
+        fill_wide(&mut buffer, "a\u{1F600}x");
+        assert_eq!(
+            &buffer[..3],
+            &"a\u{1F600}".encode_utf16().collect::<Vec<_>>()[..]
+        );
+        assert_eq!(buffer[3], 0, "x no longer fits");
+    }
 
     #[test]
     fn coordinates_are_signed_words() {

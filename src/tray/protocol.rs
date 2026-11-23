@@ -176,6 +176,9 @@ pub struct AutomationStatus {
     /// Profiles whose trigger runs but waits for a higher one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub waiting: Vec<String>,
+    /// The profile they wait for: the winning trigger's, which is active.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_for: Option<String>,
 }
 
 impl AutomationStatus {
@@ -198,9 +201,14 @@ impl AutomationStatus {
                 "tray: \"{active}\" applied by trigger {trigger}; back to \"{back}\" when it ends"
             ));
         }
-        for waiting in &self.waiting {
+        // Listed only together with the winner they wait for.
+        for (waiting, winner) in self
+            .waiting
+            .iter()
+            .filter_map(|w| self.waiting_for.as_ref().map(|f| (w, f)))
+        {
             lines.push(format!(
-                "tray: trigger for \"{waiting}\" waits while \"{active}\" is active"
+                "tray: trigger for \"{waiting}\" waits while \"{winner}\" is active"
             ));
         }
         lines
@@ -303,6 +311,36 @@ pub fn reply(body: Body) -> Reply {
 mod tests {
     use super::*;
     use crate::error::Step;
+
+    #[test]
+    fn u4_status_lines_name_the_winner_waited_for() {
+        let status = AutomationStatus {
+            trigger: Some("sim.exe".into()),
+            returns_to: Some("neutral".into()),
+            waiting: vec!["low".into()],
+            waiting_for: Some("high".into()),
+            ..AutomationStatus::default()
+        };
+        assert_eq!(
+            status.lines("high"),
+            [
+                "tray: automatic switching on",
+                "tray: \"high\" applied by trigger sim.exe; back to \"neutral\" when it ends",
+                "tray: trigger for \"low\" waits while \"high\" is active",
+            ]
+        );
+        let held = AutomationStatus {
+            held: true,
+            waiting: vec!["low".into()],
+            ..AutomationStatus::default()
+        };
+        assert_eq!(
+            held.lines("x"),
+            [
+                "tray: automatic switching held by a manual switch until a trigger program starts or ends"
+            ]
+        );
+    }
 
     #[test]
     fn requests_have_a_stable_wire_form() {

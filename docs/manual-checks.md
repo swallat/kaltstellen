@@ -154,9 +154,12 @@ trigger = ["notepad.exe"]
    `kaltstellen: trigger test`, `notepad.exe started: switched to trigger
    test. Click here: Back to neutral`. The menu shows `Applied by trigger
    notepad.exe; back to neutral when it ends`.
-4. Click the notification (on the toast, or later in the notification
-   centre): `neutral` is applied. The menu shows `Triggers wait after a
-   manual switch …`; nothing switches back while Notepad keeps running.
+4. Click the notification while it is on screen: `neutral` is applied. The
+   menu shows `Triggers wait after a manual switch …`; nothing switches
+   back while Notepad keeps running. Clicking a notification in the
+   notification centre after it left the screen does nothing (the log says
+   `notification clicked; nothing to go back to`): the click does not say
+   which notification it was.
 5. Close Notepad, wait 10 s, start it again: the profile is applied again.
    Close it: 5 to 10 s later `neutral` comes back, with a notification.
 6. Start Notepad, switch to another profile from the menu, close Notepad:
@@ -170,7 +173,12 @@ trigger = ["notepad.exe"]
    `notepad.exe` and priority `0`; change the priority to `5`, `Set`: the
    file has `priority = 5` and keeps its comments; enter the program the
    profile freezes as a trigger: refused with the reason.
-10. Sign out while the profile is applied by Notepad (VM): after sign-in
+10. Rename the profile in the main window while Notepad has applied it.
+    The old name stays active (C4) until the next poll sees the trigger
+    under the new name and applies the renamed profile, with a
+    notification; close Notepad: the profile from before comes back. Note
+    what the menu and the notifications say.
+11. Sign out while the profile is applied by Notepad (VM): after sign-in
     the menu offers the profile from before the trigger (or nothing, if
     that was `neutral`), not `trigger test`.
 

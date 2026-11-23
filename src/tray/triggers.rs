@@ -182,6 +182,7 @@ impl Automation {
         let mut log = Vec::new();
         let mut changed = false;
         let mut ended_program = None;
+        let winner_before = self.winner().map(|w| w.profile.to_lowercase());
         // Profiles that left the configuration end at once.
         self.running.retain(|r| {
             let kept = seen.iter().any(|s| same_profile(&s.profile, &r.profile));
@@ -236,15 +237,25 @@ impl Automation {
                 (None, None) => {}
             }
         }
-        if self.paused || !changed {
+        if self.paused {
             return (None, log);
-        }
-        if std::mem::take(&mut self.held) {
-            log.push("the trigger situation changed; automatic switching goes on".to_owned());
         }
         let winner = self
             .winner()
             .map(|w| (w.profile.clone(), w.program.clone()));
+        if !changed {
+            // A changed configuration may make another trigger win: decided
+            // again, but a manual hold stays, as no trigger program started
+            // or ended.
+            let reordered = winner.as_ref().map(|(p, _)| p.to_lowercase()) != winner_before;
+            if !reordered || self.held {
+                return (None, log);
+            }
+            log.push("the priorities changed; deciding again".to_owned());
+        }
+        if std::mem::take(&mut self.held) {
+            log.push("the trigger situation changed; automatic switching goes on".to_owned());
+        }
         for r in &self.running {
             if let Some((profile, _)) = &winner
                 && !same_profile(&r.profile, profile)
@@ -288,8 +299,18 @@ impl Automation {
                         Some(ended) => format!("{ended} ended, {program} still runs"),
                         None => format!("{program} started"),
                     };
-                    owner.applied = profile.clone();
-                    owner.program = program;
+                    if same_profile(&owner.base, &profile) {
+                        // The winner is the profile from before the first
+                        // trigger, the user's own choice: automation does
+                        // not own it, so nothing returns from it later.
+                        self.owner = None;
+                        if same_profile(active, &profile) {
+                            return (None, log);
+                        }
+                    } else {
+                        owner.applied = profile.clone();
+                        owner.program = program;
+                    }
                     Some(Action::Switch {
                         profile,
                         previous: active.to_owned(),
@@ -299,7 +320,10 @@ impl Automation {
             }
             (None, Some(_)) => {
                 let owner = self.owner.take().expect("matched above");
-                if same_profile(active, &owner.applied) {
+                if same_profile(active, &owner.base) {
+                    // Back already: nothing to apply again.
+                    None
+                } else if same_profile(active, &owner.applied) {
                     Some(Action::Switch {
                         profile: owner.base,
                         previous: active.to_owned(),
@@ -330,8 +354,10 @@ impl Automation {
                 .as_ref()
                 .filter(|o| same_profile(&o.applied, active))
                 .map(|o| (o.applied.clone(), o.program.clone(), o.base.clone())),
-            waiting: match (&winner, self.paused) {
-                (Some(winner), false) => self
+            // Only while the winner is the active profile and no manual
+            // switch holds automation does anything wait for it.
+            waiting: match &winner {
+                Some(winner) if !self.paused && !self.held && same_profile(winner, active) => self
                     .running
                     .iter()
                     .filter(|r| !same_profile(&r.profile, winner))
@@ -567,6 +593,70 @@ mod tests {
             r.at(12, &both(None, None), "high"),
             switch("neutral", "high")
         );
+    }
+
+    #[test]
+    fn u4_hand_back_to_the_users_own_profile_ends_ownership() {
+        let mut r = Run::new();
+        let both = |low: Option<&'static str>, high: Option<&'static str>| {
+            vec![("low", 1, low), ("high", 5, high)]
+        };
+        // The user chose "low" while its trigger runs: nothing to do.
+        assert_eq!(r.at(0, &both(Some("a.exe"), None), "low"), None);
+        assert_eq!(r.a.view("low").applied, None);
+        // A higher one takes over from the user's profile...
+        assert_eq!(
+            r.at(1, &both(Some("a.exe"), Some("b.exe")), "low"),
+            switch("high", "low")
+        );
+        // ...and hands back to it; that is the user's profile, not owned.
+        assert_eq!(
+            r.at(7, &both(Some("a.exe"), None), "high"),
+            switch("low", "high")
+        );
+        assert_eq!(r.a.view("low").applied, None);
+        assert_eq!(r.a.base_of("low"), None);
+        // When "low"'s own trigger ends, nothing is applied again.
+        assert_eq!(r.at(14, &both(None, None), "low"), None);
+        // The hand-back when the user's profile is active already: nothing.
+        let mut r = Run::new();
+        r.at(0, &both(Some("a.exe"), None), "low");
+        r.at(1, &both(Some("a.exe"), Some("b.exe")), "low");
+        assert_eq!(r.at(7, &both(Some("a.exe"), None), "low"), None);
+    }
+
+    #[test]
+    fn u4_return_skips_when_the_base_is_active_already() {
+        let mut r = Run::new();
+        r.at(0, &[("flight", 0, Some("sim.exe"))], "work");
+        assert_eq!(r.at(10, &[("flight", 0, None)], "work"), None);
+    }
+
+    #[test]
+    fn u4_changed_priorities_decide_again_unless_held() {
+        let mut r = Run::new();
+        let list = |a: i32, b: i32| vec![("a", a, Some("a.exe")), ("b", b, Some("b.exe"))];
+        assert_eq!(r.at(0, &list(5, 1), "neutral"), switch("a", "neutral"));
+        assert_eq!(r.at(1, &list(5, 1), "a"), None);
+        assert_eq!(r.at(2, &list(1, 5), "a"), switch("b", "a"));
+        // Held by a manual switch: a priority change alone does not act.
+        r.a.manual();
+        assert_eq!(r.at(3, &list(5, 1), "x"), None);
+        assert!(r.a.view("x").held);
+    }
+
+    #[test]
+    fn u4_waiting_is_shown_only_while_the_winner_is_active_and_not_held() {
+        let mut r = Run::new();
+        let list = vec![("first", 3, Some("a.exe")), ("second", 1, Some("b.exe"))];
+        r.at(0, &list, "neutral");
+        assert_eq!(r.a.view("neutral").waiting, vec![], "not active yet");
+        assert_eq!(
+            r.a.view("first").waiting,
+            vec![("second".to_owned(), "first".to_owned())]
+        );
+        r.a.manual();
+        assert_eq!(r.a.view("first").waiting, vec![], "held");
     }
 
     #[test]

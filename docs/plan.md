@@ -176,7 +176,7 @@ name. Purpose: find out which real apps tolerate being frozen.
   `Automatic switching` (kept in `settings.json`), `status` lines, the S5
   offer from before the trigger, and a Triggers section in the main window
   (`set_triggers`). Measured with the release tray: about 3.5 ms CPU per
-  poll, 0.06 % of one core at 5 s, private working set 2.0 MB. Process
+  poll, about 0.07 % of one core at 5 s, private working set 2.0 MB. Process
   tests with heartbeat copies as triggers in `tests/fixtures/tests/tray.rs`;
   the notification as shown and a real program as trigger are manual
   checks.

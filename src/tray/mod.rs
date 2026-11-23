@@ -248,7 +248,8 @@ pub fn main() -> u8 {
             automation: triggers::Automation::new(trigger_debounce(), triggers_paused),
             polling: false,
             images: HashMap::new(),
-            back_to: None,
+            notice: None,
+            shown_tip: String::new(),
         };
         app.refresh_autostart();
         app.ask_autostart_once();
@@ -334,13 +335,32 @@ struct App {
     /// U4: the poll timer runs.
     polling: bool,
     /// U4: image paths of processes named like a trigger with a path, by
-    /// PID and creation time, so each is opened once (A7); `None` when it
-    /// could not be read.
-    images: HashMap<(u32, u64), Option<PathBuf>>,
-    /// U4: the profile `Back to <previous>` of the last automatic switch's
-    /// notification returns to; cleared by the next request.
-    back_to: Option<String>,
+    /// PID and creation time, so each is opened once (A7). A read that
+    /// failed is tried again at the next polls, at most
+    /// [`IMAGE_ATTEMPTS`] times (`Err` counts the attempts).
+    images: HashMap<(u32, u64), Result<PathBuf, u8>>,
+    /// U4: the last automatic switch's notification and its way back.
+    notice: Option<Notice>,
+    /// The tooltip last drawn; an unchanged icon and tooltip are not sent
+    /// to the shell again (the poll redraws every few seconds).
+    shown_tip: String,
 }
+
+/// U4: the notification of the last automatic switch. A click on it is
+/// honoured only while it is on screen: `NIN_BALLOONUSERCLICK` does not
+/// say which notification was clicked, and an older one in the
+/// notification centre may say something else.
+struct Notice {
+    back_to: String,
+    shown: bool,
+}
+
+/// U4: how often reading the image path of a process is tried.
+const IMAGE_ATTEMPTS: u8 = 3;
+
+/// Test only: `log` writes the notification to the log instead of showing
+/// it, so tests leave nothing in the notification centre.
+const NOTIFY_ENV: &str = "KALTSTELLEN_NOTIFY";
 
 /// L8: answers the start-at-sign-in question without a dialog (`yes`,
 /// `no`) or skips it (`skip`); for tests and managed installations.
@@ -356,8 +376,8 @@ const END_SESSION_WAIT: Duration = Duration::from_secs(4);
 
 /// U4, decided detail 3: how often the trigger programs are looked for, in
 /// the range of 2 to 5 s. Each poll costs about 3.5 ms of CPU time (the
-/// kernel builds the process list); at 5 s that is 0.06 % of one core,
-/// within Q1 however it is read, where 3 s would be 0.12 % (spec U4).
+/// kernel builds the process list); at 5 s that is about 0.07 % of one core,
+/// within Q1 however it is read, where 3 s would be 0.12 % (spec L12).
 const TRIGGER_POLL: Duration = Duration::from_secs(5);
 
 /// Test only: replaces [`TRIGGER_POLL`] and the debounce of
@@ -391,12 +411,17 @@ fn icon_name(icon: Icon) -> &'static str {
 impl App {
     fn redraw(&mut self) {
         let icon = self.status.icon();
+        let tip = self.status.tooltip();
+        let tip_unchanged = tip == self.shown_tip;
         if self.shown != Some(icon) {
             // Logged so the state is visible without looking at the screen.
             info!("tray: icon {}", icon_name(icon));
             self.shown = Some(icon);
+        } else if tip_unchanged {
+            return;
         }
-        window::show(icon, &self.status.tooltip());
+        window::show(icon, &tip);
+        self.shown_tip = tip;
     }
 
     /// The waiting request was replaced by `by` (W3): its clients end with
@@ -762,13 +787,29 @@ impl App {
             Some((_, program, base)) => (Some(program), Some(base)),
             None => (None, None),
         };
+        let waiting_for = view.waiting.first().map(|(_, winner)| winner.clone());
         Some(AutomationStatus {
             paused: view.paused,
             held: view.held,
             trigger,
             returns_to,
             waiting: view.waiting.into_iter().map(|(p, _)| p).collect(),
+            waiting_for,
         })
+    }
+
+    /// `profile` if the configuration in effect has it (or it is
+    /// `neutral`), else `neutral` (U4: a profile to go back to may have
+    /// left the file meanwhile).
+    fn known_or_neutral(&self, profile: &str) -> String {
+        let known = profile.eq_ignore_ascii_case(NEUTRAL)
+            || lock(&self.source).config().profile(profile).is_some();
+        if known {
+            profile.to_owned()
+        } else {
+            info!("tray: \"{profile}\" is no longer in the configuration; going to neutral");
+            NEUTRAL.to_owned()
+        }
     }
 
     /// U4: whether some profile of the configuration in effect has
@@ -791,9 +832,12 @@ impl App {
             info!("tray: trigger poll stopped");
         } else if !blocked && configured && !self.polling {
             let interval = trigger_poll();
-            window::set_poll(Some(interval));
-            self.polling = true;
-            info!("tray: trigger poll every {} ms", interval.as_millis());
+            // A timer that could not be set is tried again at the next
+            // call (menu, end of a switch).
+            if window::set_poll(Some(interval)) {
+                self.polling = true;
+                info!("tray: trigger poll every {} ms", interval.as_millis());
+            }
         }
         self.status.automation = configured.then(|| self.automation.view(&self.will_be_active()));
     }
@@ -806,14 +850,6 @@ impl App {
             self.arm_poll();
             return;
         }
-        // The file may have changed; an unchanged one is not parsed again
-        // (C4).
-        let profiles = {
-            let mut source = lock(&self.source);
-            source.refresh();
-            self.status.config_error = source.problem().map(str::to_owned);
-            source.config().profiles.clone()
-        };
         let Ok(snapshot) = Snapshot::take() else {
             return;
         };
@@ -824,22 +860,46 @@ impl App {
         }
         let images = &mut self.images;
         let mut image = |info: &ProcessInfo| -> Option<PathBuf> {
-            images
-                .entry((info.pid, info.created))
-                .or_insert_with(|| {
-                    match Target::open(info, Access::Query)
-                        .and_then(|t| t.map(|t| t.image_path()).transpose())
-                    {
-                        Ok(path) => path,
-                        Err(err) => {
+            let entry = images.entry((info.pid, info.created)).or_insert(Err(0));
+            match entry {
+                Ok(path) => return Some(path.clone()),
+                Err(attempts) if *attempts >= IMAGE_ATTEMPTS => return None,
+                Err(_) => {}
+            }
+            match Target::open(info, Access::Query)
+                .and_then(|t| t.map(|t| t.image_path()).transpose())
+            {
+                Ok(Some(path)) => {
+                    *entry = Ok(path.clone());
+                    Some(path)
+                }
+                // Gone meanwhile: the next snapshot no longer lists it.
+                Ok(None) => None,
+                Err(err) => {
+                    if let Err(attempts) = entry {
+                        if *attempts == 0 {
                             info!("tray: trigger check: {err}");
-                            None
                         }
+                        *attempts += 1;
                     }
-                })
-                .clone()
+                    None
+                }
+            }
         };
-        let seen = triggers::scan(&profiles, snapshot.processes(), session, &mut image);
+        // The file may have changed; an unchanged one is not parsed again
+        // (C4). The scan works on the configuration in place.
+        let source = Arc::clone(&self.source);
+        let seen = {
+            let mut source = lock(&source);
+            source.refresh();
+            self.status.config_error = source.problem().map(str::to_owned);
+            triggers::scan(
+                &source.config().profiles,
+                snapshot.processes(),
+                session,
+                &mut image,
+            )
+        };
         let active = self.will_be_active();
         let (action, log) = self.automation.poll(Instant::now(), &seen, &active);
         for line in log {
@@ -851,17 +911,7 @@ impl App {
             reason,
         }) = action
         {
-            // The profile to return to may have left the file meanwhile.
-            let known = profile.eq_ignore_ascii_case(NEUTRAL)
-                || profiles
-                    .iter()
-                    .any(|p| p.name.eq_ignore_ascii_case(&profile));
-            let target = if known {
-                profile
-            } else {
-                info!("tray: \"{profile}\" is no longer in the configuration; going to neutral");
-                NEUTRAL.to_owned()
-            };
+            let target = self.known_or_neutral(&profile);
             info!("tray: trigger asks for \"{target}\" ({reason})");
             self.submit(Job::automatic(&target, &previous, &reason), None);
         }
@@ -895,19 +945,48 @@ impl App {
 
     /// U4, decided detail 1: an automatic switch ended; tell the user and
     /// offer the way back.
-    fn notify_automatic(&mut self, target: &str, automatic: &model::Automatic, errors: usize) {
-        let mut text = format!("{}: switched to {target}", automatic.reason);
+    /// `target` is the profile asked for, `active` the one active now; they
+    /// differ when the switch could not run at all.
+    fn notify_automatic(
+        &mut self,
+        target: &str,
+        active: &str,
+        automatic: &model::Automatic,
+        errors: usize,
+    ) {
+        let switched = active.trim().eq_ignore_ascii_case(target.trim());
+        let (title, mut text) = if switched {
+            (
+                format!("kaltstellen: {target}"),
+                format!("{}: switched to {target}", automatic.reason),
+            )
+        } else {
+            (
+                format!("kaltstellen: switch to {target} failed"),
+                format!("{}: could not switch to {target}", automatic.reason),
+            )
+        };
         match errors {
             0 => text.push('.'),
             1 => text.push_str(", with 1 error."),
             n => text.push_str(&format!(", with {n} errors.")),
         }
-        text.push_str(&format!(" Click here: Back to {}", automatic.previous));
-        info!("tray: notification: {text}");
-        if !window::balloon(&format!("kaltstellen: {target}"), &text) {
+        // A way back only when something changed.
+        let back = !active
+            .trim()
+            .eq_ignore_ascii_case(automatic.previous.trim());
+        if back {
+            text.push_str(&format!(" Click here: Back to {}", automatic.previous));
+        }
+        info!("tray: notification: {title}: {text}");
+        let logged_only = std::env::var(NOTIFY_ENV).is_ok_and(|v| v.trim() == "log");
+        if !logged_only && !window::balloon(&title, &text) {
             warn!("tray: the notification could not be shown");
         }
-        self.back_to = Some(automatic.previous.clone());
+        self.notice = back.then(|| Notice {
+            back_to: automatic.previous.clone(),
+            shown: false,
+        });
     }
 
     fn submit(&mut self, job: Job, waiter: Option<Waiter>) {
@@ -922,14 +1001,20 @@ impl App {
             self.save_offer();
         }
         // U4: the last notification's `Back to` means nothing any more.
-        self.back_to = None;
+        self.notice = None;
         // U4, conflict rule 1: everything but a trigger is manual here
         // (menu, hotkey, command line, window, `Back to`) and holds
         // automation until the trigger situation changes.
-        if !automatic && self.automation.manual() {
-            info!(
-                "tray: automatic switching waits after a manual switch until a trigger program starts or ends"
-            );
+        if !automatic {
+            if self.automation.manual() {
+                info!(
+                    "tray: automatic switching waits after a manual switch until a trigger program starts or ends"
+                );
+            }
+            // The tooltip and menu no longer say "by trigger".
+            if self.status.automation.is_some() {
+                self.status.automation = Some(self.automation.view(&self.will_be_active()));
+            }
         }
         let by = job.leads_to().to_owned();
         match self.controller.request(job) {
@@ -1053,14 +1138,14 @@ impl App {
         // U4: an automatic switch is announced with its way back, unless
         // another request runs already.
         if let Job::Switch {
+            target,
             automatic: Some(automatic),
             ..
         } = &done.job
-            && done.outcome.ran
             && next.is_none()
         {
             let active = self.status.active.clone();
-            self.notify_automatic(&active, automatic, errors.len());
+            self.notify_automatic(target, &active, automatic, errors.len());
         }
         self.arm_poll();
         self.sync_hotkeys();
@@ -1270,16 +1355,34 @@ impl window::Handler for App {
     }
 
     fn balloon_clicked(&mut self) {
-        let Some(previous) = self.back_to.take() else {
+        // Honoured only while the latest notification is on screen: the
+        // click does not say which one was clicked (U4).
+        let Some(previous) = self.notice.take_if(|n| n.shown).map(|n| n.back_to) else {
             info!("tray: notification clicked; nothing to go back to");
             return;
         };
         if self.controller.is_quitting() {
             return;
         }
-        // A manual switch: it holds automation like any other (U4).
-        info!("tray: notification clicked; back to \"{previous}\"");
-        self.submit(Job::switch(&previous), None);
+        // A manual switch: it holds automation like any other (U4). A
+        // profile that left the file meanwhile becomes neutral.
+        let target = self.known_or_neutral(&previous);
+        info!("tray: notification clicked; back to \"{target}\"");
+        self.submit(Job::switch(&target), None);
+    }
+
+    fn balloon_shown(&mut self) {
+        if let Some(notice) = &mut self.notice {
+            notice.shown = true;
+        }
+    }
+
+    fn balloon_gone(&mut self) {
+        // A notice not shown yet belongs to a newer notification; the one
+        // that went away is the one it replaced.
+        if self.notice.take_if(|n| n.shown).is_some() {
+            info!("tray: notification gone; its way back no longer applies");
+        }
     }
 
     fn timer(&mut self) {
@@ -1337,11 +1440,24 @@ impl window::Handler for App {
         // was not taken up yet. A profile a trigger applied is not offered,
         // but the one from before the trigger (U4, decided detail 8).
         self.arm_poll();
-        if !self.status.is_neutral() {
-            match self.automation.base_of(&self.status.active) {
+        // A notification's way back means nothing after this.
+        self.notice = None;
+        // While an automatic switch runs or waits (a return to the profile
+        // from before, for example), the profile it leads to counts.
+        let automatic_ahead = [self.controller.running(), self.controller.pending()]
+            .into_iter()
+            .flatten()
+            .any(Job::is_automatic);
+        let current = if automatic_ahead {
+            self.will_be_active()
+        } else {
+            self.status.active.clone()
+        };
+        if !current.trim().eq_ignore_ascii_case(NEUTRAL) {
+            match self.automation.base_of(&current) {
                 Some(base) if base.eq_ignore_ascii_case(NEUTRAL) => {}
                 Some(base) => self.status.offer = Some(base.to_owned()),
-                None => self.status.offer = Some(self.status.active.clone()),
+                None => self.status.offer = Some(current),
             }
         }
         if self.status.offer.is_some() {

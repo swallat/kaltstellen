@@ -14,8 +14,8 @@ cover. Each is marked `[assumed]` in spec L12 or C9:
 
 1. **Poll interval 5 s** (L12): one poll measured about 3.5 ms of CPU time
    (not a few hundred microseconds); 3 s would be 0.12 % of one core, above
-   Q1 if Q1 is read per core, 5 s is 0.06 %. Start noticed within about
-   5 s, end 5 to 10 s after it.
+   Q1 if Q1 is read per core, 5 s is about 0.07 % (3.5 ms / 5 s). Start
+   noticed within about 5 s, end 5 to 10 s after it.
 2. **Trigger form** (C9): one string per program, a name or a full path
    (`trigger = ["sim.exe", 'D:\Games\sim.exe']`), instead of separate `exe`
    and `path` keys.
@@ -28,13 +28,19 @@ cover. Each is marked `[assumed]` in spec L12 or C9:
    automation owns; switching it on again, starting the tray and a
    cancelled shutdown treat trigger programs that run as starting, so their
    profile is applied.
+   After a cancelled end of session the profile they return to is the one
+   active then (usually `neutral`), not the one from before the trigger.
 6. **Trigger of the profile that is already active** (L12): changes nothing
    and returns nothing.
 7. **Return target gone** (L12): a profile from before the trigger that is
    no longer in the configuration becomes `neutral`.
+   The same for `Back to` in a notification.
 8. **Notification** (L12): shown for every automatic switch, the return
-   included; the click works until the next request; none when another
-   request already waits.
+   included; none when another request already waits; a failed switch
+   says so. The click works only while the notification is on screen
+   (decided after review: the click message does not say which
+   notification was clicked), and until the next request; clicks in the
+   notification centre do nothing.
 9. **S5 offer** (L12, L7): an automatic switch does not use up the offer;
    when the profile from before the trigger was `neutral`, the earlier
    offer stays.
@@ -46,6 +52,25 @@ cover. Each is marked `[assumed]` in spec L12 or C9:
 12. **Window layout** (M6 Content): the triggers as a text field, one per
     line, with the priority and `Set`, below the hotkey; a copied profile
     does not take them.
+13. **What counts as manual** (L12): `recover` from the command line and
+    `Back to` in a notification hold automation like menu, hotkey and
+    window switches.
+14. **A waiting trigger ends a hold** (L12): the start or end of a trigger
+    that only waits behind a higher one also counts as a change of the
+    trigger situation and ends a manual hold.
+15. **Hand-back to the user's own profile** (L12): when a higher trigger
+    ends and the profile handed back to is the one from before the first
+    trigger, automation no longer owns it; it is applied only if not
+    active, and nothing returns from it later.
+16. **Changed priorities** (L12): when a changed configuration lets another
+    running trigger win, the next poll decides again; a manual hold stays.
+17. **Unreadable path triggers** (L12): a process whose image path cannot be
+    read is tried at three polls, then it does not count.
+18. **C9 details**: hard-protected names are allowed as triggers (only
+    looked for); a trigger with a path and an entry with another path of
+    the same name do not clash.
+19. **Status lines and pipe field** (L12, pipe protocol): wording of the
+    `tray: …` lines and the `automation` field of the `status` reply.
 
 Everything else the owner has not decided yet is deferred (below).
 
