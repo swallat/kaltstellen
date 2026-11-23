@@ -21,10 +21,11 @@ Start the flight simulator and its companion tools come up while the music
 software is frozen or closed; switch to the music profile and it is the other
 way round.
 
-**Status: early, command line only.** Profiles work from the command line:
+**Status: early.** Profiles work from the command line:
 `kaltstellen switch <profile>` starts, stops and freezes programs as the
-configuration says and undoes it on the next switch. The tray icon, hotkeys
-and the settings window are planned; see [docs/spec.md](docs/spec.md) and
+configuration says and undoes it on the next switch. A first tray icon
+(`kaltstellen tray`) switches profiles from its menu. Hotkeys and the
+settings window are planned; see [docs/spec.md](docs/spec.md) and
 [docs/plan.md](docs/plan.md).
 
 ## Using it
@@ -35,9 +36,15 @@ Copy [config.example.toml](config.example.toml) to
 ```text
 kaltstellen check-config [FILE]   validate the configuration
 kaltstellen switch PROFILE        switch to a profile; "neutral" brings
-                                  everything back
-kaltstellen status                show the active profile and what is on ice
-kaltstellen recover               resume everything frozen, e.g. after a crash
+          [--force] [--no-wait]   everything back
+kaltstellen status [--unassigned] show the active profile and what is on ice;
+                                  --unassigned also lists running programs
+                                  without an entry in it
+kaltstellen recover [--no-wait]   resume everything frozen, e.g. after a crash
+kaltstellen tray                  notification-area icon with the profile menu
+kaltstellen autostart [on|off]    start the tray at sign-in (per-user Run key)
+kaltstellen gui                   window to edit profiles and their programs
+                                  (needs the WebView2 runtime of Windows 11)
 
 kaltstellen list [FILTER]         list running processes
 kaltstellen suspend NAME [--trim] freeze a program by hand: all processes with
@@ -51,7 +58,12 @@ kaltstellen resume NAME           continue them
   `%LOCALAPPDATA%\kaltstellen\state.json` before it happens. If kaltstellen
   is killed, `kaltstellen recover` brings everything back.
 - Remote-access tools, graphics driver components, licence services,
-  security software and shells are only touched with `--force`.
+  security software and shells are only touched if their entry has
+  `confirmed = true`, or with `--force` for one switch.
+- With `kaltstellen tray` running, `switch`, `recover` and `status` are
+  handed to the tray and wait for it (same output and exit codes);
+  `--no-wait` returns once the tray has queued the request. A request that a
+  later one replaces while it waits ends with exit code 3.
 - Only processes of your own Windows session are touched.
 - A suspended process uses no CPU and keeps its state.
 - `--trim` also asks Windows to move the process's memory out of RAM. Because a
@@ -95,12 +107,26 @@ Requires Windows and a stable Rust toolchain.
 cargo build --release
 ```
 
+The main window is a web page in `ui/` shown with WebView2 and embedded
+into the executable; [ui/README.md](ui/README.md) explains how to work on its
+design in a normal browser without building Rust.
+
 The binary is `target\release\kaltstellen.exe`. Freezing processes that run
 elevated or under another user requires an elevated terminal.
 
-## The tray icon (planned)
+## The tray icon
 
-The tray app does not exist yet, but its icon does. One tile, three states:
+`kaltstellen tray` puts an icon in the notification area. Its menu lists the
+profiles of the configuration (the active one checked), `Neutral` and
+`Quit`; the tooltip names the active profile. It runs once per session, and
+on start it resumes anything a crashed instance left frozen. `Quit` resumes
+everything frozen and leaves closed programs closed. When you sign out or
+shut down, it resumes everything first and offers the last profile again
+after the next sign-in (`Apply last profile` in the menu); it never applies
+it by itself. `Start at sign-in` in the menu adds it to the per-user Run key. Started from a terminal
+it keeps that terminal until `Quit`; started from a shortcut it lets go of
+its console window at once, which may still show for a moment. While it
+runs, the command line goes through it. One tile, three states:
 
 | | State | Meaning |
 | :-: | --- | --- |
@@ -110,6 +136,49 @@ The tray app does not exist yet, but its icon does. One tile, three states:
 
 Logo, wordmark, colours and icons live in [branding/](branding/), together
 with the scripts that generate them. The notes there are in German.
+
+## Updates
+
+There are no releases yet; this describes how updates will work once there
+are. kaltstellen updates itself from the
+[GitHub releases](https://github.com/swallat/kaltstellen/releases) of this
+repository:
+
+```powershell
+kaltstellen update --check   # is there a newer version?
+kaltstellen update           # install it
+```
+
+Installing downloads the executable for your system and `checksums.txt` of
+the same release, refuses the file if its SHA-256 differs, and tries the new
+file (`--version`) before anything else changes. A running tray is quit
+first, which resumes every frozen program; then the executable is replaced
+and a new tray started. Its menu offers the profile that was active
+(`Apply last profile`); nothing is frozen again by itself. If the new tray
+does not start, the previous version is put back and started. The previous
+executable stays next to the new one as `kaltstellen.old.exe` until the next
+update, so you can go back by renaming it.
+
+The tray looks for a new version once a day (first five minutes after it
+starts). By default it installs a newer version by itself, but only while
+`neutral` is active and no switch is running or waiting, so nothing you
+froze is thawed; otherwise it waits for the next time you are back on
+`neutral`. This check is the only network access kaltstellen makes: one
+HTTPS request to the GitHub API, nothing about you or your configuration is
+sent. Choose the mode with any of:
+
+- the tray menu items `Updates: install automatically`, `check and ask`
+  (shows `Install update <version>…` and installs only on click) or `off`,
+- the main window,
+- `kaltstellen update --mode auto|manual|off`,
+- the environment variable `KALTSTELLEN_UPDATE=auto|manual|off`, which wins
+  over the others.
+
+With the check off, nothing connects unless you run `kaltstellen update`.
+A copy installed by scoop, winget or Chocolatey, or placed below Program
+Files or in a folder you cannot write to, does not replace itself; it says
+how to update instead. Builds of your own (`cargo build`) do not update
+themselves either.
 
 ## License
 

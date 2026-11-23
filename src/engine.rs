@@ -14,7 +14,7 @@ use log::{info, warn};
 
 use crate::config::{App, AppAction, Config, NEUTRAL, Settings};
 use crate::error::{Code, Error, Result, Step};
-use crate::process::{self, Access, ProcessInfo, Snapshot, StopOutcome, Target};
+use crate::process::{self, Access, Guest, ProcessInfo, Snapshot, StopOutcome, Target};
 use crate::protection::{self, Protection};
 use crate::state::{State, Stopped, Suspended};
 
@@ -105,6 +105,46 @@ pub fn switch(
     options: Options,
     persist: &mut dyn FnMut(&State) -> Result<()>,
 ) -> Result<Report> {
+    switch_with(config, target, state, options, persist, &|| false)
+}
+
+/// [`switch`] that stops early once `interrupted` returns true (S5, console
+/// control handler): the action on the current program finishes, later
+/// programs and steps are skipped, the report gets `Interrupted` and the
+/// active profile stays as it was. The caller then resumes what is
+/// recorded, see [`recover`].
+pub fn switch_with(
+    config: &Config,
+    target: &str,
+    state: &mut State,
+    options: Options,
+    persist: &mut dyn FnMut(&State) -> Result<()>,
+    interrupted: &dyn Fn() -> bool,
+) -> Result<Report> {
+    switch_guarded(
+        config,
+        target,
+        state,
+        options,
+        persist,
+        interrupted,
+        &Vec::new,
+    )
+}
+
+/// [`switch_with`] that also protects `guests()` and their ancestors like
+/// kaltstellen itself (T16): the command line that asked the tray for this
+/// switch. `guests` is asked again for every snapshot, so a caller added
+/// while the switch runs is protected from the next step on.
+pub fn switch_guarded(
+    config: &Config,
+    target: &str,
+    state: &mut State,
+    options: Options,
+    persist: &mut dyn FnMut(&State) -> Result<()>,
+    interrupted: &dyn Fn() -> bool,
+    guests: &dyn Fn() -> Vec<Guest>,
+) -> Result<Report> {
     let (name, apps): (String, &[App]) = if target.trim().eq_ignore_ascii_case(NEUTRAL) {
         (NEUTRAL.to_owned(), &[])
     } else {
@@ -125,8 +165,11 @@ pub fn switch(
         state,
         persist,
         report: Report::default(),
+        interrupted,
+        halted: false,
+        guests,
     };
-    let snapshot = Snapshot::take()?;
+    let snapshot = run.snapshot()?;
     run.drop_records_of_previous_boot(&snapshot);
 
     run.resume(&snapshot, apps);
@@ -137,6 +180,10 @@ pub fn switch(
     run.save();
     run.start(apps, to_neutral)?;
 
+    if run.halted {
+        run.save();
+        return Ok(run.report);
+    }
     run.state.active_profile = name;
     run.state.boot = snapshot.boot_marker();
     run.save();
@@ -153,6 +200,9 @@ pub fn recover(state: &mut State, persist: &mut dyn FnMut(&State) -> Result<()>)
         state,
         persist,
         report: Report::default(),
+        interrupted: &|| false,
+        halted: false,
+        guests: &Vec::new,
     };
     let snapshot = Snapshot::take()?;
     run.drop_records_of_previous_boot(&snapshot);
@@ -172,9 +222,31 @@ struct Run<'a> {
     state: &'a mut State,
     persist: &'a mut dyn FnMut(&State) -> Result<()>,
     report: Report,
+    interrupted: &'a dyn Fn() -> bool,
+    /// Protected like kaltstellen itself in every snapshot (T16).
+    guests: &'a dyn Fn() -> Vec<Guest>,
+    /// Set once `interrupted` returned true; everything after is skipped.
+    halted: bool,
 }
 
 impl Run<'_> {
+    /// A snapshot that protects the guests of this run.
+    fn snapshot(&self) -> Result<Snapshot> {
+        Ok(Snapshot::take()?.with_guests((self.guests)()))
+    }
+
+    /// Whether to stop here because of an interrupt.
+    fn halt(&mut self) -> bool {
+        if !self.halted && (self.interrupted)() {
+            self.halted = true;
+            self.report.failed(Error::new(
+                Code::Interrupted,
+                "interrupted; the remaining programs and steps were skipped",
+            ));
+        }
+        self.halted
+    }
+
     fn save(&mut self) {
         if let Err(err) = (self.persist)(self.state) {
             self.report.failed(err);
@@ -199,12 +271,12 @@ impl Run<'_> {
     /// P6: a program on the warn list needs confirmation.
     fn confirmed(&mut self, app: &App, step: Step) -> bool {
         match protection::of(&app.exe) {
-            Protection::Warn(category) if !self.options.force => {
+            Protection::Warn(category) if !self.options.force && !app.confirmed => {
                 self.report.failed(
                     Error::new(
                         Code::WarnListUnconfirmed,
                         format!(
-                            "is a {}; confirm with --force to let kaltstellen touch it",
+                            "is a {}; set confirmed = true in its entry or use --force",
                             category.description()
                         ),
                     )
@@ -258,12 +330,20 @@ impl Run<'_> {
         if stops.is_empty() {
             return Ok(());
         }
-        let snapshot = Snapshot::take()?;
+        if self.halt() {
+            return Ok(());
+        }
+        let snapshot = self.snapshot()?;
         for app in stops {
+            if self.halt() {
+                break;
+            }
             let AppAction::Stop {
                 on_timeout,
                 restart_on_neutral,
-            } = app.action
+                args,
+                cwd,
+            } = &app.action
             else {
                 continue;
             };
@@ -276,7 +356,7 @@ impl Run<'_> {
             }
             let image = app.path.clone().or_else(|| image_of(&processes, &app.exe));
             let timeout = Duration::from_secs(u64::from(self.settings.stop_timeout_s));
-            match process::stop(&processes, timeout, on_timeout) {
+            match process::stop(&processes, timeout, *on_timeout) {
                 Ok(StopOutcome::NotRunning) => {}
                 Ok(StopOutcome::Closed | StopOutcome::Killed) => {
                     self.report.done(Step::Stop, &app.exe, None);
@@ -287,7 +367,9 @@ impl Run<'_> {
                     self.state.stopped.push(Stopped {
                         exe: app.exe.clone(),
                         image,
-                        restart_on_neutral,
+                        restart_on_neutral: *restart_on_neutral,
+                        args: args.clone(),
+                        cwd: cwd.as_ref().map(|c| c.to_string_lossy().into_owned()),
                     });
                 }
                 Err(err) => self.report.failed(err),
@@ -307,8 +389,14 @@ impl Run<'_> {
         // W6: the second pass freezes processes that appeared meanwhile, for
         // example children spawned just before their parent froze.
         for pass in 0..2 {
-            let snapshot = Snapshot::take()?;
+            if self.halt() {
+                return Ok(());
+            }
+            let snapshot = self.snapshot()?;
             for app in &suspends {
+                if self.halt() {
+                    return Ok(());
+                }
                 let AppAction::Suspend { trim } = app.action else {
                     continue;
                 };
@@ -383,6 +471,9 @@ impl Run<'_> {
     }
 
     fn start(&mut self, target: &[App], to_neutral: bool) -> Result<()> {
+        if self.halt() {
+            return Ok(());
+        }
         let starts: Vec<&App> = target
             .iter()
             .filter(|app| matches!(app.action, AppAction::Start { .. }))
@@ -399,8 +490,11 @@ impl Run<'_> {
         if starts.is_empty() && restarts.is_empty() {
             return Ok(());
         }
-        let snapshot = Snapshot::take()?;
+        let snapshot = self.snapshot()?;
         for app in starts {
+            if self.halt() {
+                return Ok(());
+            }
             let (AppAction::Start { args, cwd }, Some(path)) = (&app.action, &app.path) else {
                 continue;
             };
@@ -425,7 +519,7 @@ impl Run<'_> {
             if !snapshot.program_at(&stopped.exe, &image).0.is_empty() {
                 continue;
             }
-            match process::start(&image, &[], None) {
+            match process::start(&image, &stopped.args, stopped.cwd.as_deref().map(Path::new)) {
                 Ok(pid) => self.report.done(Step::Start, &stopped.exe, Some(pid)),
                 Err(err) => self.report.failed(err),
             }
@@ -467,11 +561,7 @@ mod tests {
     use super::*;
 
     fn app(exe: &str, path: Option<&str>, action: AppAction) -> App {
-        App {
-            exe: exe.to_owned(),
-            path: path.map(PathBuf::from),
-            action,
-        }
+        App::new(exe, path.map(PathBuf::from), action)
     }
 
     fn record(pid: u32, exe: &str, path: Option<&str>) -> Suspended {
@@ -505,6 +595,8 @@ mod tests {
                 AppAction::Stop {
                     on_timeout: crate::config::OnTimeout::Kill,
                     restart_on_neutral: false,
+                    args: Vec::new(),
+                    cwd: None,
                 },
             ),
             app("chat.exe", None, AppAction::Ignore),

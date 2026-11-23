@@ -51,6 +51,9 @@ pub enum Code {
     ConfigInvalid = 203,
     /// `settings.json` could not be read or written.
     SettingsIo = 204,
+    /// The main window could not write the configuration (invalid result,
+    /// changed on disk, or a file error).
+    ConfigWrite = 205,
 
     // 3xx: state file
     /// The state file could not be read or written.
@@ -59,16 +62,59 @@ pub enum Code {
     StateCorrupt = 302,
     /// Another switch holds the state lock (E2 exit code 5).
     StateLocked = 303,
+    /// `seen.json` (N1) could not be read or written.
+    SeenIo = 304,
 
     // 4xx: switch engine
     /// The requested profile does not exist (E2 exit code 4).
     UnknownProfile = 401,
     /// The request was superseded by a later one (W3, E2 exit code 3).
     Superseded = 402,
+    /// A switch was interrupted (Ctrl+C, Ctrl+Break, console closed) and
+    /// what it froze was resumed (S5).
+    Interrupted = 403,
 
     // 5xx: tray communication
     /// The tray instance could not be reached.
     TrayUnreachable = 501,
+    /// The single-instance mutex of the tray could not be created (L1).
+    TrayInstance = 502,
+    /// The tray window or its message loop could not be set up.
+    TrayWindow = 503,
+    /// The tray's pipe could not be created or served (L1).
+    TrayPipe = 504,
+    /// A pipe message was malformed or of another protocol version.
+    TrayProtocol = 505,
+
+    // 6xx: system integration
+    /// The Run key for start at sign-in could not be read or written.
+    AutostartIo = 601,
+
+    // 7xx: main window
+    /// The main window could not be set up.
+    GuiWindow = 701,
+    /// The WebView2 runtime the main window needs is not installed.
+    WebViewMissing = 702,
+
+    // 8xx: updates (UP1)
+    /// The update check failed (network, HTTP status).
+    UpdateCheck = 801,
+    /// The release cannot be used: metadata, no file for this system, no
+    /// checksum.
+    UpdateRelease = 802,
+    /// The downloaded file does not match its published SHA-256.
+    UpdateChecksum = 803,
+    /// This copy cannot update itself (package manager, folder, development
+    /// build).
+    UpdateNotHere = 804,
+    /// Replacing the executable failed; the old one is back.
+    UpdateReplace = 805,
+    /// The new version did not start; the old one is back.
+    UpdateStart = 806,
+    /// `update.json` could not be read or written.
+    UpdateRecord = 807,
+    /// The tray could not be stopped for the update.
+    UpdateTray = 808,
 
     // 9xx: internal
     /// Logging could not be set up.
@@ -96,12 +142,30 @@ impl Code {
         Code::ConfigSyntax,
         Code::ConfigInvalid,
         Code::SettingsIo,
+        Code::ConfigWrite,
         Code::StateIo,
         Code::StateCorrupt,
         Code::StateLocked,
+        Code::SeenIo,
         Code::UnknownProfile,
         Code::Superseded,
+        Code::Interrupted,
         Code::TrayUnreachable,
+        Code::TrayInstance,
+        Code::TrayWindow,
+        Code::TrayPipe,
+        Code::TrayProtocol,
+        Code::AutostartIo,
+        Code::GuiWindow,
+        Code::WebViewMissing,
+        Code::UpdateCheck,
+        Code::UpdateRelease,
+        Code::UpdateChecksum,
+        Code::UpdateNotHere,
+        Code::UpdateReplace,
+        Code::UpdateStart,
+        Code::UpdateRecord,
+        Code::UpdateTray,
         Code::LogSetup,
     ];
 

@@ -26,13 +26,20 @@ name. Purpose: find out which real apps tolerate being frozen.
 
 ## M3: automation
 
-- Trigger processes switch profiles automatically (U4).
+- Trigger processes switch profiles automatically (U4): moved after
+  version 1, see below.
 - Global hotkeys (U3).
 
 ## M4: services and elevation
 
 - Stop and start services (A5).
 - Elevation model as decided in open question 4 (Q3).
+
+## After version 1
+
+- Automatic triggers (U4), direction decided by the owner on 2026-11-23:
+  trigger programs per profile, opt-in, a manual choice always wins. Open
+  points in [design-automatic-triggers.md](design-automatic-triggers.md).
 
 ## Later, if wanted
 
@@ -64,3 +71,96 @@ name. Purpose: find out which real apps tolerate being frozen.
   codes of E2; tests in `tests/fixtures/tests/switch.rs`. Still open for M1:
   all VM runs of the acceptance list, T15, T18, T19; W3/T4 (request queue),
   `--no-wait` and the Ctrl+C handler come with the tray app (M2).
+- WP7 tray app, first increment (2026-11-22): `kaltstellen tray` with
+  single-instance mutex, notification icon with the three states and a
+  tooltip naming the active profile, menu from the configuration, switches
+  on a worker thread with the W3 queue, recovery at start (S3), Quit with
+  resume (L2), lazy configuration reload keeping the last valid file
+  (C3/C4). Pure logic in `src/tray/` (`model.rs`: queue, status, menu;
+  `source.rs`: configuration; `worker.rs`: worker and engine runner); the
+  Win32 side in `src/win32/` (window, icon, menu, mutex, console), to which
+  Q4 was widened. Details decided on the way are in spec L4. Tests: unit
+  tests of queue, menu, status and worker; `tests/tray.rs` (process level:
+  single instance, `WM_CLOSE`); `tests/fixtures/tests/tray.rs` (menu
+  commands against fixtures: switch, neutral, Quit, crash recovery, error
+  state, invalid configuration, T4). Indicative Q1 on the desktop with a
+  test configuration: private working set about 1.3 MB, no measurable CPU
+  over 60 s idle. Still open from WP7: the named pipe and forwarding of
+  command-line requests (L1 second half), `--no-wait` and exit code 3 over
+  the pipe, start at sign-in (Run key), idle trim of the tray itself,
+  acknowledging the error state, a per-monitor DPI manifest, and a visual
+  check of icons and menu. Next: WP8 (`WM_QUERYENDSESSION`, shutdown
+  priority, `settings.json` last profile, console handler), then hotkeys,
+  GUI and unassigned programs (M3).
+- Owner decisions (2026-11-22): spec blocks A8, C8, L4 and the widened Q4
+  confirmed. Added on request: `args`/`cwd` on stop entries for the restart on
+  `neutral`, and `confirmed = true` for warn-list entries (works from the tray).
+- WP7 second increment and WP8 (2026-11-22): named pipe of the tray
+  (`src/win32/pipe.rs`, `src/tray/{protocol,server,client}.rs`, format in
+  `docs/pipe-protocol.md`, spec L5): `switch`, `recover` and `status` go
+  through a running tray with the same output and exit codes, `--no-wait`,
+  exit code 3 for a superseded request, in-process fallback without a tray.
+  Console control handler for in-process switches (spec L6, `KS403`).
+  Session end (spec L7): resume at `WM_QUERYENDSESSION`, shutdown priority,
+  stopped records cleared at `WM_ENDSESSION`, `settings.json` with the last
+  profile offered in the menu, power events logged. Start at sign-in via the
+  per-user Run key (`kaltstellen autostart`, menu item; spec L8). Idle trim of
+  the tray dropped (not needed for Q1). Tests at process level against the
+  fixtures; session-end messages are posted to a test tray, never a real
+  sign-out. Still open for M2: T7, T20 and T5 on the VM with a real sign-out
+  and shutdown; connecting to the pipe as another user (only the DACL is
+  checked); visual check of icon and menu; acknowledging the error state; a
+  per-monitor DPI manifest; the manual 30-minute run of M2.
+- M2 leftovers, WP9, WP10 (2026-11-22): `Clear error state` in the tray menu
+  and a manifest with per-monitor DPI awareness (spec L9). Hotkeys registered
+  on the tray window (spec L10). Main window `kaltstellen gui` (spec M6):
+  toolkit spike measured native Win32 against egui, native chosen; edits
+  through `toml_edit` with validation and atomic saves (`src/gui/document.rs`),
+  view model in `src/gui/model.rs`, window in `src/win32/gui.rs`; tray item
+  `Open kaltstellen…` starts it. Tested without eyes: controls exist, posted
+  clicks change the file as expected, invalid edits change nothing, apply
+  runs the switch, the process ends on close. Visual checks are listed in
+  `docs/manual-checks.md`, decisions in `docs/open-decisions.md`.
+- WP11 (2026-11-22): unassigned programs (spec N2): `src/unassigned.rs` with
+  `seen.json`, notification-icon registry and visible-window sources (read
+  only), `new` marker, dismiss; `kaltstellen status --unassigned`; tray menu
+  line `Unassigned programs (N)`; list with `Add to profile` and `Dismiss` in
+  the main window. Tests use injected observations; the live snapshot is
+  only read.
+- M4 design notes (2026-11-22): `docs/design-elevated-helper.md` (A5, P8) and
+  `docs/design-automatic-triggers.md` (U4), for the owner to decide; no code.
+- Updates, UP1 (2026-11-22, on the owner's request before any release,
+  modelled on foresprint's `selfupdate`): `kaltstellen update [--check]
+  [--force] [--auto on|off]`, daily check by the tray through a child
+  process on a one-shot timer, menu items `Install update <version>…` and
+  `Check for updates daily`, pipe request `quit`. Safe logic in
+  `src/update/` (versions, metadata, checksums, schedule, placement, the
+  install sequence with rollback), WinHTTP and CNG SHA-256 in
+  `src/win32/{http,hash}.rs`; no new crate. Codes `KS801` to `KS808`.
+  Tests: unit tests with injected fetch and session, WinHTTP against a
+  loopback server, and process-level tests in
+  `tests/fixtures/tests/update.rs` (check, mode, full update with a tray
+  holding a frozen program, rollback of a tray that does not start, wrong
+  checksum, a file that is no program, the tray's check switched on from
+  the menu). The non-goal "no network access" is reworded (open decision
+  12). Still open: a real release (`docs/release-requirements.md`),
+  signing, the manual checks in `docs/manual-checks.md`.
+- Main window on WebView2 (2026-11-23, owner decision; branch `gui-webview`):
+  the native window is replaced by a WebView2 page (`ui/`, embedded; host in
+  `src/win32/webview.rs`, bridge in `src/gui/bridge.rs`, documented in
+  `docs/gui-bridge.md`). Document editing and validation stay in Rust.
+  Tests drive the real page through its bridge (`--drive`) and capture it
+  (`--screenshot`); screenshots of all views in light and dark were reviewed.
+  Indicative: page ready after about 0.54 s, about 74 to 78 MB private
+  working set for the window and its WebView2 processes, executable 2.97 MB
+  (was 2.54 MB), tray idle unchanged at about 1.6 MB.
+- CI and release pipeline (2026-11-23): `ci.yml` hardened (pinned actions,
+  read-only token, fixed toolchain in `rust-toolchain.toml`, `--locked`,
+  release build smoke test, window tests must not be skipped);
+  `release.yml` publishes on a tag `v<version>` that matches `Cargo.toml`
+  and sits on `main`, dry run otherwise (`docs/releasing.md`). `-v` is
+  accepted next to `-V` and `--version`. No release has been made.
+- Version from the tag (2026-11-23, owner decision): `Cargo.toml` holds
+  the placeholder `0.0.0-dev`; the release workflow sets the version from
+  the tag; development builds derive theirs from the last tag and the
+  commit (`build.rs`, `docs/releasing.md`).

@@ -1,0 +1,77 @@
+/* Design tokens from branding/README.md (scheme A "Gletscher").
+   Light values first, dark values for prefers-color-scheme: dark and for
+   the forced themes [data-theme] used by the browser preview. */
+
+:root {
+  --brand-deep: #12324B;
+  --brand-blue: #2A8FD6;
+  --brand-orange: #FF8A1F;
+
+  --color-bg: #F5F8FB;
+  --color-surface: #FFFFFF;
+  --color-line: #D3DDE7;
+  --color-text: #10202E;
+  --color-muted: #4D6072;
+  --color-primary: #0B69A8;
+  --color-on-primary: #FFFFFF;
+  --color-accent: #B54300;
+  --color-error: #C81E4A;
+  --color-error-bg: #FBE9EE;
+  --color-warn-bg: #FFF1E3;
+  --color-focus: #0B69A8;
+  --color-row-hover: #EEF3F8;
+  --color-selected: #E2EEF8;
+  --color-topbar: var(--brand-deep);
+  --color-on-topbar: #E8F0F7;
+
+  --font: system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --font-size: 0.9375rem;
+  --radius: 6px;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --sidebar: 15rem;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: #0E1620;
+    --color-surface: #17222E;
+    --color-line: #2C3B4B;
+    --color-text: #E8F0F7;
+    --color-muted: #9DB0C2;
+    --color-primary: #5BB8F0;
+    --color-on-primary: #0E1620;
+    --color-accent: #FF8A1F;
+    --color-error: #FF7A9A;
+    --color-error-bg: #3A1824;
+    --color-warn-bg: #3A2614;
+    --color-focus: #5BB8F0;
+    --color-row-hover: #1D2A38;
+    --color-selected: #1F3346;
+    --color-topbar: #0A1824;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-bg: #0E1620;
+  --color-surface: #17222E;
+  --color-line: #2C3B4B;
+  --color-text: #E8F0F7;
+  --color-muted: #9DB0C2;
+  --color-primary: #5BB8F0;
+  --color-on-primary: #0E1620;
+  --color-accent: #FF8A1F;
+  --color-error: #FF7A9A;
+  --color-error-bg: #3A1824;
+  --color-warn-bg: #3A2614;
+  --color-focus: #5BB8F0;
+  --color-row-hover: #1D2A38;
+  --color-selected: #1F3346;
+  --color-topbar: #0A1824;
+  color-scheme: dark;
+}

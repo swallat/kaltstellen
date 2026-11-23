@@ -53,9 +53,11 @@ fn program_covers_children_but_not_orphans() {
     let dir = tempfile::tempdir().unwrap();
     let fixture = Fixture::spawn(SPAWNER, &[str_of(dir.path())]);
     let spawner = read_pid(&dir.path().join("spawner.pid"));
+    // Each one is ended by the test as soon as it is known.
     let child = read_pid(&dir.path().join("child.pid"));
+    let _child = KillPid(child);
     let orphan = read_pid(&dir.path().join("orphan.pid"));
-    let _cleanup = (KillPid(child), KillPid(orphan));
+    let _orphan = KillPid(orphan);
     assert_eq!(spawner, fixture.pid());
     for name in ["spawner.txt", "child.txt", "orphan.txt"] {
         assert!(beating(&dir.path().join(name)), "{name} not beating");

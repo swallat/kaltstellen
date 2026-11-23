@@ -17,11 +17,13 @@ use kaltstellen::state::{State, Store};
 
 /// One test's world: a temp folder with its own programs and state file.
 struct World {
-    dir: tempfile::TempDir,
     config: Config,
     state: State,
     store: Store,
     cleanup: Vec<KillProgram>,
+    /// Dropped last, after the programs running from it were ended, so
+    /// the folder can be removed.
+    dir: tempfile::TempDir,
 }
 
 impl World {
@@ -96,6 +98,7 @@ fn suspend(exe: &str) -> App {
         exe: exe.to_owned(),
         path: None,
         action: AppAction::Suspend { trim: true },
+        confirmed: false,
     }
 }
 
@@ -106,7 +109,10 @@ fn stop(exe: &str, restart_on_neutral: bool) -> App {
         action: AppAction::Stop {
             on_timeout: OnTimeout::Kill,
             restart_on_neutral,
+            args: Vec::new(),
+            cwd: None,
         },
+        confirmed: false,
     }
 }
 
@@ -118,6 +124,7 @@ fn start(path: &Path, args: &[&str]) -> App {
             args: args.iter().map(|a| (*a).to_owned()).collect(),
             cwd: None,
         },
+        confirmed: false,
     }
 }
 
@@ -252,13 +259,13 @@ fn t10_restart_on_neutral_only_on_neutral() {
     let mut w = World::new();
     let mut back = w.run("ks-t10-back.exe");
     let mut gone = w.run("ks-t10-gone.exe");
-    w.profile(
-        "quiet",
-        vec![
-            stop("ks-t10-back.exe", true),
-            stop("ks-t10-gone.exe", false),
-        ],
-    );
+    // The restart gets the entry's arguments: a beat file of its own.
+    let restart_beat = w.beat_file("ks-t10-restarted");
+    let mut with_args = stop("ks-t10-back.exe", true);
+    if let AppAction::Stop { args, .. } = &mut with_args.action {
+        args.push(str_of(&restart_beat).to_owned());
+    }
+    w.profile("quiet", vec![with_args, stop("ks-t10-gone.exe", false)]);
     w.profile("other", Vec::new());
 
     let report = w.switch("quiet");
@@ -282,6 +289,10 @@ fn t10_restart_on_neutral_only_on_neutral() {
         wait_for(Duration::from_secs(5), || pids_of("ks-t10-back.exe").len()
             == 1),
         "program with restart_on_neutral did not come back"
+    );
+    assert!(
+        beating(&restart_beat),
+        "the restart did not get the arguments of its entry"
     );
     assert!(pids_of("ks-t10-gone.exe").is_empty());
     assert!(w.state.stopped.is_empty());
@@ -367,19 +378,22 @@ fn s10_records_from_before_a_reboot_are_dropped_without_resuming() {
 
 #[test]
 fn warn_list_needs_force() {
-    let mut w = World::new();
     // The name of a remote-access tool on the warn list; the process is a
-    // heartbeat fixture in this test's folder.
-    let _app = w.run("rustdesk.exe");
-    let own = pids_of("rustdesk.exe");
-    w.profile("p", vec![suspend("rustdesk.exe")]);
-
-    // Other tests and real programs must not be affected: only go on if the
-    // only process of that name is this test's.
-    if own.len() != 1 {
+    // heartbeat fixture in this test's folder. A real program of that name
+    // must never be touched: skip before anything starts, match the entry
+    // by this copy's path only, and end the copy by its PID (not by name).
+    if !pids_of("rustdesk.exe").is_empty() {
         eprintln!("skipped: a real program of that name is running");
         return;
     }
+    let mut w = World::new();
+    let exe = copy_fixture(HEARTBEAT, w.dir.path(), "rustdesk.exe");
+    let beat = w.beat_file("rustdesk.exe");
+    let _app = Fixture::spawn(str_of(&exe), &[str_of(&beat)]);
+    assert!(beating(&beat), "the copy never started beating");
+    let mut entry = suspend("rustdesk.exe");
+    entry.path = Some(exe.clone());
+    w.profile("p", vec![entry]);
     let report = w.switch("p");
     assert_eq!(report.errors.len(), 1);
     assert_eq!(report.errors[0].code, Code::WarnListUnconfirmed);
@@ -398,4 +412,46 @@ fn warn_list_needs_force() {
     assert!(forced.errors.is_empty(), "{:?}", forced.errors);
     assert!(w.is_frozen("rustdesk.exe"));
     w.switch("neutral");
+    assert!(w.is_beating("rustdesk.exe"));
+
+    // `confirmed = true` in the entry does the same without --force.
+    w.config.profiles[0].apps[0].confirmed = true;
+    let confirmed = w.switch("p");
+    assert!(confirmed.errors.is_empty(), "{:?}", confirmed.errors);
+    assert!(w.is_frozen("rustdesk.exe"));
+    w.switch("neutral");
+}
+
+#[test]
+fn s5_interrupted_switch_stops_after_the_current_program() {
+    let mut w = World::new();
+    let _a = w.run("ks-int-a.exe");
+    let _b = w.run("ks-int-b.exe");
+    w.profile("p", vec![suspend("ks-int-a.exe"), suspend("ks-int-b.exe")]);
+    // The third check comes before the second program: interrupt there.
+    let checks = std::cell::Cell::new(0);
+    let interrupted = || {
+        checks.set(checks.get() + 1);
+        checks.get() > 2
+    };
+    let store = w.store.clone();
+    let report = engine::switch_with(
+        &w.config,
+        "p",
+        &mut w.state,
+        Options::default(),
+        &mut |s| store.save(s),
+        &interrupted,
+    )
+    .expect("switch ran");
+    assert_eq!(report.errors.len(), 1, "{:?}", report.errors);
+    assert_eq!(report.errors[0].code, Code::Interrupted);
+    assert!(w.is_frozen("ks-int-a.exe"), "the current program finished");
+    assert!(w.is_beating("ks-int-b.exe"), "later programs are skipped");
+    assert_eq!(w.state.active_profile, "neutral", "profile not reached");
+    assert_eq!(w.store.load().0, w.state, "state written");
+
+    let recovered = engine::recover(&mut w.state, &mut |s| store.save(s)).unwrap();
+    assert_eq!(recovered.events.len(), 1);
+    assert!(w.is_beating("ks-int-a.exe"));
 }

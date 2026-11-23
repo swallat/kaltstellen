@@ -1,4 +1,11 @@
 //! Helpers shared by the tests that run against the fixture programs.
+//!
+//! Fixture copies have fixed names per test (`ks-tray1-a.exe`) and
+//! [`KillProgram`] ends every process of such a name in the session. Two
+//! test runs at the same time in one session (two worktrees, or a local
+//! run next to another one) therefore end each other's fixtures: run one at
+//! a time. Names that are not ours (`rustdesk.exe`) are never ended by
+//! name.
 #![allow(dead_code)]
 
 use std::fs;
@@ -174,4 +181,62 @@ pub fn window_fixture(exe: &str, args: &[&str]) -> Option<Fixture> {
         eprintln!("skipped: no interactive desktop, the fixture window never appeared");
         None
     }
+}
+
+/// Removes a test folder, waiting while WebView2 processes that used it
+/// shut down (they hold files for a few seconds after their host ended).
+pub fn remove_dir_retry(dir: &Path) {
+    for _ in 0..100 {
+        if !dir.exists() || fs::remove_dir_all(dir).is_ok() {
+            return;
+        }
+        sleep(Duration::from_millis(200));
+    }
+}
+
+/// Ends the process `info` when dropped, but only if its PID still belongs
+/// to it (creation time), so a reused PID is never hit.
+pub struct KillProcess(pub ProcessInfo);
+
+impl Drop for KillProcess {
+    fn drop(&mut self) {
+        if let Some(info) = Snapshot::take()
+            .ok()
+            .and_then(|s| s.find(self.0.pid, self.0.created).cloned())
+        {
+            let _ = process::stop(&[info], Duration::ZERO, OnTimeout::Kill);
+        }
+    }
+}
+
+/// `kaltstellen.exe` next to the fixtures, built from the current sources:
+/// `cargo test -p ks-fixtures` alone rebuilds the library but not this
+/// binary, and a stale one would test old code.
+pub fn kaltstellen_exe() -> PathBuf {
+    let exe = Path::new(HEARTBEAT).with_file_name("kaltstellen.exe");
+    let built = fs::metadata(&exe)
+        .and_then(|m| m.modified())
+        .unwrap_or_else(|_| panic!("{} missing; run `cargo test --workspace`", exe.display()));
+    let sources = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let newest = newest_file(&sources);
+    assert!(
+        newest.is_none_or(|newest| newest <= built),
+        "{} is older than the sources; run `cargo test --workspace` (or `cargo build`)",
+        exe.display()
+    );
+    exe
+}
+
+fn newest_file(dir: &Path) -> Option<std::time::SystemTime> {
+    let mut newest = None;
+    for entry in fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        let time = if path.is_dir() {
+            newest_file(&path)
+        } else {
+            entry.metadata().and_then(|m| m.modified()).ok()
+        };
+        newest = newest.max(time);
+    }
+    newest
 }

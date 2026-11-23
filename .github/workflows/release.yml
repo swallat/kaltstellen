@@ -1,0 +1,143 @@
+name: Release
+
+# A tag v<version> on a commit of main builds and publishes a release with the
+# files the updater expects (docs/release-requirements.md). The tag sets the
+# version: Cargo.toml only holds a placeholder. Everything else is a dry run:
+# it builds and checks the same files as version 0.0.0-dryrun and keeps them
+# as a workflow artifact, but publishes nothing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/release-version.sh
+      - scripts/set-version.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: scripts/release-version.sh >> "$GITHUB_OUTPUT"
+
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x86_64
+    env:
+      # Marks a release build: only such a build updates itself (spec UP1).
+      KALTSTELLEN_RELEASE: "1"
+      VERSION: ${{ needs.version.outputs.version }}
+      FILE: kaltstellen-${{ needs.version.outputs.version }}-windows-${{ matrix.arch }}.exe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - run: rustup target add ${{ matrix.target }}
+      - name: Set the version from the tag
+        shell: bash
+        run: scripts/set-version.sh "$VERSION"
+      # No build cache: a release is built from scratch.
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: The executable reports exactly this version
+        shell: bash
+        run: |
+          cp "target/${{ matrix.target }}/release/kaltstellen.exe" "$FILE"
+          out=$("./$FILE" --version | head -n 1 | tr -d '\r')
+          echo "$out"
+          test "$out" = "kaltstellen $VERSION"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kaltstellen-${{ matrix.arch }}
+          path: ${{ env.FILE }}
+          if-no-files-found: error
+          retention-days: 14
+
+  package:
+    needs: [version, checks, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write        # create the release
+      id-token: write        # build provenance
+      attestations: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: kaltstellen-*
+          merge-multiple: true
+          path: dist
+      - name: checksums.txt
+        working-directory: dist
+        run: |
+          # sha256sum format: 64 lower-case hex digits, two spaces, file name.
+          sha256sum kaltstellen-*.exe | tee checksums.txt
+          grep -Eq '^[0-9a-f]{64}  kaltstellen-'"$VERSION"'-windows-x86_64\.exe$' checksums.txt
+          ls -l
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Build provenance
+        if: needs.version.outputs.publish == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/kaltstellen-*.exe
+            dist/checksums.txt
+      - name: Publish the release
+        if: needs.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          # As a draft first: the updater must never see a published release
+          # without its files.
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" --draft --verify-tag --title "kaltstellen $VERSION" \
+            --generate-notes "${flags[@]}" dist/kaltstellen-*.exe dist/checksums.txt
+          gh release edit "$TAG" --draft=false
+      - name: Dry run
+        if: needs.version.outputs.publish != 'true'
+        run: echo "Dry run for version $VERSION, nothing was published. The files are in the artifact release-files."
