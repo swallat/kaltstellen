@@ -78,6 +78,8 @@ enum Command {
         #[arg(long)]
         no_wait: bool,
     },
+    /// End the running tray as its menu's Quit does (resumes what it froze)
+    Quit,
     /// Run the notification-area icon with the profile menu
     Tray,
     /// Open the main window: profiles, programs and their actions
@@ -163,6 +165,7 @@ pub fn main() -> ExitCode {
             }
         }
         Command::Recover { no_wait } => recover(!no_wait),
+        Command::Quit => quit(),
         Command::Tray => crate::tray::main(),
         Command::Gui {
             screenshot,
@@ -415,6 +418,52 @@ fn switch(target: &str, force: bool, wait: bool) -> u8 {
         interrupts.finished();
     }
     print_finished(&finished)
+}
+
+/// L2 from the command line: the tray of this data directory resumes what
+/// it froze and ends, as with Quit in its menu (the pipe request the
+/// updater uses). Without a tray there is nothing to end.
+fn quit() -> u8 {
+    let endpoints = match Endpoints::current() {
+        Ok(endpoints) => endpoints,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return exit::UNREACHABLE;
+        }
+    };
+    match client::request(&endpoints, protocol::Command::Quit, || {
+        eprintln!("waiting for the tray's running switch");
+    }) {
+        Ok(None) => {
+            println!("no tray runs");
+            exit::OK
+        }
+        Ok(Some(Body::Done(finished))) => print_finished(&finished),
+        Ok(Some(Body::Rejected { exit_code, lines })) => {
+            for line in lines {
+                eprintln!("{line}");
+            }
+            exit_code
+        }
+        Ok(Some(other)) => {
+            eprintln!("error: unexpected answer of the tray: {other:?}");
+            exit::UNREACHABLE
+        }
+        // The tray may end before its reply is written (as the updater
+        // knows): what counts is that it ends.
+        Err(err) => {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while crate::win32::instance::Instance::exists(&endpoints.mutex) {
+                if std::time::Instant::now() >= deadline {
+                    eprintln!("error: {err}");
+                    return exit::UNREACHABLE;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            println!("the tray has ended");
+            exit::OK
+        }
+    }
 }
 
 fn recover(wait: bool) -> u8 {
@@ -832,6 +881,7 @@ fn run(command: Command) -> Result<bool> {
         | Command::Switch { .. }
         | Command::Status { .. }
         | Command::Recover { .. }
+        | Command::Quit
         | Command::Tray
         | Command::Gui { .. }
         | Command::Autostart { .. }
