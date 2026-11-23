@@ -237,7 +237,8 @@ fn from_icon_path(path: &str) -> Option<Observed> {
 
 /// The programs of the icon registry below `HKCU\key` (one subkey per icon
 /// with its `ExecutablePath`) whose executable name is in `running`
-/// (lower case). A registry that cannot be listed is logged, not hidden.
+/// (lower case). A registry that cannot be listed is logged, not hidden;
+/// a single entry that cannot be read is skipped.
 fn icon_programs(key: &str, running: &HashSet<String>) -> Vec<Observed> {
     let names = match registry::subkeys(key) {
         Ok(names) => names,
@@ -282,6 +283,9 @@ pub fn snapshot() -> Vec<Observed> {
             });
         }
     }
+    // One entry per name; one with a full path wins over one without (a
+    // known-folder GUID form), so the path is not lost.
+    found.sort_by_key(|o| o.path.is_none());
     let mut seen_names = HashSet::new();
     found.retain(|o| {
         let key = o.exe.to_lowercase();

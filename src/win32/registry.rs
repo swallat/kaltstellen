@@ -1,5 +1,6 @@
-//! String values under `HKEY_CURRENT_USER`, for start at sign-in (the
-//! per-user Run key). Nothing outside `HKEY_CURRENT_USER` is touched.
+//! String values and subkeys under `HKEY_CURRENT_USER`: the per-user Run
+//! key for start at sign-in and the notification icon registry for
+//! unassigned programs (N1). Nothing outside `HKEY_CURRENT_USER` is touched.
 
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, WIN32_ERROR};
 use windows::Win32::System::Registry::{
@@ -237,14 +238,11 @@ mod tests {
         }
         let mut names = subkeys(&root).unwrap();
         names.sort();
-        assert_eq!(names, ["1001", "1002", "1003"]);
-        assert_eq!(
-            read(&format!("{root}\\1002"), "ExecutablePath")
-                .unwrap()
-                .as_deref(),
-            Some("C:\\x\\a.exe")
-        );
+        let value = read(&format!("{root}\\1002"), "ExecutablePath").unwrap();
+        // Removed before the asserts, so a failure leaves nothing behind.
         delete_tree(&root).unwrap();
         assert!(!exists(&root).unwrap(), "nothing left behind");
+        assert_eq!(names, ["1001", "1002", "1003"]);
+        assert_eq!(value.as_deref(), Some("C:\\x\\a.exe"));
     }
 }
