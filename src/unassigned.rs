@@ -235,6 +235,25 @@ fn from_icon_path(path: &str) -> Option<Observed> {
     })
 }
 
+/// The programs of the icon registry below `HKCU\key` (one subkey per icon
+/// with its `ExecutablePath`) whose executable name is in `running`
+/// (lower case). A registry that cannot be listed is logged, not hidden.
+fn icon_programs(key: &str, running: &HashSet<String>) -> Vec<Observed> {
+    let names = match registry::subkeys(key) {
+        Ok(names) => names,
+        Err(err) => {
+            log::warn!("unassigned: {err}");
+            return Vec::new();
+        }
+    };
+    names
+        .iter()
+        .filter_map(|name| registry::read(&format!("{key}\\{name}"), "ExecutablePath").ok()?)
+        .filter_map(|path| from_icon_path(&path))
+        .filter(|program| running.contains(&program.exe.to_lowercase()))
+        .collect()
+}
+
 /// N1 sources, read only: programs with a notification-area icon (registry,
 /// Windows 11) that run now, plus processes of this session with a visible
 /// top-level window. Hard-protected programs and kaltstellen itself are
@@ -253,16 +272,7 @@ pub fn snapshot() -> Vec<Observed> {
         .filter(|p| p.session_id == session)
         .map(|p| p.name.to_lowercase())
         .collect();
-    let mut found: Vec<Observed> = Vec::new();
-    for key in registry::subkeys(NOTIFY_ICONS_KEY).unwrap_or_default() {
-        let subkey = format!("{NOTIFY_ICONS_KEY}\\{key}");
-        if let Ok(Some(path)) = registry::read(&subkey, "ExecutablePath")
-            && let Some(program) = from_icon_path(&path)
-            && running.contains(&program.exe.to_lowercase())
-        {
-            found.push(program);
-        }
-    }
+    let mut found = icon_programs(NOTIFY_ICONS_KEY, &running);
     let visible = process::pids_with_visible_windows();
     for p in snapshot.processes() {
         if p.session_id == session && visible.contains(&p.pid) {
@@ -430,6 +440,48 @@ mod tests {
             })
         );
         assert_eq!(from_icon_path("C:\\x\\readme.txt"), None);
+    }
+
+    /// The icon registry as Windows 11 keeps it (one numbered subkey per
+    /// icon, paths with a known-folder GUID or a drive), in a test key:
+    /// running programs are found, others and entries without a path not.
+    #[test]
+    fn n1_icon_registry_finds_running_programs() {
+        let root = format!("Software\\kaltstellen-test-{}-icons", std::process::id());
+        let entries = [
+            (
+                "1",
+                Some("{7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E}\\Steam\\steam.exe"),
+            ),
+            (
+                "2",
+                Some("C:\\Users\\u\\AppData\\Local\\Discord\\app-1\\Discord.exe"),
+            ),
+            (
+                "3",
+                Some("C:\\Users\\u\\AppData\\Roaming\\Zoom\\bin\\Zoom.exe"),
+            ),
+            ("4", None),
+        ];
+        for (name, path) in entries {
+            let key = format!("{root}\\{name}");
+            match path {
+                Some(path) => registry::write(&key, "ExecutablePath", path).unwrap(),
+                None => registry::write(&key, "Other", "x").unwrap(),
+            }
+        }
+        let running: HashSet<String> = ["steam.exe", "discord.exe"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        let mut found: Vec<String> = icon_programs(&root, &running)
+            .into_iter()
+            .map(|o| o.exe)
+            .collect();
+        found.sort();
+        registry::delete_tree(&root).unwrap();
+        assert_eq!(found, ["Discord.exe", "steam.exe"]);
+        assert!(!registry::exists(&root).unwrap(), "nothing left behind");
     }
 
     #[test]
