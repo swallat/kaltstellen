@@ -128,6 +128,52 @@ main session made them; they show the views below in light and dark.
    `Add to profile` adds it and it leaves the list; for another program,
    `Dismiss` removes it from the list of this profile only.
 
+## Automatic triggers (U4, spec L12)
+
+Automated tests use copies of a test program as triggers and post the
+notification click as a window message; they cannot see the notification
+or use a real program. Use a real program you can start and end at will
+(for example `notepad.exe` or a game) as the trigger and another one as the
+program the profile freezes:
+
+```toml
+[[profile]]
+name = "trigger test"
+trigger = ["notepad.exe"]
+
+  [[profile.app]]
+  exe = "<a program that runs, not notepad>"
+```
+
+1. `kaltstellen check-config` lists `trigger notepad.exe (priority 0)`. Add
+   the trigger program as an entry of the same profile: `check-config`
+   refuses it (`… is a program that this profile freezes`); remove it again.
+2. Start the tray. The menu shows `Automatic switching`, checked.
+3. Start Notepad. Within about 5 s the profile is applied (orange icon, the
+   tooltip ends in `(by trigger)`), and a notification appears:
+   `kaltstellen: trigger test`, `notepad.exe started: switched to trigger
+   test. Click here: Back to neutral`. The menu shows `Applied by trigger
+   notepad.exe; back to neutral when it ends`.
+4. Click the notification (on the toast, or later in the notification
+   centre): `neutral` is applied. The menu shows `Triggers wait after a
+   manual switch …`; nothing switches back while Notepad keeps running.
+5. Close Notepad, wait 10 s, start it again: the profile is applied again.
+   Close it: 5 to 10 s later `neutral` comes back, with a notification.
+6. Start Notepad, switch to another profile from the menu, close Notepad:
+   the other profile stays.
+7. Uncheck `Automatic switching`; start Notepad: nothing happens. Quit and
+   start the tray again: the item is still unchecked. Check it: Notepad
+   counts as starting and the profile is applied.
+8. With Focus assist (Do not disturb) on, the notification goes to the
+   notification centre only; the switch still happens.
+9. In the main window, the profile shows the section `Triggers` with
+   `notepad.exe` and priority `0`; change the priority to `5`, `Set`: the
+   file has `priority = 5` and keeps its comments; enter the program the
+   profile freezes as a trigger: refused with the reason.
+10. Sign out while the profile is applied by Notepad (VM): after sign-in
+    the menu offers the profile from before the trigger (or nothing, if
+    that was `neutral`), not `trigger test`.
+
 ## Updates (UP1)
 
 Automated tests cover the check, the full update against a local server,

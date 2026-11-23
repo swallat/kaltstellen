@@ -76,10 +76,11 @@ hotkey = "Ctrl+Shift+Alt+F2"
 
 [[profile]]
 name = "flight"
-# Applied automatically when one of these programs starts, and left again
-# (back to the profile that was active before) about 5 s after the last of
-# them has ended. A program name, or a full path to tell programs with equal
-# names apart. A trigger must not be stopped or frozen by its own profile.
+# Applied automatically within about 5 s after one of these programs starts,
+# and left again (back to the profile that was active before) 5 to 10 s
+# after the last of them has ended. A program name, or a full path to tell
+# programs with equal names apart. A trigger must not be stopped or frozen
+# by its own profile.
 # "Automatic switching" in the tray menu pauses all triggers.
 trigger = ["simulator.exe"]
 priority = 10                   # higher wins when triggers of two profiles run (default 0)

@@ -355,8 +355,10 @@ const RECHECK: Duration = Duration::from_secs(30);
 const END_SESSION_WAIT: Duration = Duration::from_secs(4);
 
 /// U4, decided detail 3: how often the trigger programs are looked for, in
-/// the range of 2 to 5 s; 3 s measured below the Q1 budget (spec U4).
-const TRIGGER_POLL: Duration = Duration::from_secs(3);
+/// the range of 2 to 5 s. Each poll costs about 3.5 ms of CPU time (the
+/// kernel builds the process list); at 5 s that is 0.06 % of one core,
+/// within Q1 however it is read, where 3 s would be 0.12 % (spec U4).
+const TRIGGER_POLL: Duration = Duration::from_secs(5);
 
 /// Test only: replaces [`TRIGGER_POLL`] and the debounce of
 /// [`triggers::DEBOUNCE`], in milliseconds, so the tests need not wait.

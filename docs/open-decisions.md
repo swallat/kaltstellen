@@ -7,7 +7,47 @@ reasoning is. Implementation choices made without the owner are marked
 
 ## Open
 
-None. Everything the owner has not decided yet is deferred (below).
+Choices made while building the automatic triggers (U4) on the owner's
+request on 2026-11-23, which
+[design-automatic-triggers.md](design-automatic-triggers.md) does not
+cover. Each is marked `[assumed]` in spec L12 or C9:
+
+1. **Poll interval 5 s** (L12): one poll measured about 3.5 ms of CPU time
+   (not a few hundred microseconds); 3 s would be 0.12 % of one core, above
+   Q1 if Q1 is read per core, 5 s is 0.06 %. Start noticed within about
+   5 s, end 5 to 10 s after it.
+2. **Trigger form** (C9): one string per program, a name or a full path
+   (`trigger = ["sim.exe", 'D:\Games\sim.exe']`), instead of separate `exe`
+   and `path` keys.
+3. **One profile per trigger program** (C9): a program that triggers one
+   profile cannot trigger another one; `check-config` refuses it.
+   `priority` is a 32-bit integer and may stand without triggers.
+4. **Any manual switch ends automation's ownership** (L12), also one to the
+   trigger's own profile: nothing returns by itself when the trigger ends.
+5. **Pause, tray start, cancelled end of session** (L12): pausing ends what
+   automation owns; switching it on again, starting the tray and a
+   cancelled shutdown treat trigger programs that run as starting, so their
+   profile is applied.
+6. **Trigger of the profile that is already active** (L12): changes nothing
+   and returns nothing.
+7. **Return target gone** (L12): a profile from before the trigger that is
+   no longer in the configuration becomes `neutral`.
+8. **Notification** (L12): shown for every automatic switch, the return
+   included; the click works until the next request; none when another
+   request already waits.
+9. **S5 offer** (L12, L7): an automatic switch does not use up the offer;
+   when the profile from before the trigger was `neutral`, the earlier
+   offer stays.
+10. **Equal priority, same poll** (L12): the earlier profile in the file
+    wins.
+11. **Configuration re-read by the poll** (L12): a changed file is read at
+    each poll; triggers added while no profile had any take effect when the
+    tray next reads the file (menu opened, switch ended).
+12. **Window layout** (M6 Content): the triggers as a text field, one per
+    line, with the priority and `Set`, below the hotkey; a copied profile
+    does not take them.
+
+Everything else the owner has not decided yet is deferred (below).
 
 ## Deferred by the owner on 2026-11-23
 
@@ -99,7 +139,9 @@ The author's defaults, confirmed as built:
   profile when the trigger ends, after a debounce; `trigger = [...]` per
   profile, checked against its own profile, a section of its own in the
   window; a remembered tray item `Automatic switching`; after sign-in the
-  profile from before the trigger is offered.
+  profile from before the trigger is offered. Planned after version 1;
+  built on the owner's request on 2026-11-23, before the release (spec L12,
+  C9; the choices made while building are under "Open" above).
 - **Updates (UP1)**: network access for the update accepted (non-goal
   reworded); only the tray checks, daily; release layout, development
   builds and package-manager behaviour as built; `kaltstellen.old.exe` kept
