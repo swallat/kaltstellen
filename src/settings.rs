@@ -1,7 +1,8 @@
 //! `settings.json` in the configuration directory (S5): what the tray keeps
 //! between sessions apart from the configuration itself: the profile that
 //! was active when the last session ended, which the tray offers after
-//! sign-in without applying it, and the update mode (UP1).
+//! sign-in without applying it, the update mode (UP1) and whether automatic
+//! triggers are paused (U4).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,6 +22,10 @@ pub struct Settings {
     /// L8: the tray has asked once whether it should start with Windows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub autostart_asked: bool,
+    /// U4: the tray menu item `Automatic switching` is off: all triggers
+    /// are paused, also after a restart.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub triggers_paused: bool,
 }
 
 fn file(dir: &Path) -> PathBuf {
@@ -76,6 +81,7 @@ mod tests {
             last_profile: Some("focus".into()),
             update: None,
             autostart_asked: true,
+            triggers_paused: true,
         };
         save(&dir.path().join("nested"), &settings).unwrap();
         assert_eq!(load(&dir.path().join("nested")), (settings, None));

@@ -1,11 +1,16 @@
 # Design note: automatic triggers (M4; U4)
 
-Status: **decided** by the owner on 2026-11-23: the direction, and all open
-points of this note (section "Decided details"). To be built **after
-version 1**; nothing of this is implemented, version 1 is manual only (spec
-section 1, U5). The details the author proposed (priority form, takeover,
-equal priority keeping the first, debounce, poll interval) were confirmed
-by the owner the same day.
+Status: **built** on the owner's request on 2026-11-23, before the release,
+so that it is tested together with version 1 (it was planned after version
+1). **Decided** by the owner on 2026-11-23: the direction, and all open
+points of this note (section "Decided details"). The details the author
+proposed (priority form, takeover, equal priority keeping the first,
+debounce, poll interval) were confirmed by the owner the same day. As
+built: spec L12 (behaviour) and C9 (configuration); what had to be decided
+while building is marked `[assumed]` there and listed in
+[open-decisions.md](open-decisions.md). The poll interval is 5 s: one poll
+measured about 3.5 ms of CPU time, more than the few hundred microseconds
+estimated below (spec L12).
 
 ## Decided
 
@@ -14,7 +19,7 @@ by the owner the same day.
   detection.
 - **Opt-in**: nothing happens unless a profile names trigger programs.
 - **Manual always wins** (conflict rule 1 below).
-- **After version 1**: a post-v1 item in `docs/plan.md`.
+- **After version 1**: a post-v1 item in `docs/plan.md`; on the owner's request built before the release instead (2026-11-23).
 
 ## Decided details (owner, 2026-11-23)
 

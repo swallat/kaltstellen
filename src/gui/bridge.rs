@@ -25,6 +25,8 @@ pub const VERSION: u64 = 1;
 pub const MAX_MESSAGE: usize = 64 * 1024;
 /// Longest single text field (names, paths, arguments).
 const MAX_TEXT: usize = 4096;
+/// U4: trigger programs per profile the window may set.
+const MAX_TRIGGERS: usize = 64;
 
 /// What the bridge needs from the outside world. The real host lives in
 /// `gui::mod`; tests use a fake.
@@ -118,6 +120,12 @@ pub enum Request {
     DeleteProfile {
         name: String,
     },
+    SetTriggers {
+        profile: String,
+        triggers: Vec<String>,
+        #[serde(default)]
+        priority: i64,
+    },
     SetHotkey {
         profile: String,
         hotkey: Option<String>,
@@ -203,6 +211,9 @@ pub struct ProfileView {
     pub hotkey: Option<String>,
     pub active: bool,
     pub entries: Vec<EntryView>,
+    /// U4: trigger programs as written (name or full path).
+    pub triggers: Vec<String>,
+    pub priority: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -294,6 +305,7 @@ fn is_edit(request: &Request) -> bool {
             | Request::RenameProfile { .. }
             | Request::DeleteProfile { .. }
             | Request::SetHotkey { .. }
+            | Request::SetTriggers { .. }
             | Request::AddEntry { .. }
             | Request::UpdateEntry { .. }
             | Request::RemoveEntry { .. }
@@ -373,6 +385,8 @@ impl<H: Host> Bridge<H> {
                             entry_view(app, errors)
                         })
                         .collect(),
+                    triggers: p.triggers.iter().map(|t| t.text()).collect(),
+                    priority: p.priority,
                 })
                 .collect(),
             active,
@@ -550,6 +564,33 @@ impl<H: Host> Bridge<H> {
                 let what = match hotkey.as_deref().map(str::trim).filter(|h| !h.is_empty()) {
                     Some(h) => format!("Hotkey of \"{profile}\" set to {h}"),
                     None => format!("Hotkey of \"{profile}\" removed"),
+                };
+                self.saved(what, result)
+            }
+            Request::SetTriggers {
+                profile,
+                triggers,
+                priority,
+            } => {
+                // U4: the same checks as for entries; the configuration
+                // rules decide the rest (own profile, duplicates, range).
+                let mut texts = vec![profile.as_str()];
+                texts.extend(triggers.iter().map(String::as_str));
+                check_text(&texts)?;
+                if triggers.len() > MAX_TRIGGERS {
+                    return Err("too many trigger programs".to_owned());
+                }
+                for trigger in &triggers {
+                    if trigger.contains(['\\', '/', ':']) {
+                        check_path(Some(trigger))?;
+                    }
+                }
+                let result = self.document.set_triggers(&profile, &triggers, priority);
+                let count = triggers.iter().filter(|t| !t.trim().is_empty()).count();
+                let what = match count {
+                    0 => format!("Triggers of \"{profile}\" removed"),
+                    1 => format!("1 trigger of \"{profile}\" set, priority {priority}"),
+                    n => format!("{n} triggers of \"{profile}\" set, priority {priority}"),
                 };
                 self.saved(what, result)
             }
@@ -1260,6 +1301,55 @@ mod tests {
         );
         assert_eq!(bad["ok"], false);
         assert!(bad["error"].as_str().unwrap().contains("KS205"), "{bad}");
+    }
+
+    #[test]
+    fn u4_triggers_are_set_through_the_bridge_with_untrusted_input_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "set_triggers", "profile": "focus",
+                   "triggers": ["sim.exe", "C:\\Games\\launcher.exe"], "priority": 3}),
+        );
+        assert_eq!(reply["ok"], true, "{reply}");
+        let focus = &reply["state"]["profiles"][0];
+        assert_eq!(
+            focus["triggers"],
+            json!(["sim.exe", "C:\\Games\\launcher.exe"])
+        );
+        assert_eq!(focus["priority"], 3);
+        let file = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(
+            file.starts_with("# keep me") && file.contains("priority = 3"),
+            "{file}"
+        );
+
+        let before = b.document().text();
+        let many: Vec<String> = (0..=MAX_TRIGGERS).map(|n| format!("t{n}.exe")).collect();
+        for message in [
+            // Frozen by its own profile (browser.exe is an entry).
+            json!({"v": 1, "id": 2, "type": "set_triggers", "profile": "focus", "triggers": ["browser.exe"]}),
+            json!({"v": 1, "id": 3, "type": "set_triggers", "profile": "focus", "triggers": ["a\u{7}.exe"]}),
+            json!({"v": 1, "id": 4, "type": "set_triggers", "profile": "focus", "triggers": ["x".repeat(5000)]}),
+            json!({"v": 1, "id": 5, "type": "set_triggers", "profile": "focus", "triggers": ["sub\\x.exe"]}),
+            json!({"v": 1, "id": 6, "type": "set_triggers", "profile": "focus", "triggers": many}),
+            json!({"v": 1, "id": 7, "type": "set_triggers", "profile": "focus", "triggers": [], "priority": 1_i64 << 40}),
+            json!({"v": 1, "id": 8, "type": "set_triggers", "profile": "focus", "triggers": [], "priority": "high"}),
+            json!({"v": 1, "id": 9, "type": "set_triggers", "profile": "nope", "triggers": []}),
+            json!({"v": 1, "id": 10, "type": "set_triggers", "profile": "focus", "triggers": [], "x": 1}),
+        ] {
+            let reply = send(&mut b, message.clone());
+            assert_eq!(reply["ok"], false, "{message}");
+        }
+        assert_eq!(b.document().text(), before);
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 11, "type": "set_triggers", "profile": "focus", "triggers": []}),
+        );
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(reply["state"]["profiles"][0]["triggers"], json!([]));
+        assert!(!b.document().text().contains("trigger"));
     }
 
     #[test]

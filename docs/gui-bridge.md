@@ -24,10 +24,11 @@ control characters; paths must be absolute.
 | --- | --- | --- |
 | `get_state` | | Nothing; the reply carries the state. |
 | `create_profile` | `name` | New empty profile. |
-| `copy_profile` | `from`, `to` | Copy with all entries, without the hotkey. |
+| `copy_profile` | `from`, `to` | Copy with all entries, without the hotkey and without triggers. |
 | `rename_profile` | `from`, `to` | Rename. |
 | `delete_profile` | `name` | Delete; the active profile is first switched to `neutral` (M1), the deletion follows when that switch ended. |
 | `set_hotkey` | `profile`, `hotkey` (string or `null`) | Set or remove; validated by the configuration rules (C5, C7). |
+| `set_triggers` | `profile`, `triggers` (up to 64 strings: program names or full paths), `priority` (integer, default `0`) | U4: sets the trigger programs and the priority of the profile. An empty list removes `trigger`, priority `0` removes `priority`. Validated by the configuration rules: a trigger the profile itself stops or freezes, a program twice, a program that already triggers another profile and a priority outside the 32-bit range are refused. `copy_profile` does not copy triggers or priority. |
 | `check_program` | `exe` | `data`: `{protection: "none" \| "warn" \| "hard", message?}`. |
 | `add_entry` | `profile`, `exe`, `path?`, `confirmed?` | Add with the default action. Hard-protected programs are refused; warn-list programs need `confirmed: true`, which is then written. |
 | `update_entry` | `profile`, `index`, `entry` | Replace the options of entry `index`: `entry` has `exe`, `path`, `action`, `args`, `cwd`, `on_timeout`, `restart_on_neutral`, `trim`, `confirmed`. Options the action does not take are dropped (C6). |
@@ -71,7 +72,7 @@ tables by the first edit of that profile.
 | `config_file` | Path of the configuration file. |
 | `active` | Active profile (from `state.json`). |
 | `default_action`, `default_trim` | From `[settings]`. |
-| `profiles` | `{name, hotkey, active, entries}`; each entry `{exe, path, action, args, cwd, on_timeout, restart_on_neutral, trim, confirmed, protection, errors}`. `errors` (M5) lists the markers of the entry: `{code, label, text}`, for example `{"code": "KS110", "label": "start failed", "text": "KS110 [start] tool.exe: …"}`; empty when the entry is fine. See "Failure markers" below. |
+| `profiles` | `{name, hotkey, active, entries, triggers, priority}` (`triggers`: the trigger programs as written, U4); each entry `{exe, path, action, args, cwd, on_timeout, restart_on_neutral, trim, confirmed, protection, errors}`. `errors` (M5) lists the markers of the entry: `{code, label, text}`, for example `{"code": "KS110", "label": "start failed", "text": "KS110 [start] tool.exe: …"}`; empty when the entry is fine. See "Failure markers" below. |
 | `autostart` | `true`, `false`, or `null` when unknown. |
 | `applying` | A switch runs. |
 | `status` | The status line. |

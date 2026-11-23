@@ -151,11 +151,89 @@ pub struct TrayStatus {
     pub running: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<String>,
+    /// U4: present while some profile has triggers. Added within version
+    /// 1 with a default, so an older client or tray ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation: Option<AutomationStatus>,
     /// M5: the errors of the last switch that are not resolved yet (L9),
     /// for the markers of the main window. Absent when there are none, and
     /// from a tray that does not know the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_switch: Option<LastSwitch>,
+}
+
+/// U4: what automatic switching does, for `kaltstellen status`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationStatus {
+    /// `Automatic switching` is off in the tray menu.
+    #[serde(default)]
+    pub paused: bool,
+    /// A manual switch holds automation until a trigger program starts or
+    /// ends.
+    #[serde(default)]
+    pub held: bool,
+    /// The active profile was applied by this trigger program.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+    /// The profile it returns to when the trigger ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returns_to: Option<String>,
+    /// Profiles whose trigger runs but waits for a higher one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting: Vec<String>,
+    /// The profile they wait for: the winning trigger's, which is active.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_for: Option<String>,
+}
+
+/// U4: the names of waiting profiles a `status` reply carries at most, in
+/// bytes, so the reply stays below [`MAX_LINE`] with the other fields.
+pub const WAITING_BUDGET: usize = 8 * 1024;
+
+impl AutomationStatus {
+    /// Keeps the waiting profiles within [`WAITING_BUDGET`]; the rest are
+    /// left out (a configuration with that many triggers running at once
+    /// is not expected).
+    pub fn bounded(mut self) -> Self {
+        let mut used = 0;
+        self.waiting.retain(|name| {
+            used += name.len() + 3;
+            used <= WAITING_BUDGET
+        });
+        self
+    }
+
+    /// The lines `kaltstellen status` prints after `tray: …`.
+    pub fn lines(&self, active: &str) -> Vec<String> {
+        let mut lines = Vec::new();
+        if self.paused {
+            lines.push("tray: automatic switching paused".to_owned());
+        } else if self.held {
+            lines.push(
+                "tray: automatic switching held by a manual switch until a trigger program \
+                 starts or ends"
+                    .to_owned(),
+            );
+        } else {
+            lines.push("tray: automatic switching on".to_owned());
+        }
+        if let (Some(trigger), Some(back)) = (&self.trigger, &self.returns_to) {
+            lines.push(format!(
+                "tray: \"{active}\" applied by trigger {trigger}; back to \"{back}\" when it ends"
+            ));
+        }
+        // Listed only together with the winner they wait for.
+        for (waiting, winner) in self
+            .waiting
+            .iter()
+            .filter_map(|w| self.waiting_for.as_ref().map(|f| (w, f)))
+        {
+            lines.push(format!(
+                "tray: trigger for \"{waiting}\" waits while \"{winner}\" is active"
+            ));
+        }
+        lines
+    }
 }
 
 /// M5: the open errors of the last switch and the profile it made active.
@@ -277,6 +355,36 @@ mod tests {
     use crate::error::Step;
 
     #[test]
+    fn u4_status_lines_name_the_winner_waited_for() {
+        let status = AutomationStatus {
+            trigger: Some("sim.exe".into()),
+            returns_to: Some("neutral".into()),
+            waiting: vec!["low".into()],
+            waiting_for: Some("high".into()),
+            ..AutomationStatus::default()
+        };
+        assert_eq!(
+            status.lines("high"),
+            [
+                "tray: automatic switching on",
+                "tray: \"high\" applied by trigger sim.exe; back to \"neutral\" when it ends",
+                "tray: trigger for \"low\" waits while \"high\" is active",
+            ]
+        );
+        let held = AutomationStatus {
+            held: true,
+            waiting: vec!["low".into()],
+            ..AutomationStatus::default()
+        };
+        assert_eq!(
+            held.lines("x"),
+            [
+                "tray: automatic switching held by a manual switch until a trigger program starts or ends"
+            ]
+        );
+    }
+
+    #[test]
     fn requests_have_a_stable_wire_form() {
         let line = encode(&request(Command::Switch {
             profile: "focus".into(),
@@ -344,6 +452,10 @@ mod tests {
                 state: State::default(),
                 running: Some("switch to \"a\"".into()),
                 waiting: None,
+                automation: Some(AutomationStatus {
+                    held: true,
+                    ..AutomationStatus::default()
+                }),
                 last_switch: Some(LastSwitch {
                     profile: "a".into(),
                     errors: vec![ErrorLine {
@@ -374,6 +486,7 @@ mod tests {
             state: State::default(),
             running: None,
             waiting: None,
+            automation: None,
             last_switch: None,
         })));
         assert!(!line.contains("last_switch"), "{line}");

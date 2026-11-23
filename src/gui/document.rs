@@ -175,7 +175,9 @@ impl Document {
         })
     }
 
-    /// Copies `from` with all its entries; the hotkey is not copied (C5).
+    /// Copies `from` with all its entries; the hotkey is not copied (C5),
+    /// nor the triggers and their priority (U4: a program triggers one
+    /// profile only).
     pub fn copy_profile(&mut self, from: &str, to: &str) -> Result<(), Error> {
         let to = checked_name(to)?;
         self.edit(|doc| {
@@ -184,6 +186,8 @@ impl Document {
             let mut copy = profiles.get(index).expect("found").clone();
             copy.insert("name", value(to.as_str()));
             copy.remove("hotkey");
+            copy.remove("trigger");
+            copy.remove("priority");
             // Placed at the end of the file, not next to the original: the
             // entries keep the positions of the original's entries
             // otherwise, and would be written under the original. The
@@ -322,6 +326,37 @@ impl Document {
                 None => {
                     table.remove("hotkey");
                 }
+            }
+            Ok(())
+        })
+    }
+
+    /// U4: sets the trigger programs and the priority of a profile. An
+    /// empty list removes `trigger`, priority `0` (the default) removes
+    /// `priority`; unchanged values keep how they are written.
+    pub fn set_triggers(
+        &mut self,
+        profile: &str,
+        triggers: &[String],
+        priority: i64,
+    ) -> Result<(), Error> {
+        self.edit(|doc| {
+            let table = profile_mut(doc, profile)?;
+            let list: Vec<&str> = triggers
+                .iter()
+                .map(|t| t.trim())
+                .filter(|t| !t.is_empty())
+                .collect();
+            if list.is_empty() {
+                table.remove("trigger");
+            } else {
+                let array: toml_edit::Array = list.into_iter().collect();
+                set_keep(table, "trigger", array);
+            }
+            if priority == 0 {
+                table.remove("priority");
+            } else {
+                set_keep(table, "priority", priority);
             }
             Ok(())
         })
@@ -785,6 +820,58 @@ hotkey = "Ctrl+Shift+Alt+F1"
         );
         d.set_hotkey("music", None).unwrap();
         assert_eq!(d.config().profiles[1].hotkey, None);
+    }
+
+    #[test]
+    fn u4_triggers_and_priority_are_set_validated_and_removed() {
+        let mut d = doc();
+        d.set_triggers(
+            "focus",
+            &[
+                "sim.exe".into(),
+                r"C:\Games\launcher.exe".into(),
+                " ".into(),
+            ],
+            4,
+        )
+        .unwrap();
+        let focus = &d.config().profiles[0];
+        assert_eq!(focus.priority, 4);
+        let texts: Vec<String> = focus.triggers.iter().map(|t| t.text()).collect();
+        assert_eq!(texts, ["sim.exe", r"C:\Games\launcher.exe"]);
+        let text = d.text();
+        assert!(text.contains("# the main one"), "{text}");
+        // Before the entries, after the keys that were there.
+        let at = |key: &str| text.find(key).unwrap();
+        assert!(at("hotkey") < at("trigger") && at("trigger") < at("[[profile.app]]"));
+
+        // The rules of the configuration apply (U4: frozen by itself).
+        let before = d.text();
+        let err = d
+            .set_triggers("focus", &["browser.exe".into()], 0)
+            .unwrap_err();
+        assert!(err.reason.contains("freezes"), "{err}");
+        assert!(d.set_triggers("focus", &["sub\\x.exe".into()], 0).is_err());
+        assert!(d.set_triggers("focus", &[], 1 << 40).is_err());
+        assert_eq!(d.text(), before, "refused edits change nothing");
+        // Unchanged values keep how they are written.
+        d.set_triggers(
+            "focus",
+            &["sim.exe".into(), r"C:\Games\launcher.exe".into()],
+            4,
+        )
+        .unwrap();
+        assert_eq!(d.text(), before);
+
+        // A copy does not take the triggers: a program triggers one
+        // profile only.
+        d.copy_profile("focus", "copy").unwrap();
+        assert!(d.config().profiles[1].triggers.is_empty());
+        assert_eq!(d.config().profiles[1].priority, 0);
+
+        // An empty list and priority 0 remove the keys.
+        d.set_triggers("focus", &[], 0).unwrap();
+        assert!(!d.text().contains("trigger") && !d.text().contains("priority"));
     }
 
     #[test]

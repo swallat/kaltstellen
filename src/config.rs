@@ -58,6 +58,41 @@ pub struct Profile {
     pub name: String,
     pub hotkey: Option<Hotkey>,
     pub apps: Vec<App>,
+    /// U4: programs whose start applies this profile automatically.
+    pub triggers: Vec<Trigger>,
+    /// U4: decides between two profiles whose triggers run at once; higher
+    /// wins. Default `0`.
+    pub priority: i32,
+}
+
+/// U4: a trigger program, by executable name and optionally its full path
+/// (A7, as for entries).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Trigger {
+    /// Executable file name with extension (`simulator.exe`).
+    pub exe: String,
+    pub path: Option<PathBuf>,
+}
+
+impl Trigger {
+    /// As written in the file: the path if there is one, else the name.
+    pub fn text(&self) -> String {
+        match &self.path {
+            Some(path) => path.to_string_lossy().into_owned(),
+            None => self.exe.clone(),
+        }
+    }
+
+    /// Whether this trigger and a program given by `exe` and `path` can
+    /// match the same process: the same name, unless both have paths that
+    /// differ (A7, C2).
+    pub fn overlaps(&self, exe: &str, path: Option<&Path>) -> bool {
+        self.exe.eq_ignore_ascii_case(exe)
+            && match (&self.path, path) {
+                (Some(a), Some(b)) => crate::process::same_path(a, b),
+                _ => true,
+            }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -309,6 +344,8 @@ struct RawProfile {
     hotkey: Option<Spanned<String>>,
     #[serde(default)]
     app: Vec<RawApp>,
+    trigger: Option<Vec<Spanned<String>>>,
+    priority: Option<Spanned<i64>>,
 }
 
 #[derive(Deserialize)]
@@ -364,6 +401,8 @@ impl Check<'_> {
 
         let mut names: HashMap<String, usize> = HashMap::new();
         let mut hotkeys: HashMap<Hotkey, String> = HashMap::new();
+        // U4: the triggers of the profiles so far, with their profile.
+        let mut triggers_seen: Vec<(Trigger, String)> = Vec::new();
         let mut profiles = Vec::new();
         for raw in raw.profile {
             let span = raw.name.span();
@@ -389,7 +428,32 @@ impl Check<'_> {
                 .hotkey
                 .and_then(|raw| self.hotkey(&raw, &name, &mut hotkeys));
             let apps = self.apps(raw.app, &settings);
-            profiles.push(Profile { name, hotkey, apps });
+            let triggers = raw
+                .trigger
+                .map(|list| self.triggers(list, &name, &apps, &mut triggers_seen))
+                .unwrap_or_default();
+            let priority = match raw.priority {
+                Some(raw) => i32::try_from(*raw.get_ref()).unwrap_or_else(|_| {
+                    self.error(
+                        &raw.span(),
+                        format!(
+                            "priority {} is out of range ({} to {})",
+                            raw.get_ref(),
+                            i32::MIN,
+                            i32::MAX
+                        ),
+                    );
+                    0
+                }),
+                None => 0,
+            };
+            profiles.push(Profile {
+                name,
+                hotkey,
+                apps,
+                triggers,
+                priority,
+            });
         }
         Config { settings, profiles }
     }
@@ -577,6 +641,107 @@ impl Check<'_> {
             });
         }
         apps
+    }
+
+    /// U4: the trigger programs of `profile`. Each is an executable name or
+    /// a full path (A7). Refused: a program twice, a program that already
+    /// triggers another profile, and a program that its own profile stops
+    /// or freezes (the profile would end or freeze its own trigger).
+    fn triggers(
+        &mut self,
+        raw: Vec<Spanned<String>>,
+        profile: &str,
+        apps: &[App],
+        seen: &mut Vec<(Trigger, String)>,
+    ) -> Vec<Trigger> {
+        let mut triggers: Vec<Trigger> = Vec::new();
+        for raw in raw {
+            let span = raw.span();
+            let text = raw.get_ref().trim();
+            if text.is_empty() {
+                self.error(&span, "a trigger must not be empty".to_owned());
+                continue;
+            }
+            let trigger = if text.contains(['\\', '/', ':']) {
+                let path = PathBuf::from(text);
+                let file = path
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or("")
+                    .to_owned();
+                if !path.is_absolute() {
+                    self.error(
+                        &span,
+                        format!("trigger \"{text}\" must be a program name or an absolute path"),
+                    );
+                    continue;
+                }
+                if !file.contains('.') {
+                    self.error(
+                        &span,
+                        format!("trigger \"{text}\" must end in the program's file name"),
+                    );
+                    continue;
+                }
+                Trigger {
+                    exe: file,
+                    path: Some(path),
+                }
+            } else {
+                Trigger {
+                    exe: crate::process::with_extension(text),
+                    path: None,
+                }
+            };
+            let overlaps = |t: &Trigger| t.overlaps(&trigger.exe, trigger.path.as_deref());
+            if triggers.iter().any(overlaps) {
+                self.error(
+                    &span,
+                    format!(
+                        "\"{}\" is already a trigger of this profile; two triggers with one \
+                         name need different paths",
+                        trigger.text()
+                    ),
+                );
+                continue;
+            }
+            if let Some((_, other)) = seen.iter().find(|(t, _)| overlaps(t)) {
+                self.error(
+                    &span,
+                    format!(
+                        "\"{}\" is already a trigger of profile \"{other}\"; a program can \
+                         trigger one profile only",
+                        trigger.text()
+                    ),
+                );
+                continue;
+            }
+            if let Some(app) = apps.iter().find(|app| {
+                matches!(
+                    app.action,
+                    AppAction::Stop { .. } | AppAction::Suspend { .. }
+                ) && trigger.overlaps(&app.exe, app.path.as_deref())
+            }) {
+                let verb = if matches!(app.action, AppAction::Stop { .. }) {
+                    "stops"
+                } else {
+                    "freezes"
+                };
+                self.error(
+                    &span,
+                    format!(
+                        "trigger \"{}\" is a program that this profile {verb} (entry \"{}\"); \
+                         the profile would end or freeze its own trigger",
+                        trigger.text(),
+                        app.exe
+                    ),
+                );
+                continue;
+            }
+            seen.push((trigger.clone(), profile.to_owned()));
+            triggers.push(trigger);
+        }
+        triggers
     }
 
     /// Checks an `exe` value and returns it with an extension.
@@ -1009,6 +1174,93 @@ name = "a"
         assert_eq!(rejected.code, Code::ConfigInvalid);
         let lines: Vec<_> = rejected.issues.iter().map(|i| i.line.unwrap()).collect();
         assert_eq!(lines, vec![2, 5, 7]);
+    }
+
+    #[test]
+    fn u4_triggers_and_priority_are_read() {
+        let config = ok(r#"
+[[profile]]
+name = "flight"
+trigger = ["simulator", 'C:\Games\Sim\launcher.exe']
+priority = 5
+
+  [[profile.app]]
+  exe = "browser.exe"
+
+[[profile]]
+name = "plain"
+"#)
+        .config;
+        let flight = config.profile("flight").unwrap();
+        assert_eq!(flight.priority, 5);
+        assert_eq!(
+            flight.triggers,
+            vec![
+                Trigger {
+                    exe: "simulator.exe".into(),
+                    path: None
+                },
+                Trigger {
+                    exe: "launcher.exe".into(),
+                    path: Some(PathBuf::from(r"C:\Games\Sim\launcher.exe"))
+                },
+            ]
+        );
+        assert_eq!(flight.triggers[1].text(), r"C:\Games\Sim\launcher.exe");
+        let plain = config.profile("plain").unwrap();
+        assert!(plain.triggers.is_empty());
+        assert_eq!(plain.priority, 0);
+    }
+
+    #[test]
+    fn u4_a_trigger_its_own_profile_stops_or_freezes_is_refused() {
+        // Freezing is the default action.
+        let (line, message) = rejected(
+            "[[profile]]\nname = \"flight\"\ntrigger = [\"sim.exe\"]\n\
+             [[profile.app]]\nexe = \"SIM.exe\"\n",
+        );
+        assert_eq!(line, 3);
+        assert!(message.contains("freezes"), "{message}");
+        let (_, message) = rejected(
+            "[[profile]]\nname = \"flight\"\ntrigger = ['C:\\x\\sim.exe']\n\
+             [[profile.app]]\nexe = \"sim.exe\"\naction = \"stop\"\n",
+        );
+        assert!(message.contains("stops"), "{message}");
+        // Another program of the same name (other path), or one that is
+        // started or ignored, is fine.
+        ok(
+            "[[profile]]\nname = \"flight\"\ntrigger = ['C:\\x\\sim.exe']\n\
+            [[profile.app]]\nexe = \"sim.exe\"\npath = 'C:\\y\\sim.exe'\n\
+            [[profile.app]]\nexe = \"tool.exe\"\npath = 'C:\\t\\tool.exe'\naction = \"start\"\n\
+            [[profile.app]]\nexe = \"other.exe\"\naction = \"ignore\"\n",
+        );
+    }
+
+    #[test]
+    fn u4_triggers_are_validated() {
+        let cases = [
+            ("trigger = [\"\"]", "must not be empty"),
+            ("trigger = ['sub\\sim.exe']", "absolute path"),
+            ("trigger = ['C:\\games\\sim']", "file name"),
+            (
+                "trigger = [\"a.exe\", \"A\"]",
+                "already a trigger of this profile",
+            ),
+            ("priority = 3000000000", "out of range"),
+        ];
+        for (line, expected) in cases {
+            let (_, message) = rejected(&format!("[[profile]]\nname = \"p\"\n{line}\n"));
+            assert!(message.contains(expected), "{line}: {message}");
+        }
+        let (line, message) = rejected(
+            "[[profile]]\nname = \"a\"\ntrigger = [\"sim.exe\"]\n\
+             [[profile]]\nname = \"b\"\ntrigger = [\"sim\"]\n",
+        );
+        assert_eq!(line, 6);
+        assert!(message.contains("trigger of profile \"a\""), "{message}");
+        // Two paths of one name are two programs.
+        ok("[[profile]]\nname = \"a\"\ntrigger = ['C:\\a\\sim.exe', 'C:\\b\\sim.exe']\n");
+        assert!(parse("[[profile]]\nname = \"a\"\ntrigger = \"sim.exe\"\n").is_err());
     }
 
     #[test]

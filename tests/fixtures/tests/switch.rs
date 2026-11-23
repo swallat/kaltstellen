@@ -69,6 +69,8 @@ impl World {
             name: name.to_owned(),
             hotkey: None,
             apps,
+            triggers: Vec::new(),
+            priority: 0,
         });
     }
 

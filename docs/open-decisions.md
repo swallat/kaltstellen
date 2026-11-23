@@ -48,6 +48,87 @@ which the owner asked for on 2026-11-23 (spec section 8):
    so a USB hard disk counts as local; a symbolic link or junction on a
    local disk that points to a share is followed.
 
+Choices made while building the automatic triggers (U4) on the owner's
+request on 2026-11-23, which
+[design-automatic-triggers.md](design-automatic-triggers.md) does not
+cover. Each is marked `[assumed]` in spec L12 or C9:
+
+1. **Poll interval 5 s** (L12): one poll measured about 3.5 ms of CPU time
+   (not a few hundred microseconds); 3 s would be 0.12 % of one core, above
+   Q1 if Q1 is read per core, 5 s is about 0.07 % (3.5 ms / 5 s). Start
+   noticed within about 5 s, end 5 to 10 s after it.
+2. **Trigger form** (C9): one string per program, a name or a full path
+   (`trigger = ["sim.exe", 'D:\Games\sim.exe']`), instead of separate `exe`
+   and `path` keys.
+3. **One profile per trigger program** (C9): a program that triggers one
+   profile cannot trigger another one; `check-config` refuses it.
+   `priority` is a 32-bit integer and may stand without triggers.
+4. **Any manual switch ends automation's ownership** (L12), also one to the
+   trigger's own profile: nothing returns by itself when the trigger ends.
+5. **Pause, tray start, cancelled end of session** (L12): pausing ends what
+   automation owns; switching it on again, starting the tray and a
+   cancelled shutdown treat trigger programs that run as starting, so their
+   profile is applied.
+   After a cancelled end of session the profile they return to is the one
+   active then (usually `neutral`), not the one from before the trigger.
+6. **Trigger of the profile that is already active** (L12): changes nothing
+   and returns nothing.
+7. **Return target gone** (L12): a profile from before the trigger that is
+   no longer in the configuration becomes `neutral`.
+   The same for `Back to` (menu item or notification click).
+8. **Notification and undo** (L12): shown for every automatic switch, the
+   return included; none when another request already waits; a failed
+   switch says so. The one-click undo of decided detail 1 is kept by the
+   menu item `Back to <previous>` at the top of the menu, valid until the
+   next request, the next automatic switch or the end of the session. The
+   notification click does the same only while it is the only
+   notification of the tray on screen (chosen after review: the click does
+   not say which notification was clicked, the order of the show, hide and
+   timeout messages of stacked notifications is not documented, and with
+   Do Not Disturb no notification shows); clicks in the notification
+   centre do nothing. The menu item acts only if its way back is still the
+   one it showed (a later automatic switch while the menu was open makes
+   it do nothing). The count of notifications on screen starts afresh
+   after the time Windows shows a notification plus 60 s without an event.
+   Known limits: the count can still be off when the shell drops messages,
+   and a user who closes the newer of two stacked notifications leaves the
+   older one counted as the only one; a notification that stays on screen
+   longer than that time (or across sleep) is no longer counted, so its
+   click does nothing; the duration is read when the tray starts. The menu
+   item is the reliable path.
+9. **S5 offer** (L12, L7): an automatic switch does not use up the offer;
+   when the profile from before the trigger was `neutral`, the earlier
+   offer stays.
+10. **Equal priority, same poll** (L12): the earlier profile in the file
+    wins.
+11. **Configuration re-read by the poll** (L12): a changed file is read at
+    each poll; triggers added while no profile had any take effect when the
+    tray next reads the file (menu opened, switch ended).
+12. **Window layout** (M6 Content): the triggers as a text field, one per
+    line, with the priority and `Set`, below the hotkey; a copied profile
+    does not take them.
+13. **What counts as manual** (L12): `recover` from the command line and
+    `Back to` (menu item or notification click) hold automation like menu, hotkey and
+    window switches.
+14. **A waiting trigger ends a hold** (L12): the start or end of a trigger
+    that only waits behind a higher one also counts as a change of the
+    trigger situation and ends a manual hold.
+15. **Hand-back to the user's own profile** (L12): when a higher trigger
+    ends and the profile handed back to is the one from before the first
+    trigger, automation no longer owns it; it is applied only if not
+    active, and nothing returns from it later.
+16. **Changed priorities** (L12): when a changed configuration lets another
+    running trigger win, the next poll decides again; a manual hold stays.
+17. **Unreadable path triggers** (L12): a process whose image path cannot be
+    read is tried at three polls, then it does not count.
+18. **C9 details**: hard-protected names are allowed as triggers (only
+    looked for); a trigger with a path and an entry with another path of
+    the same name do not clash.
+19. **Status lines and pipe field** (L12, pipe protocol): wording of the
+    `tray: …` lines and the `automation` field of the `status` reply.
+
+Everything else the owner has not decided yet is deferred (below).
+
 ## Deferred by the owner on 2026-11-23
 
 Decided to be settled later, at the point named:
@@ -138,7 +219,9 @@ The author's defaults, confirmed as built:
   profile when the trigger ends, after a debounce; `trigger = [...]` per
   profile, checked against its own profile, a section of its own in the
   window; a remembered tray item `Automatic switching`; after sign-in the
-  profile from before the trigger is offered.
+  profile from before the trigger is offered. Planned after version 1;
+  built on the owner's request on 2026-11-23, before the release (spec L12,
+  C9; the choices made while building are under "Open" above).
 - **Updates (UP1)**: network access for the update accepted (non-goal
   reworded); only the tray checks, daily; release layout, development
   builds and package-manager behaviour as built; `kaltstellen.old.exe` kept

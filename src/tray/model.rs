@@ -45,6 +45,8 @@ pub enum Job {
         target: String,
         force: bool,
         guests: Guests,
+        /// U4: requested by a trigger, not by the user.
+        automatic: Option<Automatic>,
     },
     /// L2: resume everything suspended, keep stopped records, then exit.
     Quit,
@@ -58,7 +60,31 @@ impl Job {
             target: target.trim().to_owned(),
             force: false,
             guests: Guests::default(),
+            automatic: None,
         }
+    }
+
+    /// U4: a switch a trigger asks for.
+    pub fn automatic(target: &str, previous: &str, reason: &str) -> Self {
+        Job::Switch {
+            target: target.trim().to_owned(),
+            force: false,
+            guests: Guests::default(),
+            automatic: Some(Automatic {
+                previous: previous.to_owned(),
+                reason: reason.to_owned(),
+            }),
+        }
+    }
+
+    pub fn is_automatic(&self) -> bool {
+        matches!(
+            self,
+            Job::Switch {
+                automatic: Some(_),
+                ..
+            }
+        )
     }
 
     /// The profile that is active once the job is done (W3 compares these).
@@ -74,11 +100,26 @@ impl std::fmt::Display for Job {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Job::Recover => f.write_str("recover"),
+            Job::Switch {
+                target,
+                automatic: Some(_),
+                ..
+            } => write!(f, "automatic switch to \"{target}\""),
             Job::Switch { target, .. } => write!(f, "switch to \"{target}\""),
             Job::Quit => f.write_str("quit"),
             Job::EndSession => f.write_str("end of session"),
         }
     }
+}
+
+/// U4: why a trigger asked for a switch, for the notification and its
+/// `Back to <previous>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Automatic {
+    /// The profile active before the switch.
+    pub previous: String,
+    /// For example `simulator.exe started`.
+    pub reason: String,
 }
 
 /// The callers a switch protects (T16), shared between the window thread,
@@ -131,6 +172,9 @@ pub enum Decision {
     Dropped { superseded: Option<Job> },
     /// Quit or the end of the session runs or waits: nothing new is taken.
     Refused,
+    /// U4: an automatic request never replaces a waiting manual one; it is
+    /// not queued.
+    Ignored,
 }
 
 /// W3: while a job runs, at most one further request waits. The latest
@@ -152,6 +196,11 @@ impl Queue {
         // request may replace them while they wait (as while quitting).
         if matches!(self.pending, Some(Job::Quit | Job::EndSession)) {
             return Decision::Refused;
+        }
+        // U4, conflict rule 1: manual beats automatic. A manual request
+        // replaces a waiting automatic one like any other (below).
+        if job.is_automatic() && self.pending.as_ref().is_some_and(|p| !p.is_automatic()) {
+            return Decision::Ignored;
         }
         let superseded = self.pending.take();
         if same_profile(running.leads_to(), job.leads_to()) {
@@ -224,6 +273,12 @@ pub struct Status {
     pub update_locked: bool,
     /// UP1: a newer version found by the last check.
     pub update: Option<UpdateOffer>,
+    /// U4: automation as the menu shows it; `None` while no profile has
+    /// triggers.
+    pub automation: Option<super::triggers::View>,
+    /// U4: `Back to <previous>` of the last automatic switch, while its
+    /// way back is valid.
+    pub back_to: Option<String>,
 }
 
 /// L9: when an error of the last switch counts as resolved without a switch,
@@ -349,6 +404,8 @@ impl Default for Status {
             update_mode: crate::update::Mode::Auto,
             update_locked: false,
             update: None,
+            automation: None,
+            back_to: None,
         }
     }
 }
@@ -431,6 +488,13 @@ impl Status {
 
     pub fn tooltip(&self) -> String {
         let mut tip = format!("kaltstellen: {}", self.active);
+        if self
+            .automation
+            .as_ref()
+            .is_some_and(|a| a.applied.is_some())
+        {
+            tip.push_str(" (by trigger)");
+        }
         if let Some(target) = &self.switching {
             tip.push_str(&format!(" (switching to {target})"));
         }
@@ -495,6 +559,11 @@ pub enum Command {
     UpdateMode(crate::update::Mode),
     /// UP1: opens a console running `kaltstellen update`.
     InstallUpdate,
+    /// U4: pauses or resumes all triggers.
+    ToggleAutomatic,
+    /// U4: `Back to <previous>` after an automatic switch, with the
+    /// target the menu showed.
+    BackTo(String),
     Quit,
 }
 
@@ -528,6 +597,10 @@ pub const ID_UPDATE_MANUAL: u16 = 10;
 pub const ID_UPDATE_OFF: u16 = 11;
 /// UP1: `Install update <version>…`.
 pub const ID_UPDATE_INSTALL: u16 = 9;
+/// U4: `Automatic switching` (checked while not paused).
+pub const ID_AUTOMATIC: u16 = 12;
+/// U4: `Back to <previous>` after an automatic switch.
+pub const ID_BACK: u16 = 13;
 /// Profile `n` of the configuration has ID `ID_PROFILE_BASE + n`.
 pub const ID_PROFILE_BASE: u16 = 100;
 
@@ -544,6 +617,17 @@ impl Menu {
     /// belongs to the GUI (M3) and is shown disabled.
     pub fn build(profiles: &[String], status: &Status) -> Self {
         let mut menu = Menu::default();
+        // U4, decided detail 1: the one-click undo of an automatic switch,
+        // also when its notification was not shown (Do Not Disturb).
+        if let Some(previous) = &status.back_to {
+            menu.entry(
+                ID_BACK,
+                truncate(&format!("&Back to {}", escape(previous)), 100),
+                false,
+                Command::BackTo(previous.clone()),
+            );
+            menu.items.push(Item::Separator);
+        }
         // S5: offered after sign-in or a cancelled shutdown, never applied
         // by itself; only while nothing else is active.
         if let Some(last) = &status.offer
@@ -604,6 +688,41 @@ impl Menu {
         }
         for hotkey in &status.hotkeys_unavailable {
             menu.disabled(format!("Hotkey not available: {}", escape(hotkey)));
+        }
+        if let Some(view) = &status.automation {
+            // U4: what automation does, then the switch that pauses it.
+            if let Some((_, program, base)) = &view.applied {
+                menu.disabled(truncate(
+                    &format!(
+                        "Applied by trigger {}; back to {} when it ends",
+                        escape(program),
+                        escape(base)
+                    ),
+                    100,
+                ));
+            }
+            for (waiting, winner) in &view.waiting {
+                menu.disabled(truncate(
+                    &format!(
+                        "Trigger for {} waits while {} is active",
+                        escape(waiting),
+                        escape(winner)
+                    ),
+                    100,
+                ));
+            }
+            if view.held && !view.paused {
+                menu.disabled(
+                    "Triggers wait after a manual switch until a trigger program starts or ends"
+                        .to_owned(),
+                );
+            }
+            menu.entry(
+                ID_AUTOMATIC,
+                "Au&tomatic switching".to_owned(),
+                !view.paused,
+                Command::ToggleAutomatic,
+            );
         }
         if let Some(on) = status.autostart {
             menu.entry(
@@ -703,6 +822,76 @@ fn escape(label: &str) -> String {
     label.replace('&', "&&")
 }
 
+/// U4: the profile `Back to` switches to. `current` is the way back of the
+/// last automatic switch now; `shown` the target the menu item showed when
+/// it was chosen (`None` for the notification click, which always means
+/// the current one). A menu chosen while a later automatic switch changed
+/// the way back does nothing, so the switch never differs from its label.
+pub fn back_target(current: Option<&str>, shown: Option<&str>) -> Option<String> {
+    let current = current?;
+    match shown {
+        Some(shown) if !same_profile(shown, current) => None,
+        _ => Some(current.to_owned()),
+    }
+}
+
+/// U4: how many notifications of the tray are on screen, from the shell's
+/// `NIN_BALLOONSHOW` (+1) and `NIN_BALLOONTIMEOUT`, `NIN_BALLOONHIDE` or a
+/// click (-1). The order of these messages for stacked notifications is
+/// not documented, so the count heals itself: when the last of them is
+/// older than `stale` (longer than any notification stays), a new one
+/// starts from 0.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Balloons {
+    count: u32,
+    last: Option<std::time::Instant>,
+}
+
+impl Balloons {
+    fn heal(&mut self, now: std::time::Instant, stale: std::time::Duration) {
+        if self
+            .last
+            .is_some_and(|last| now.saturating_duration_since(last) > stale)
+        {
+            self.count = 0;
+        }
+        self.last = Some(now);
+    }
+
+    /// `NIN_BALLOONSHOW`.
+    pub fn shown(&mut self, now: std::time::Instant, stale: std::time::Duration) {
+        self.heal(now, stale);
+        self.count = self.count.saturating_add(1);
+    }
+
+    /// `NIN_BALLOONTIMEOUT` or `NIN_BALLOONHIDE`. True when the last one
+    /// left just now.
+    pub fn gone(&mut self, now: std::time::Instant) -> bool {
+        self.last = Some(now);
+        let was = self.count;
+        self.count = was.saturating_sub(1);
+        was == 1
+    }
+
+    /// A click: whether exactly one notification was on screen (the click
+    /// can only mean that one). The clicked notification is dismissed.
+    pub fn clicked(&mut self, now: std::time::Instant, stale: std::time::Duration) -> bool {
+        self.heal(now, stale);
+        let alone = self.count == 1;
+        self.count = self.count.saturating_sub(1);
+        alone
+    }
+
+    /// Explorer restarted: none of the old notifications is on screen.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn count(&self) -> u32 {
+        self.count
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -787,6 +976,52 @@ mod tests {
     }
 
     #[test]
+    fn u4_manual_beats_automatic_in_the_queue() {
+        let auto = |t: &str| Job::automatic(t, "neutral", "sim.exe started");
+        // An automatic request does not replace a waiting manual one...
+        let mut q = Queue::default();
+        q.request(sw("a"));
+        q.request(sw("b"));
+        assert_eq!(q.request(auto("c")), Decision::Ignored);
+        assert_eq!(q.pending(), Some(&sw("b")));
+        // ...nor a waiting recovery from the command line.
+        let mut q = Queue::default();
+        q.request(sw("a"));
+        q.request(Job::Recover);
+        assert_eq!(q.request(auto("c")), Decision::Ignored);
+        // A manual request replaces a waiting automatic one.
+        let mut q = Queue::default();
+        q.request(sw("a"));
+        assert_eq!(q.request(auto("c")), Decision::Queued { superseded: None });
+        assert_eq!(
+            q.request(sw("b")),
+            Decision::Queued {
+                superseded: Some(auto("c"))
+            }
+        );
+        // Automatic replaces automatic; one leading where the running
+        // switch leads is dropped (conflict rule 3, W3); one runs at once
+        // when nothing runs.
+        let mut q = Queue::default();
+        assert_eq!(q.request(auto("a")), Decision::Start(auto("a")));
+        assert_eq!(q.request(auto("b")), Decision::Queued { superseded: None });
+        assert_eq!(
+            q.request(auto("c")),
+            Decision::Queued {
+                superseded: Some(auto("b"))
+            }
+        );
+        assert_eq!(
+            q.request(auto("A")),
+            Decision::Dropped {
+                superseded: Some(auto("c"))
+            }
+        );
+        assert_eq!(auto("a").to_string(), "automatic switch to \"a\"");
+        assert!(!sw("a").is_automatic());
+    }
+
+    #[test]
     fn force_travels_with_the_request() {
         let mut q = Queue::default();
         q.request(sw("a"));
@@ -794,6 +1029,7 @@ mod tests {
             target: "b".into(),
             force: true,
             guests: Guests::default(),
+            automatic: None,
         };
         q.request(forced.clone());
         assert_eq!(q.finish(), Some(forced));
@@ -1088,6 +1324,19 @@ mod tests {
             state: crate::state::State::default(),
             running: Some(long.clone()),
             waiting: None,
+            // U4 at its worst: long names (the window allows 4096
+            // characters) and many waiting profiles, cut to the budget.
+            automation: Some(
+                super::super::protocol::AutomationStatus {
+                    paused: false,
+                    held: false,
+                    trigger: Some("ü".repeat(130)),
+                    returns_to: Some("ü€".repeat(800)),
+                    waiting: vec!["ü€".repeat(800); 64],
+                    waiting_for: Some("ü€".repeat(800)),
+                }
+                .bounded(),
+            ),
             last_switch: Some(last),
         })));
         assert!(line.len() < MAX_LINE, "{}", line.len());
@@ -1152,6 +1401,104 @@ mod tests {
         assert_eq!(menu.command(ID_UNASSIGNED), Some(&Command::OpenWindow));
         status.unassigned = 0;
         assert_eq!(Menu::build(&[], &status).command(ID_UNASSIGNED), None);
+    }
+
+    #[test]
+    fn u4_automatic_switching_item_only_with_triggers() {
+        let plain = Menu::build(&[], &Status::default());
+        assert_eq!(plain.command(ID_AUTOMATIC), None);
+        let mut status = Status {
+            active: "flight".into(),
+            automation: Some(crate::tray::triggers::View {
+                paused: false,
+                held: false,
+                applied: Some(("flight".into(), "sim.exe".into(), "neutral".into())),
+                waiting: vec![("music".into(), "flight".into())],
+            }),
+            ..Status::default()
+        };
+        let menu = Menu::build(&["flight".to_owned(), "music".to_owned()], &status);
+        let all = labels(&menu);
+        let at = all
+            .iter()
+            .position(|l| l == "[x] Au&tomatic switching")
+            .expect("item");
+        assert_eq!(
+            all[at - 2..at],
+            [
+                "Applied by trigger sim.exe; back to neutral when it ends (disabled)",
+                "Trigger for music waits while flight is active (disabled)"
+            ]
+        );
+        assert_eq!(menu.command(ID_AUTOMATIC), Some(&Command::ToggleAutomatic));
+        assert_eq!(status.tooltip(), "kaltstellen: flight (by trigger)");
+        assert_eq!(menu.command(ID_BACK), None);
+        status.back_to = Some("R&D".into());
+        let menu = Menu::build(&[], &status);
+        assert_eq!(
+            labels(&menu)[..2],
+            ["&Back to R&&D".to_owned(), "-".to_owned()]
+        );
+        // The command carries the target as shown (not as escaped).
+        assert_eq!(menu.command(ID_BACK), Some(&Command::BackTo("R&D".into())));
+        status.back_to = None;
+        let view = status.automation.as_mut().unwrap();
+        view.paused = true;
+        view.held = true;
+        view.applied = None;
+        view.waiting.clear();
+        let all = labels(&Menu::build(&[], &status));
+        assert!(all.contains(&"Au&tomatic switching".to_owned()), "{all:?}");
+        assert!(
+            !all.iter().any(|l| l.starts_with("Triggers wait")),
+            "{all:?}"
+        );
+        status.automation.as_mut().unwrap().paused = false;
+        let all = labels(&Menu::build(&[], &status));
+        assert!(
+            all.iter().any(|l| l.starts_with("Triggers wait")),
+            "{all:?}"
+        );
+    }
+
+    #[test]
+    fn u4_back_to_acts_only_on_the_target_shown() {
+        assert_eq!(
+            back_target(Some("neutral"), Some("Neutral")),
+            Some("neutral".into())
+        );
+        // The way back changed while the menu was open: nothing.
+        assert_eq!(back_target(Some("flight"), Some("neutral")), None);
+        assert_eq!(back_target(None, Some("neutral")), None);
+        // The notification click means the current one.
+        assert_eq!(back_target(Some("flight"), None), Some("flight".into()));
+    }
+
+    #[test]
+    fn u4_balloons_are_counted_and_heal_themselves() {
+        let t0 = std::time::Instant::now();
+        let s = std::time::Duration::from_secs(1);
+        let stale = s * 60;
+        let mut b = Balloons::default();
+        b.shown(t0, stale);
+        assert!(b.clicked(t0 + s, stale), "the only one");
+        assert_eq!(b.count(), 0);
+        // Two stacked: a click cannot tell which.
+        b.shown(t0 + s * 2, stale);
+        b.shown(t0 + s * 3, stale);
+        assert!(!b.clicked(t0 + s * 4, stale));
+        assert!(b.gone(t0 + s * 5), "the other one left");
+        assert!(!b.gone(t0 + s * 6), "never below 0");
+        assert_eq!(b.count(), 0);
+        // A SHOW without its TIMEOUT: counted on, until it is stale.
+        b.shown(t0 + s * 10, stale);
+        assert_eq!(b.count(), 1);
+        b.shown(t0 + s * 200, stale);
+        assert_eq!(b.count(), 1, "the old one is forgotten");
+        assert!(!b.clicked(t0 + s * 400, stale), "stale: refused");
+        b.shown(t0 + s * 401, stale);
+        b.reset();
+        assert_eq!(b, Balloons::default());
     }
 
     #[test]

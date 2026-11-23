@@ -22,16 +22,19 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, RegisterHotKey, UnregisterHotKey,
 };
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
-    NIN_SELECT, NINF_KEY, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE,
+    NIM_MODIFY, NIM_SETVERSION, NIN_BALLOONHIDE, NIN_BALLOONSHOW, NIN_BALLOONTIMEOUT,
+    NIN_BALLOONUSERCLICK, NIN_SELECT, NINF_KEY, NOTIFYICON_VERSION_4, NOTIFYICONDATAW,
+    Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     DispatchMessageW, GetMessageW, GetSystemMetrics, HICON, IDI_APPLICATION, IMAGE_ICON, KillTimer,
     LR_DEFAULTCOLOR, LoadIconW, LoadImageW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
     PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SM_CXSMICON,
-    SM_CYSMICON, SM_MENUDROPALIGNMENT, SetForegroundWindow, SetTimer, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenuEx,
+    SM_CYSMICON, SM_MENUDROPALIGNMENT, SPI_GETMESSAGEDURATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    SetForegroundWindow, SetTimer, SystemParametersInfoW, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenuEx,
     TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
     WM_ENDSESSION, WM_HOTKEY, WM_NULL, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER,
     WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
@@ -45,8 +48,9 @@ use crate::tray::model::{Icon, Item};
 /// Window class; also how scripts find the window.
 pub const CLASS: &str = "kaltstellen-tray";
 const TITLE: &str = "kaltstellen";
-/// Callback message of the notification icon.
-const WM_TRAY: u32 = WM_APP + 1;
+/// Callback message of the notification icon; tests post it to click the
+/// notification (U4).
+pub const WM_TRAY: u32 = WM_APP + 1;
 /// Posted by [`Waker::wake`] from other threads.
 const WM_WAKE: u32 = WM_APP + 2;
 const ICON_ID: u32 = 1;
@@ -54,6 +58,8 @@ const ICON_ID: u32 = 1;
 const TIMER_ID: usize = 1;
 /// The repeating re-check of errors (L9).
 const RECHECK_ID: usize = 2;
+/// The repeating poll of trigger programs (U4).
+const POLL_ID: usize = 3;
 const SHUTDOWN_LEVEL: u32 = 0x3FF;
 /// `szTip` has 128 units; the last one stays NUL.
 const TIP_UNITS: usize = 127;
@@ -96,14 +102,25 @@ pub trait Handler {
     fn timer(&mut self);
     /// The repeating timer of [`set_recheck`] fired (L9).
     fn recheck(&mut self);
+    /// The repeating timer of [`set_poll`] fired (U4).
+    fn poll(&mut self);
+    /// The user clicked the notification shown with [`balloon`] (U4).
+    fn balloon_clicked(&mut self);
+    /// The notification is on screen (`NIN_BALLOONSHOW`, U4).
+    fn balloon_shown(&mut self);
+    /// The notification left the screen (`NIN_BALLOONTIMEOUT`,
+    /// `NIN_BALLOONHIDE`, U4).
+    fn balloon_gone(&mut self);
+    /// Explorer restarted (`TaskbarCreated`); the icon was added again.
+    fn taskbar_created(&mut self);
 }
 
-/// L9: a repeating timer while errors of the last switch could still
-/// resolve themselves; `None` stops it. Window thread only.
-pub fn set_recheck(interval: Option<std::time::Duration>) {
+/// Sets or stops (`None`) the repeating timer `id`. Window thread only.
+/// Returns whether the timer runs as asked.
+fn repeat(id: usize, interval: Option<std::time::Duration>, what: &str) -> bool {
     let hwnd = WINDOW.with_borrow(|w| w.as_ref().map(|w| w.hwnd));
     let Some(hwnd) = hwnd else {
-        return;
+        return false;
     };
     // SAFETY: the window belongs to this thread; no callback.
     unsafe {
@@ -112,15 +129,95 @@ pub fn set_recheck(interval: Option<std::time::Duration>) {
                 let ms = u32::try_from(interval.as_millis())
                     .unwrap_or(u32::MAX)
                     .max(10);
-                if SetTimer(Some(hwnd), RECHECK_ID, ms, None) == 0 {
-                    warn!("cannot set the re-check timer");
+                if SetTimer(Some(hwnd), id, ms, None) == 0 {
+                    warn!("cannot set the {what} timer");
+                    return false;
                 }
+                true
             }
             None => {
-                let _ = KillTimer(Some(hwnd), RECHECK_ID);
+                let _ = KillTimer(Some(hwnd), id);
+                true
             }
         }
     }
+}
+
+/// L9: a repeating timer while errors of the last switch could still
+/// resolve themselves; `None` stops it. Window thread only.
+pub fn set_recheck(interval: Option<std::time::Duration>) {
+    repeat(RECHECK_ID, interval, "re-check");
+}
+
+/// U4: the repeating poll of trigger programs while some profile has
+/// triggers and automatic switching is on; `None` stops it. Setting it
+/// again restarts the interval. Window thread only. False if the timer
+/// could not be set.
+pub fn set_poll(interval: Option<std::time::Duration>) -> bool {
+    repeat(POLL_ID, interval, "trigger poll")
+}
+
+/// U4: how long Windows shows a notification (`SPI_GETMESSAGEDURATION`,
+/// the accessibility setting "Show notifications for"); `None` if it
+/// cannot be read.
+pub fn message_duration() -> Option<std::time::Duration> {
+    let mut seconds = 0u32;
+    // SAFETY: `seconds` is a valid out pointer for this action.
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETMESSAGEDURATION,
+            0,
+            Some((&raw mut seconds).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .ok()
+    .map(|()| std::time::Duration::from_secs(u64::from(seconds)))
+}
+
+/// Copies `text` into a NUL-terminated fixed buffer, cut at a character
+/// boundary so a surrogate pair is never split.
+fn fill_wide(dst: &mut [u16], text: &str) {
+    let room = dst.len().saturating_sub(1);
+    let mut at = 0;
+    for c in text.chars() {
+        let mut units = [0u16; 2];
+        let units = c.encode_utf16(&mut units);
+        if at + units.len() > room {
+            break;
+        }
+        dst[at..at + units.len()].copy_from_slice(units);
+        at += units.len();
+    }
+    for unit in &mut dst[at..] {
+        *unit = 0;
+    }
+}
+
+/// U4: shows a notification from the tray icon (a balloon; on Windows 10
+/// and 11 a toast that ends up in the notification centre). The shell
+/// reports it with [`Handler::balloon_shown`], [`Handler::balloon_gone`]
+/// and [`Handler::balloon_clicked`]. The title is cut to 63 and the text to
+/// 255 UTF-16 units, at character boundaries. Window thread only; false if
+/// the shell refused it (no notification area).
+pub fn balloon(title: &str, text: &str) -> bool {
+    WINDOW.with_borrow(|window| {
+        let Some(window) = window else {
+            return false;
+        };
+        let mut data = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: window.hwnd,
+            uID: ICON_ID,
+            uFlags: NIF_INFO,
+            dwInfoFlags: NIIF_INFO,
+            ..Default::default()
+        };
+        fill_wide(&mut data.szInfoTitle, title);
+        fill_wide(&mut data.szInfo, text);
+        // SAFETY: `data` is fully initialised and lives across the call.
+        unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) }.as_bool()
+    })
 }
 
 /// Registers a global hotkey on the tray window. Window thread only. The
@@ -467,6 +564,12 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                     coordinate(wparam.0, false),
                     coordinate(wparam.0, true),
                 );
+            } else if event == NIN_BALLOONUSERCLICK {
+                with_handler(|h| h.balloon_clicked());
+            } else if event == NIN_BALLOONSHOW {
+                with_handler(|h| h.balloon_shown());
+            } else if event == NIN_BALLOONTIMEOUT || event == NIN_BALLOONHIDE {
+                with_handler(|h| h.balloon_gone());
             }
             LRESULT(0)
         }
@@ -497,6 +600,10 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         }
         WM_TIMER if wparam.0 == RECHECK_ID => {
             with_handler(|h| h.recheck());
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == POLL_ID => {
+            with_handler(|h| h.poll());
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_ID => {
@@ -531,6 +638,7 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         notify(window, NIM_ADD);
                     }
                 });
+                with_handler(|h| h.taskbar_created());
                 return LRESULT(0);
             }
             // SAFETY: forwarding the unchanged arguments.
@@ -542,6 +650,21 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn u4_notification_text_is_cut_at_a_character_boundary() {
+        let mut buffer = [0xFFFFu16; 4];
+        // Two units, then a surrogate pair that no longer fits.
+        fill_wide(&mut buffer, "ab\u{1F600}");
+        assert_eq!(buffer, [u16::from(b'a'), u16::from(b'b'), 0, 0]);
+        let mut buffer = [0xFFFFu16; 4];
+        fill_wide(&mut buffer, "a\u{1F600}x");
+        assert_eq!(
+            &buffer[..3],
+            &"a\u{1F600}".encode_utf16().collect::<Vec<_>>()[..]
+        );
+        assert_eq!(buffer[3], 0, "x no longer fits");
+    }
 
     #[test]
     fn coordinates_are_signed_words() {

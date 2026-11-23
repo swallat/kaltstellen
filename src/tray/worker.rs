@@ -98,6 +98,9 @@ impl Controller {
                 }
             }
             Decision::Refused => info!("tray: {label} refused, the tray quits or the session ends"),
+            Decision::Ignored => {
+                info!("tray: {label} ignored, a manual request waits (manual beats automatic)")
+            }
         }
         decision
     }
@@ -216,6 +219,7 @@ impl Runner for EngineRunner {
                 target,
                 force,
                 guests,
+                ..
             } => {
                 // C4: the switch uses the configuration as it is now and
                 // keeps it to the end, whatever happens to the file meanwhile.

@@ -26,8 +26,8 @@ name. Purpose: find out which real apps tolerate being frozen.
 
 ## M3: automation
 
-- Trigger processes switch profiles automatically (U4): moved after
-  version 1, see below.
+- Trigger processes switch profiles automatically (U4): planned after
+  version 1, built on the owner's request before the release, see below.
 - Global hotkeys (U3).
 
 ## M4: services and elevation
@@ -40,7 +40,9 @@ name. Purpose: find out which real apps tolerate being frozen.
 - Automatic triggers (U4), direction decided by the owner on 2026-11-23:
   trigger programs per profile with a priority, opt-in, a manual choice
   always wins; all details decided the same day, see
-  [design-automatic-triggers.md](design-automatic-triggers.md).
+  [design-automatic-triggers.md](design-automatic-triggers.md). Built on
+  the owner's request on 2026-11-23, before the release, so it is tested
+  together with version 1 (progress note "U4 automatic triggers" below).
 
 ## Later, if wanted
 
@@ -165,6 +167,19 @@ name. Purpose: find out which real apps tolerate being frozen.
   the placeholder `0.0.0-dev`; the release workflow sets the version from
   the tag; development builds derive theirs from the last tag and the
   commit (`build.rs`, `docs/releasing.md`).
+- U4 automatic triggers (2026-11-23, on the owner's request before the
+  release; branch `triggers`): `trigger` and `priority` per profile (spec
+  C9, checked by `check-config`), the decisions in the pure module
+  `src/tray/triggers.rs` (unit tested), a 5 s poll of the handle-free
+  snapshot on a tray timer (spec L12), automatic requests through the W3
+  queue, a notification with `Back to <previous>`, the menu item
+  `Automatic switching` (kept in `settings.json`), `status` lines, the S5
+  offer from before the trigger, and a Triggers section in the main window
+  (`set_triggers`). Measured with the release tray: about 3.5 ms CPU per
+  poll, about 0.07 % of one core at 5 s, private working set 2.0 MB. Process
+  tests with heartbeat copies as triggers in `tests/fixtures/tests/tray.rs`;
+  the notification as shown and a real program as trigger are manual
+  checks.
 - Failure markers and drag and drop in the main window (2026-11-23, owner
   request; branch `gui-markers-dnd`): M5 entries show the tray's open
   errors of the last switch (read over the pipe, field `last_switch` of

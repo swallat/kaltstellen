@@ -163,6 +163,79 @@ main session made them; they show the views below in light and dark.
    `Add to profile` adds it and it leaves the list; for another program,
    `Dismiss` removes it from the list of this profile only.
 
+## Automatic triggers (U4, spec L12)
+
+Automated tests use copies of a test program as triggers and post the
+notification click as a window message; they cannot see the notification
+or use a real program. Use a real program you can start and end at will
+(for example `notepad.exe` or a game) as the trigger and another one as the
+program the profile freezes:
+
+```toml
+[[profile]]
+name = "trigger test"
+trigger = ["notepad.exe"]
+
+  [[profile.app]]
+  exe = "<a program that runs, not notepad>"
+```
+
+1. `kaltstellen check-config` lists `trigger notepad.exe (priority 0)`. Add
+   the trigger program as an entry of the same profile: `check-config`
+   refuses it (`… is a program that this profile freezes`); remove it again.
+2. Start the tray. The menu shows `Automatic switching`, checked.
+3. Start Notepad. Within about 5 s the profile is applied (orange icon, the
+   tooltip ends in `(by trigger)`), and a notification appears:
+   `kaltstellen: trigger test`, `notepad.exe started: switched to trigger
+   test. Click here: Back to neutral`. The menu shows `Applied by trigger
+   notepad.exe; back to neutral when it ends`.
+4. The menu starts with `Back to neutral`. Click the notification while it
+   is on screen (the only one): `neutral` is applied. The menu shows
+   `Triggers wait after a manual switch …` and no `Back to` any more;
+   nothing switches back while Notepad keeps running. Clicking a
+   notification in the notification centre after it left the screen does
+   nothing (the log says `notification clicked; nothing to go back to`):
+   the click does not say which notification it was. Repeat with the menu
+   item `Back to neutral` instead of the click: the same.
+4a. Two notifications in quick succession: start Notepad, close it, start
+   it again within the debounce plus a few seconds so two automatic
+   switches follow each other (or use two trigger programs with different
+   priorities). While both are on screen a click does nothing; the menu
+   item `Back to …` names the profile of the latest one and works. Note
+   the order in which the toasts appear and leave, and whether a toast
+   that a newer one replaces is reported as hidden (the log of the tray
+   shows `notification gone` only when the count reaches 0; a click on the
+   remaining one afterwards should say whether it was taken as the only
+   one).
+4b. Do Not Disturb (Focus) on, or a full-screen game running: start
+   Notepad. The profile is applied, no notification appears, the menu
+   item `Back to neutral` works.
+5. Close Notepad, wait 10 s, start it again: the profile is applied again.
+   Close it: 5 to 10 s later `neutral` comes back, with a notification.
+6. Start Notepad, switch to another profile from the menu, close Notepad:
+   the other profile stays.
+7. Uncheck `Automatic switching`; start Notepad: nothing happens. Quit and
+   start the tray again: the item is still unchecked. Check it: Notepad
+   counts as starting and the profile is applied.
+8. With Focus assist (Do not disturb) on, the notification goes to the
+   notification centre only; the switch still happens and `Back to` is in
+   the menu (see 4b).
+9. In the main window, the profile shows the section `Triggers` with
+   `notepad.exe` and priority `0`; change the priority to `5`, `Set`: the
+   file has `priority = 5` and keeps its comments; enter the program the
+   profile freezes as a trigger: refused with the reason. The typed text
+   stays in the field and the field is marked; click into another window
+   and back: the text and the mark are still there. Enter `x` as the
+   priority, `Set`: the message stays after clicking away and back.
+10. Rename the profile in the main window while Notepad has applied it.
+    The old name stays active (C4) until the next poll sees the trigger
+    under the new name and applies the renamed profile, with a
+    notification; close Notepad: the profile from before comes back. Note
+    what the menu and the notifications say.
+11. Sign out while the profile is applied by Notepad (VM): after sign-in
+    the menu offers the profile from before the trigger (or nothing, if
+    that was `neutral`), not `trigger test`.
+
 ## Updates (UP1)
 
 Automated tests cover the check, the full update against a local server,

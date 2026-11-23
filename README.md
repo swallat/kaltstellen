@@ -134,6 +134,20 @@ runs, the command line goes through it. One tile, three states:
 | <img src="branding/tray/png/kaltstellen-aktiv-32.png" width="32" height="32" alt="Ice cube with a warm right side"> | Profile active | Apps outside the profile are frozen or closed |
 | <img src="branding/tray/png/kaltstellen-fehler-32.png" width="32" height="32" alt="Red cube with an exclamation mark"> | Error | Something could not be frozen, resumed or started |
 
+### Automatic triggers
+
+A profile can name trigger programs: `trigger = ["simulator.exe"]` (names
+or full paths) and optionally `priority = 10`. While the tray runs, it looks
+for them every 5 s. When one starts, its profile is applied and a
+notification says so; `Back to …` at the top of the menu (or a click on the
+notification while it is on screen) goes back. About 5 to 10 s after the last
+one has ended, the profile that was active before comes back, unless you
+switched yourself in between. A switch of your own always wins: automation
+waits until a trigger program starts or ends. When triggers of two profiles
+run, the higher priority wins. `Automatic switching` in the menu pauses all
+triggers (remembered across restarts). A trigger must not be frozen or
+closed by its own profile; `check-config` refuses that.
+
 Logo, wordmark, colours and icons live in [branding/](branding/), together
 with the scripts that generate them. The notes there are in German.
 

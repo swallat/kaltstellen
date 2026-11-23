@@ -267,7 +267,9 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
         {{"type": "icons", "size": 32, "programs": [
             {{"exe": "notepad.exe", "path": {notepad}}},
             {{"exe": "ks-no-such-program.exe"}}
-        ]}}
+        ]}},
+        {{"type": "set_triggers", "profile": "play", "triggers": ["ks-wv-sim.exe"], "priority": 2}},
+        {{"type": "set_triggers", "profile": "play", "triggers": ["ks-wv-a.exe"], "priority": 0}}
     ]"#
     );
     fs::write(world.path("steps.json"), steps).unwrap();
@@ -301,7 +303,9 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
         .collect();
     assert_eq!(
         ok,
-        vec![true, true, false, true, false, true, false, true, true],
+        vec![
+            true, true, false, true, false, true, false, true, true, true, false
+        ],
         "{results}"
     );
     assert!(
@@ -337,6 +341,16 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
     assert!(
         config.contains("exe = \"ks-wv-a.exe\"") && !config.contains("explorer"),
         "{config}"
+    );
+    // U4: triggers set through the page; one its own profile freezes is
+    // refused.
+    assert!(
+        config.contains("trigger = [\"ks-wv-sim.exe\"]") && config.contains("priority = 2"),
+        "{config}"
+    );
+    assert!(
+        results[10]["error"].as_str().unwrap().contains("freezes"),
+        "{results}"
     );
     kaltstellen::config::parse(&config).expect("still valid");
     assert!(frozen(&beat), "applied through the window");

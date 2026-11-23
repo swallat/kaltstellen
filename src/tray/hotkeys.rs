@@ -148,6 +148,8 @@ mod tests {
             name: name.to_owned(),
             hotkey: hotkey.map(|h| Hotkey::parse(h).unwrap()),
             apps: Vec::new(),
+            triggers: Vec::new(),
+            priority: 0,
         }
     }
 
