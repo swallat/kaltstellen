@@ -41,6 +41,7 @@ kaltstellen status [--unassigned] show the active profile and what is on ice;
                                   --unassigned also lists running programs
                                   without an entry in it
 kaltstellen recover [--no-wait]   resume everything frozen, e.g. after a crash
+kaltstellen quit                  end the running tray as its menu's Quit does
 kaltstellen tray                  notification-area icon with the profile menu
 kaltstellen autostart [on|off]    start the tray at sign-in (per-user Run key)
 kaltstellen gui                   window to edit profiles and their programs
@@ -101,11 +102,32 @@ particular machine.
 
 ## Build
 
-Requires Windows and a stable Rust toolchain.
+Requires Windows, Git, rustup and the MSVC build tools with the Windows SDK
+(WebView2 is part of Windows 11). rustup installs the Rust version fixed in
+`rust-toolchain.toml` by itself on the first build:
 
 ```powershell
-cargo build --release
+winget install Rustlang.Rustup
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install Git.Git
+
+git clone https://github.com/swallat/kaltstellen.git
+cd kaltstellen
+cargo build --release --locked
 ```
+
+To try a development build without touching the real configuration,
+`scripts\dev-run.ps1` pulls, builds and starts the tray with its
+configuration, data and start-at-sign-in key in a sandbox (`%TEMP%\ks-dev`):
+
+```powershell
+.\scripts\dev-run.ps1            # pull, build, start the tray in the sandbox
+.\scripts\dev-run.ps1 -Gui       # the main window instead
+.\scripts\dev-run.ps1 -Recover   # resume everything it froze
+.\scripts\dev-run.ps1 -Clean     # end the sandbox tray, remove the sandbox
+```
+
+A development build reports `0.0.0-dev+<commit>` and does not update itself.
 
 The main window is a web page in `ui/` shown with WebView2 and embedded
 into the executable; [ui/README.md](ui/README.md) explains how to work on its

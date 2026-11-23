@@ -78,6 +78,8 @@ enum Command {
         #[arg(long)]
         no_wait: bool,
     },
+    /// End the running tray as its menu's Quit does (resumes what it froze)
+    Quit,
     /// Run the notification-area icon with the profile menu
     Tray,
     /// Open the main window: profiles, programs and their actions
@@ -163,6 +165,7 @@ pub fn main() -> ExitCode {
             }
         }
         Command::Recover { no_wait } => recover(!no_wait),
+        Command::Quit => quit(),
         Command::Tray => crate::tray::main(),
         Command::Gui {
             screenshot,
@@ -415,6 +418,19 @@ fn switch(target: &str, force: bool, wait: bool) -> u8 {
         interrupts.finished();
     }
     print_finished(&finished)
+}
+
+/// L2 from the command line: the tray of this data directory resumes what
+/// it froze and ends, as with Quit in its menu (the pipe request the
+/// updater uses). Without a tray there is nothing to end.
+fn quit() -> u8 {
+    match through_tray(protocol::Command::Quit) {
+        Some(code) => code,
+        None => {
+            println!("no tray runs");
+            exit::OK
+        }
+    }
 }
 
 fn recover(wait: bool) -> u8 {
@@ -832,6 +848,7 @@ fn run(command: Command) -> Result<bool> {
         | Command::Switch { .. }
         | Command::Status { .. }
         | Command::Recover { .. }
+        | Command::Quit
         | Command::Tray
         | Command::Gui { .. }
         | Command::Autostart { .. }
