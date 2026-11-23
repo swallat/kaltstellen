@@ -127,6 +127,40 @@ cover. Each is marked `[assumed]` in spec L12 or C9:
 19. **Status lines and pipe field** (L12, pipe protocol): wording of the
     `tray: …` lines and the `automation` field of the `status` reply.
 
+Details chosen while moving the settings from the tray menu to the main
+window, which the owner decided on 2026-11-23 (spec section 8 "Tray menu:
+actions only", section 12):
+
+20. **How the running tray takes a setting over** (L5 "Settings from the
+    main window"): new pipe commands `set_automation {paused}` and
+    `set_update_mode {mode}` within version 1; the tray applies the setting
+    at once and writes `settings.json` itself. Chosen over the tray
+    re-reading the file (no watcher, immediate effect). Without a tray the
+    caller writes the file; a tray that does not take it (an older tray
+    rejects the unknown command with `KS505`, a quitting one with `KS501`,
+    or no answer in time) gets the file written by the caller and uses it
+    from its next start; the window and the command line say so, exit
+    code 0. Until then such an older tray keeps its own state, and the
+    window shows that state again at its next refresh.
+21. **Two checks when a checking mode is chosen in the window** (UP1): the
+    tray checks (its result decides on an automatic install) and the window
+    runs its own check so it can show the result; both write `update.json`
+    atomically.
+22. **`kaltstellen automation [on|off]`** (L12): shows (from the running
+    tray, else from `settings.json`), resumes or pauses automatic switching;
+    through the tray like the window.
+23. **The switch in the window** (M6 Content): `Automatic switching` in the
+    header next to `Start at sign-in`, always shown; while no profile has
+    triggers it is disabled, dimmed, with the hint `No profile has triggers
+    yet; set them under Triggers of a profile.` (tooltip and screen reader).
+24. **`Automatic switching paused`** (L12): a disabled line in the tray
+    menu while paused, so the menu still says it, in place of the removed
+    check mark. Setting the state the tray already has changes nothing (a
+    running trigger is not applied again).
+25. **Stale menu IDs** (section 8): the IDs of the removed items are not
+    reused; a click on them does nothing (`command N has no meaning` in the
+    log).
+
 Everything else the owner has not decided yet is deferred (below).
 
 ## Deferred by the owner on 2026-11-23
@@ -218,7 +252,9 @@ The author's defaults, confirmed as built:
   `priority` per profile for two triggers at once; back to the previous
   profile when the trigger ends, after a debounce; `trigger = [...]` per
   profile, checked against its own profile, a section of its own in the
-  window; a remembered tray item `Automatic switching`; after sign-in the
+  window; a remembered switch `Automatic switching` (a tray item at first,
+  in the main window since the owner's decision of 2026-11-23 that settings
+  are not in the tray menu); after sign-in the
   profile from before the trigger is offered. Planned after version 1;
   built on the owner's request on 2026-11-23, before the release (spec L12,
   C9; the choices made while building are under "Open" above).
@@ -240,3 +276,7 @@ The author's defaults, confirmed as built:
   sidebar; the window checks by running `kaltstellen update --check
   --quiet`; choosing a mode that checks starts a check at once; `Install`
   opens the same console window as the tray item.
+- **Tray menu without settings** (owner, 2026-11-23): the tray menu keeps
+  only actions; `Automatic switching`, `Start at sign-in` and the update
+  modes are in the main window (spec section 8). The first-start question
+  about start at sign-in stays.

@@ -253,17 +253,30 @@ impl Host for RealHost {
         found
     }
 
-    fn last_switch(&self) -> Result<Option<crate::tray::protocol::LastSwitch>, String> {
+    fn tray_status(&self) -> Result<Option<crate::tray::protocol::TrayStatus>, String> {
         // M5: the tray keeps the error state (L9); without a tray there is
-        // none, and the status line alone reports a switch.
+        // none, and the status line alone reports a switch. U4: the tray
+        // knows whether automatic switching is paused.
         let endpoints = crate::tray::Endpoints::current().map_err(|e| e.to_string())?;
-        match crate::tray::client::status_now(&endpoints) {
-            Ok(status) => Ok(status.and_then(|s| s.last_switch)),
-            Err(err) => {
-                warn!("gui: no status from the tray, markers kept: {err}");
-                Err(err.to_string())
-            }
-        }
+        crate::tray::client::status_now(&endpoints).map_err(|err| {
+            warn!("gui: no status from the tray, markers kept: {err}");
+            err.to_string()
+        })
+    }
+
+    fn triggers_paused(&self) -> bool {
+        paths::config_dir().is_some_and(|dir| crate::settings::load(&dir).0.triggers_paused)
+    }
+
+    fn set_automation(&self, paused: bool) -> Result<bridge::Delivery, String> {
+        let delivery =
+            crate::tray::client::set_automation(paused, true).map_err(|e| e.to_string())?;
+        info!(
+            "gui: automatic switching {} ({})",
+            if paused { "paused" } else { "on" },
+            delivery.how()
+        );
+        Ok(delivery)
     }
 
     fn unassigned(&self, config: &Config, profile: &str) -> Vec<Unassigned> {
@@ -316,10 +329,11 @@ impl Host for RealHost {
         }
     }
 
-    fn set_update_mode(&self, mode: crate::update::Mode) -> Result<(), String> {
-        let dir = paths::config_dir().ok_or("no configuration directory")?;
-        crate::settings::edit(&dir, |s| s.update = Some(mode.name().to_owned()))
-            .map_err(|e| e.to_string())
+    fn set_update_mode(&self, mode: crate::update::Mode) -> Result<bridge::Delivery, String> {
+        let delivery =
+            crate::tray::client::set_update_mode(mode, true).map_err(|e| e.to_string())?;
+        info!("gui: update mode {} ({})", mode.name(), delivery.how());
+        Ok(delivery)
     }
 
     fn check_updates(&self) {

@@ -1,7 +1,8 @@
 # Tray pipe protocol (version 1)
 
-How `kaltstellen switch`, `recover` and `status` talk to a running
-`kaltstellen tray` (spec L1, L5). The source of truth is
+How `kaltstellen switch`, `recover`, `status`, `automation` and
+`update --mode`, and the main window, talk to a running `kaltstellen tray`
+(spec L1, L5). The source of truth is
 `src/tray/protocol.rs`; its unit tests pin the wire form shown here.
 
 ## Transport
@@ -35,13 +36,31 @@ Every request has `version` (currently `1`) and `command`.
 | `status` | none | `kaltstellen status` |
 | `quit` | none | Used by `kaltstellen update` (spec UP1): Quit as from the menu (L2, everything suspended is resumed); the final reply `done` comes when that finished, then the tray ends. Added within version 1; a tray that does not know it answers `rejected` with `KS505`. The tray may end before the reply reaches the client, so the client also accepts a closed connection followed by the tray's mutex disappearing. |
 | `quit_if_idle` | none | Used by the tray's automatic install (`kaltstellen update --unattended`, spec UP1): `quit`, but only if, on the tray's window thread when the request is read, `neutral` is active, no switch runs or waits and the tray is not quitting. Otherwise the final reply is `rejected` (exit code 1, `KS808`) and the tray keeps running; the install then gives up without changing anything. Added within version 1; a tray that does not know it answers `rejected` with `KS505`, which the install treats the same way, so an older tray never quits for it. |
+| `set_automation` | `paused` (bool, required) | Used by the main window and `kaltstellen automation on\|off` (spec L12; the switch moved from the tray menu to the window, owner 2026-11-23): pauses or resumes automatic switching at once. The tray writes `triggers_paused` to `settings.json` itself; setting the state it already has changes nothing. Final reply `status` (the tray's status afterwards; its `automation` is absent while no profile has triggers), or `rejected` (exit code 1) when `settings.json` could not be written (the state still changes for this session). Added within version 1. |
+| `set_update_mode` | `mode` (`auto`, `manual` or `off`) | Used by the main window and `kaltstellen update --mode` (spec UP1; the items moved from the tray menu to the window): the tray writes `update` to `settings.json` and, if the mode in effect (`KALTSTELLEN_UPDATE` wins) checks, starts its check at once, as its menu items did. Final reply `status`, or `rejected` (exit code 1) for an unknown mode or a file that could not be written. Added within version 1. |
 
 ```json
 {"version":1,"command":"switch","profile":"focus","force":true,"wait":false}
 {"version":1,"command":"status"}
 {"version":1,"command":"quit"}
 {"version":1,"command":"quit_if_idle"}
+{"version":1,"command":"set_automation","paused":true}
+{"version":1,"command":"set_update_mode","mode":"manual"}
 ```
+
+### Settings and older trays
+
+`set_automation` and `set_update_mode` keep the tray the one writer of
+these keys while it runs. Without a tray, the caller writes `settings.json`
+itself and the next tray reads it at its start. When a tray runs but does
+not take the setting (an older tray rejects the unknown command with
+`rejected`, `KS505`; a tray that is quitting rejects it with `KS501`; or it
+does not answer), the caller also writes `settings.json` itself and says
+that the running tray uses it from its next start; the command line prints
+that as a `note:` line and ends with exit code 0. The main window waits for
+the tray as for `status` (0.5 s while the pipe is busy, 1 s for the answer,
+no wait for a tray that is still starting); the command line waits as for
+its other requests.
 
 `force` belongs to the request: it confirms warn-list programs (P6) for this
 switch only and travels with it through the queue.
@@ -56,7 +75,7 @@ Every reply has `version` and `reply`.
 | `done` | yes | `exit_code`, `active_profile` (absent if nothing could be attempted), `notes`, `events` (`step`, `program`, `pid`), `errors`, `profiles` (for exit code 4) | Printed exactly like an in-process run. |
 | `superseded` | yes | `by` (profile of the later request) | Exit code 3, `KS402` (W3). |
 | `rejected` | yes | `exit_code`, `lines` | Lines on stderr, then that exit code: 2 for an invalid configuration, 5 while the tray quits or for a protocol error. |
-| `status` | yes | `state` (as in `state.json`), `running`, `waiting`, `automation`, `last_switch` | Printed like an in-process `status`, plus `tray: running …` / `tray: waiting …` lines. `automation` (U4, spec L12; added within version 1, absent while no profile has triggers) is `{paused, held, trigger, returns_to, waiting, waiting_for}`: automatic switching is paused in the menu; a manual switch holds it; the trigger program that applied the active profile and the profile it returns to (both absent otherwise); the profiles whose trigger waits for a higher one, and that winner (both only while the winner is active and nothing holds automation). Printed as `tray: automatic switching on|paused|held …`, `tray: "<profile>" applied by trigger <program>; back to "<profile>" when it ends` and `tray: trigger for "<profile>" waits while "<winner>" is active`. The running job of an automatic switch reads `automatic switch to "<profile>"`. `last_switch` (added within version 1, absent when empty) is for the main window's failure markers (M5): `{profile, errors}`, the profile the last switch made active and its errors that name a program and are not resolved yet (L9; the tray checks again before it answers), each `{code, program, path?, text}`; program and text cut to 512 bytes, a path longer than 1024 bytes left out, and no more errors than fit into 16 KiB as encoded. The command line does not print it. Before answering, the tray checks again which errors resolved (L9: a process snapshot, a log line per resolved error); the tray's icon, tooltip, menu and re-check timer follow, so a `status` request can change them. |
+| `status` | yes | `state` (as in `state.json`), `running`, `waiting`, `automation`, `last_switch` | Printed like an in-process `status`, plus `tray: running …` / `tray: waiting …` lines. `automation` (U4, spec L12; added within version 1, absent while no profile has triggers) is `{paused, held, trigger, returns_to, waiting, waiting_for}`: automatic switching is paused (main window, `kaltstellen automation off`); a manual switch holds it; the trigger program that applied the active profile and the profile it returns to (both absent otherwise); the profiles whose trigger waits for a higher one, and that winner (both only while the winner is active and nothing holds automation). Printed as `tray: automatic switching on|paused|held …`, `tray: "<profile>" applied by trigger <program>; back to "<profile>" when it ends` and `tray: trigger for "<profile>" waits while "<winner>" is active`. The running job of an automatic switch reads `automatic switch to "<profile>"`. `last_switch` (added within version 1, absent when empty) is for the main window's failure markers (M5): `{profile, errors}`, the profile the last switch made active and its errors that name a program and are not resolved yet (L9; the tray checks again before it answers), each `{code, program, path?, text}`; program and text cut to 512 bytes, a path longer than 1024 bytes left out, and no more errors than fit into 16 KiB as encoded. The command line does not print it. Before answering, the tray checks again which errors resolved (L9: a process snapshot, a log line per resolved error); the tray's icon, tooltip, menu and re-check timer follow, so a `status` request can change them. |
 
 ```json
 {"version":1,"reply":"accepted","waiting":true}

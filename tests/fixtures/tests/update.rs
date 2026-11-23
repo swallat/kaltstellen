@@ -18,15 +18,8 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
 use common::*;
-use kaltstellen::tray::model::{ID_UPDATE_AUTO, ID_UPDATE_MANUAL};
 use kaltstellen::win32::hash;
 use kaltstellen::win32::registry;
-use kaltstellen::win32::tray::CLASS;
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetWindowThreadProcessId, PostMessageW, WM_COMMAND,
-};
-use windows::core::BOOL;
 
 const LONG: Duration = Duration::from_secs(30);
 const BAD_UPDATE: &str = env!("CARGO_BIN_EXE_ks-badupdate");
@@ -131,33 +124,6 @@ fn github_gated(version: &str, served: &[u8], summed: &[u8], gate: Option<Receiv
         latest.into_bytes(),
     )]));
     format!("{api}/repos/o/r")
-}
-
-/// The tray window of process `pid`.
-fn tray_window(pid: u32) -> Option<HWND> {
-    struct Search {
-        pid: u32,
-        found: Option<HWND>,
-    }
-    unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> BOOL {
-        // SAFETY: `param` points to the `Search` below for the whole call.
-        let search = unsafe { &mut *(param.0 as *mut Search) };
-        let mut pid = 0;
-        // SAFETY: valid out pointer.
-        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-        let mut class = [0u16; 64];
-        // SAFETY: valid buffer.
-        let len = unsafe { GetClassNameW(hwnd, &mut class) } as usize;
-        if pid == search.pid && String::from_utf16_lossy(&class[..len]) == CLASS {
-            search.found = Some(hwnd);
-            return false.into();
-        }
-        true.into()
-    }
-    let mut search = Search { pid, found: None };
-    // SAFETY: the callback only uses `search`, which outlives the call.
-    let _ = unsafe { EnumWindows(Some(visit), LPARAM(&raw mut search as isize)) };
-    search.found
 }
 
 /// A copy of kaltstellen with its own folders, tray and programs.
@@ -488,18 +454,11 @@ fn up1_tray_checks_when_checking_is_switched_on() {
         !s.log().contains("next update check"),
         "off must not schedule"
     );
-    let pid = s.tray.as_ref().unwrap().id();
-    let hwnd = tray_window(pid).expect("tray window");
-    // SAFETY: posting to a window of another process.
-    unsafe {
-        PostMessageW(
-            Some(hwnd),
-            WM_COMMAND,
-            WPARAM(usize::from(ID_UPDATE_MANUAL)),
-            LPARAM(0),
-        )
-    }
-    .unwrap();
+    // The main window and `update --mode` hand the mode to the running
+    // tray (pipe `set_update_mode`); the tray writes it and checks at once,
+    // as its menu items did before they moved to the window.
+    set_mode(&s, "manual");
+    s.wait_log("tray: update mode manual", 1);
     s.wait_log("tray: update 9.9.9 available", 1);
     s.wait_log("tray: next update check in", 1);
     let settings = fs::read_to_string(s.config_dir().join("settings.json")).unwrap();
@@ -510,13 +469,24 @@ fn up1_tray_checks_when_checking_is_switched_on() {
     );
     let record = fs::read_to_string(s.data().join("update.json")).unwrap();
     assert!(record.contains("9.9.9"));
+    // Off: the tray takes it, no check starts.
+    let checks = s.log().matches("tray: update check started").count();
+    set_mode(&s, "off");
+    s.wait_log("tray: update mode off", 1);
+    assert!(s.config_dir().join("settings.json").exists());
+    let settings = fs::read_to_string(s.config_dir().join("settings.json")).unwrap();
+    assert!(settings.contains("\"update\": \"off\""), "{settings}");
+    assert_eq!(
+        s.log().matches("tray: update check started").count(),
+        checks
+    );
 }
 
-/// Posts a menu command to the tray of `pid`.
-fn click(pid: u32, id: u16) {
-    let hwnd = tray_window(pid).expect("tray window");
-    // SAFETY: posting to a window of another process.
-    unsafe { PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(usize::from(id)), LPARAM(0)) }.unwrap();
+/// `update --mode MODE` with the tray of `s` running: the tray takes it.
+fn set_mode(s: &Setup, mode: &str) {
+    let (code, out, err) = s.run(&["update", "--mode", mode], &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(out.trim(), format!("update mode: {mode}"), "{err}");
 }
 
 #[test]
@@ -530,9 +500,9 @@ fn up1_automatic_install_waits_for_neutral_and_an_idle_tray() {
     let (code, _, err) = s.run(&["switch", "play"], &[]);
     assert_eq!(code, 0, "{err}");
     assert!(frozen(&beat));
-    // Mode auto (the default) from the menu checks at once.
-    let pid = s.tray.as_ref().unwrap().id();
-    click(pid, ID_UPDATE_AUTO);
+    // Mode auto (the default) chosen again (main window, command line)
+    // checks at once in the tray.
+    set_mode(&s, "auto");
     s.wait_log("tray: update 9.9.9 available", 1);
     s.wait_log("tray: update 9.9.9 waits until neutral is active", 1);
     assert!(
@@ -562,9 +532,8 @@ fn up1_automatic_install_gives_up_when_a_profile_starts_during_the_download() {
     let mut s = Setup::new(github_gated("9.9.9", &bad, &bad, Some(gate)));
     let (_program, beat) = s.program();
     s.start_tray_with(&[("KS_FAKE_VERSION", "9.9.9")]);
-    let pid = s.tray.as_ref().unwrap().id();
     // Neutral and idle: the automatic install starts and downloads.
-    click(pid, ID_UPDATE_AUTO);
+    set_mode(&s, "auto");
     s.wait_log("tray: installing update 9.9.9 automatically", 1);
     s.wait_log("tray: automatic update started", 1);
     // Meanwhile a profile is switched on.
@@ -608,8 +577,7 @@ fn up1_a_version_that_did_not_start_waits_and_is_tried_again_later() {
     let mut s = Setup::new(github("9.9.9", &bad, &bad));
     let fake = [("KS_FAKE_VERSION", "9.9.9")];
     s.start_tray_with(&fake);
-    let pid = s.tray.as_ref().unwrap().id();
-    click(pid, ID_UPDATE_AUTO);
+    set_mode(&s, "auto");
     // Installed, the new tray did not start, rolled back.
     s.wait_log("update: the previous tray runs again", 1);
     s.wait_log("the automatic install tries it again in 1 day(s)", 1);
@@ -623,15 +591,14 @@ fn up1_a_version_that_did_not_start_waits_and_is_tried_again_later() {
         s.exe.file_name().unwrap().to_string_lossy().into_owned(),
     ));
     s.start_tray_with(&fake);
-    let pid = s.tray.as_ref().unwrap().id();
     // Logged once by each tray after its start-up recovery: the one the
     // update started again, and this one. This one's start-up schedule
     // line is in the log by then.
     s.wait_log("tray: update 9.9.9 could not be installed here recently", 2);
-    // The check that the click starts has run and been decided on: the
+    // The check that choosing the mode starts has run and been decided on: the
     // tray schedules the next one right after deciding.
     let scheduled = s.log().matches("tray: next update check in").count();
-    click(pid, ID_UPDATE_AUTO);
+    set_mode(&s, "auto");
     s.wait_log("tray: next update check in", scheduled + 1);
     assert_eq!(
         s.log()

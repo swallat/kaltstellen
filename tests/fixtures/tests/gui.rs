@@ -446,6 +446,72 @@ impl Drop for TrayOf {
 }
 
 #[test]
+fn u4_up1_settings_from_the_window_reach_the_running_tray_at_once() {
+    // Owner, 2026-11-23: these settings are in the window, not the tray
+    // menu; the window hands them to the running tray over the pipe.
+    let world = World::new(
+        "[[profile]]\nname = \"flight\"\ntrigger = [\"ks-wv-u4-sim.exe\"]\n\n  \
+         [[profile.app]]\n  exe = \"ks-wv-u4-a.exe\"\n  action = \"ignore\"\n",
+    );
+    let log = || fs::read_to_string(world.path("data").join("kaltstellen.log")).unwrap_or_default();
+    let settings =
+        || fs::read_to_string(world.path("config").join("settings.json")).unwrap_or_default();
+    let tray = TrayOf::start(&world);
+    let results = drive(
+        &world,
+        "u4-tray",
+        r#"[{"type": "get_state"},
+            {"type": "set_automation", "on": false},
+            {"type": "get_state"},
+            {"type": "set_automation", "on": "no"},
+            {"type": "set_update_mode", "mode": "off"}]"#,
+    );
+    let automation = |i: usize| results[i]["state"]["automation"].clone();
+    assert_eq!(
+        automation(0),
+        serde_json::json!({"on": true, "triggers": true}),
+        "{results}"
+    );
+    assert_eq!(results[1]["ok"], true, "{results}");
+    assert_eq!(results[1]["status"], "Automatic switching paused.");
+    // Read back from the tray's status, not only from the file.
+    assert_eq!(automation(2)["on"], false, "{results}");
+    assert_eq!(results[3]["ok"], false, "{results}");
+    assert_eq!(results[4]["status"], "Update mode off.", "{results}");
+    let text = log();
+    assert!(text.contains("tray: automatic switching paused"), "{text}");
+    assert!(text.contains("tray: trigger poll stopped"), "{text}");
+    assert!(text.contains("tray: update mode off"), "{text}");
+    let saved = settings();
+    assert!(saved.contains("\"triggers_paused\": true"), "{saved}");
+    assert!(saved.contains("\"update\": \"off\""), "{saved}");
+    let status = world.command(&["status"]).output().unwrap();
+    assert!(
+        String::from_utf8_lossy(&status.stdout).contains("tray: automatic switching paused"),
+        "the running tray took it over"
+    );
+    drop(tray);
+
+    // Without a tray the window writes the file itself and says when it
+    // counts; the next tray starts with it.
+    let results = drive(
+        &world,
+        "u4-alone",
+        r#"[{"type": "get_state"}, {"type": "set_automation", "on": true}]"#,
+    );
+    assert_eq!(automation_of(&results[0])["on"], false, "{results}");
+    assert_eq!(
+        results[1]["status"], "Automatic switching on; saved. The tray uses it when it starts.",
+        "{results}"
+    );
+    assert!(!settings().contains("triggers_paused"), "{}", settings());
+}
+
+fn automation_of(result: &serde_json::Value) -> serde_json::Value {
+    result["state"]["automation"].clone()
+}
+
+#[test]
 fn m5_failure_markers_come_from_the_trays_error_state_and_clear_when_resolved() {
     // A start entry whose file is missing (KS110) beside one that works.
     let world = World::new("");

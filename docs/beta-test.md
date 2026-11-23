@@ -117,13 +117,14 @@ The default mode installs a newer version by itself while `neutral` is
 active. Choose one of the two checks for beta.1 to beta.2; the other waits
 for the next beta:
 
-- **Automatic** (manual-checks "Updates", step 1a): keep `Updates: install
-  automatically`. When `v1.0.0-beta.2` is out, apply a profile and wait for
-  the daily check (or choose the menu item again to check at once): nothing
+- **Automatic** (manual-checks "Updates", step 1a): keep the mode `Install
+  automatically` (main window, `Updates`). When `v1.0.0-beta.2` is out,
+  apply a profile and wait for the daily check (or choose `Install
+  automatically` again in the main window to check at once): nothing
   is installed while the profile is active; switch to `Neutral`: it
   installs without a window and the tray comes back with the new version.
 - **On request with frozen programs** (step 4): before beta.2 is out,
-  choose `Updates: check and ask`. Then apply a profile that freezes
+  choose `Check and ask` in the main window. Then apply a profile that freezes
   something and run `kaltstellen update`: the frozen program runs again,
   one new tray icon appears, `kaltstellen --version` shows beta.2.
 

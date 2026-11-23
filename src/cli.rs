@@ -98,6 +98,11 @@ enum Command {
         #[arg(long, hide = true)]
         drive_out: Option<PathBuf>,
     },
+    /// Automatic switching by trigger programs: show, or switch on or off
+    Automation {
+        #[arg(value_enum)]
+        switch: Option<OnOff>,
+    },
     /// Start the tray at sign-in: show, or switch on or off
     Autostart {
         #[arg(value_enum)]
@@ -182,6 +187,7 @@ pub fn main() -> ExitCode {
             drive_out,
         }),
         Command::Autostart { switch } => autostart(switch),
+        Command::Automation { switch } => automation(switch),
         Command::Update {
             check,
             force,
@@ -470,20 +476,79 @@ fn autostart(switch: Option<OnOff>) -> u8 {
     exit::OK
 }
 
-/// `update --auto on|off` (UP1).
+/// A note for a setting the running tray did not take over at once.
+fn delivery_note(delivery: &client::Delivery) -> Option<String> {
+    match delivery {
+        client::Delivery::Tray(_) | client::Delivery::Saved => None,
+        client::Delivery::SavedForLater(reason) => Some(format!(
+            "saved, but the running tray did not take it over ({reason}); it uses it from its next start"
+        )),
+    }
+}
+
+/// `update --mode auto|manual|off` (UP1). With a tray running, the tray
+/// writes the mode and checks at once if the mode checks (pipe
+/// `set_update_mode`); without one, the file is written here.
 fn update_mode(mode: update::Mode) -> u8 {
     let Some(dir) = paths::config_dir() else {
         eprintln!("error: no configuration directory (APPDATA unset)");
         return exit::ERRORS;
     };
-    if let Err(err) = crate::settings::edit(&dir, |s| s.update = Some(mode.name().to_owned())) {
-        eprintln!("error: {err}");
-        return exit::ERRORS;
-    }
+    let delivery = match client::set_update_mode(mode, false) {
+        Ok(delivery) => delivery,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return exit::ERRORS;
+        }
+    };
     info!("update: mode {}", mode.name());
     println!("update mode: {}", mode.name());
+    if let Some(note) = delivery_note(&delivery) {
+        println!("note: {note}");
+    }
     if update::current_mode(Some(&dir)).1 {
         println!("note: {} is set and takes precedence", update::MODE_ENV);
+    }
+    exit::OK
+}
+
+/// `automation [on|off]` (U4): shows or sets automatic switching. Set: the
+/// running tray takes it over at once (pipe `set_automation`) and writes
+/// `triggers_paused`; without one, the file is written here. Shown: what
+/// the running tray does, else what `settings.json` says.
+fn automation(switch: Option<OnOff>) -> u8 {
+    let (paused, note) = match switch {
+        Some(switch) => {
+            let paused = matches!(switch, OnOff::Off);
+            match client::set_automation(paused, false) {
+                Ok(delivery) => (paused, delivery_note(&delivery)),
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return exit::ERRORS;
+                }
+            }
+        }
+        None => {
+            let from_tray = Endpoints::current()
+                .ok()
+                .and_then(|e| client::request(&e, protocol::Command::Status, || {}).ok())
+                .flatten()
+                .and_then(|body| match body {
+                    Body::Status(status) => status.automation.map(|a| a.paused),
+                    _ => None,
+                });
+            let paused = from_tray.unwrap_or_else(|| {
+                paths::config_dir().is_some_and(|dir| crate::settings::load(&dir).0.triggers_paused)
+            });
+            (paused, None)
+        }
+    };
+    println!(
+        "automatic switching: {}",
+        if paused { "paused" } else { "on" }
+    );
+    if let Some(note) = note {
+        println!("note: {note}");
     }
     exit::OK
 }
@@ -835,6 +900,7 @@ fn run(command: Command) -> Result<bool> {
         | Command::Tray
         | Command::Gui { .. }
         | Command::Autostart { .. }
+        | Command::Automation { .. }
         | Command::Update { .. } => unreachable!("handled in main"),
     }
 }

@@ -56,17 +56,84 @@ const QUICK: Duration = Duration::from_millis(500);
 /// when no tray has a pipe (none runs, or it is still starting and knows
 /// no switch yet); `Err` when a tray did not answer that way.
 pub fn status_now(endpoints: &Endpoints) -> Result<Option<protocol::TrayStatus>> {
+    match request_now(endpoints, Command::Status)? {
+        None => Ok(None),
+        Some(Body::Status(status)) => Ok(Some(status)),
+        Some(_) => Err(unreachable("the tray did not answer the status request")),
+    }
+}
+
+/// [`request`] with the short waits of [`status_now`], for the main window.
+fn request_now(endpoints: &Endpoints, command: Command) -> Result<Option<Body>> {
     let Some(conn) = pipe::connect(&endpoints.pipe, QUICK)? else {
         return Ok(None);
     };
-    match pipe::with_deadline(ANSWER, || converse(conn, Command::Status, &mut || {}))? {
-        Body::Status(status) => Ok(Some(status)),
-        _ => Err(unreachable("the tray did not answer the status request")),
-    }
+    pipe::with_deadline(ANSWER, || converse(conn, command, &mut || {})).map(Some)
 }
 
 /// How long [`status_now`] waits for the tray's answer once connected.
 const ANSWER: Duration = Duration::from_secs(1);
+
+/// How a setting that moved from the tray menu to the main window (owner,
+/// 2026-11-23) took effect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Delivery {
+    /// The running tray took it over at once and wrote `settings.json`;
+    /// its status afterwards.
+    Tray(Box<protocol::TrayStatus>),
+    /// No tray runs: written to `settings.json` here; a tray reads it when
+    /// it starts.
+    Saved,
+    /// A tray runs but did not take it (an older tray that does not know
+    /// the command, one that is quitting or does not answer): written to
+    /// `settings.json` here; that tray takes it over at its next start.
+    /// The reason, for the log and the caller.
+    SavedForLater(String),
+}
+
+impl Delivery {
+    /// For the log.
+    pub fn how(&self) -> String {
+        match self {
+            Delivery::Tray(_) => "taken over by the tray".to_owned(),
+            Delivery::Saved => "saved, no tray runs".to_owned(),
+            Delivery::SavedForLater(reason) => {
+                format!("saved, the tray takes it at its next start: {reason}")
+            }
+        }
+    }
+}
+
+/// Sends `command` (`set_automation`, `set_update_mode`) to the running
+/// tray, which writes `settings.json` itself; without a tray, or when the
+/// tray does not take it, `save` writes the file here. `quick`: the short
+/// waits of the main window instead of those of the command line.
+pub fn deliver(
+    command: Command,
+    quick: bool,
+    save: impl FnOnce() -> Result<()>,
+) -> Result<Delivery> {
+    let sent = super::Endpoints::current().and_then(|endpoints| {
+        if quick {
+            request_now(&endpoints, command)
+        } else {
+            request(&endpoints, command, || {})
+        }
+    });
+    let reason = match sent {
+        Ok(Some(Body::Status(status))) => return Ok(Delivery::Tray(Box::new(status))),
+        Ok(None) => {
+            save()?;
+            return Ok(Delivery::Saved);
+        }
+        Ok(Some(Body::Rejected { lines, .. })) => lines.join(" "),
+        Ok(Some(other)) => format!("unexpected answer from the tray: {other:?}"),
+        Err(err) => err.to_string(),
+    };
+    log::warn!("the tray did not take the setting: {reason}");
+    save()?;
+    Ok(Delivery::SavedForLater(reason))
+}
 
 fn converse(mut conn: File, command: Command, on_waiting: &mut dyn FnMut()) -> Result<Body> {
     let waits = command.waits();
@@ -94,4 +161,34 @@ fn converse(mut conn: File, command: Command, on_waiting: &mut dyn FnMut()) -> R
             body => return Ok(body),
         }
     }
+}
+
+fn edit_settings(change: impl FnOnce(&mut crate::settings::Settings)) -> Result<()> {
+    let dir = crate::paths::config_dir().ok_or_else(|| {
+        Error::new(
+            Code::SettingsIo,
+            "no configuration directory (APPDATA unset)",
+        )
+    })?;
+    crate::settings::edit(&dir, change)
+}
+
+/// U4: pauses (`true`) or resumes automatic switching (main window,
+/// `kaltstellen automation on|off`).
+pub fn set_automation(paused: bool, quick: bool) -> Result<Delivery> {
+    deliver(Command::SetAutomation { paused }, quick, || {
+        edit_settings(|s| s.triggers_paused = paused)
+    })
+}
+
+/// UP1: sets the update mode (main window, `kaltstellen update --mode`).
+/// The tray checks at once if the mode in effect checks; without a tray
+/// nothing checks here.
+pub fn set_update_mode(mode: crate::update::Mode, quick: bool) -> Result<Delivery> {
+    let command = Command::SetUpdateMode {
+        mode: mode.name().to_owned(),
+    };
+    deliver(command, quick, || {
+        edit_settings(|s| s.update = Some(mode.name().to_owned()))
+    })
 }

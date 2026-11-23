@@ -42,6 +42,8 @@ estimated below (spec L12).
    triggers are a section of their own in the profile view.
 7. **Global off switch**: a tray item `Automatic switching` pauses all
    triggers; its state is remembered across restarts (`settings.json`).
+   Since the owner's decision of 2026-11-23 that settings are not in the
+   tray menu, the switch is in the main window (spec L12).
 8. **After sign-in (S5)**: the profile from before the trigger is offered,
    not the triggered one; if the trigger program starts again, its trigger
    applies as usual.

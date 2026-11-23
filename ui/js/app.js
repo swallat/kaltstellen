@@ -73,6 +73,14 @@ function render() {
   $('active-badge').replaceChildren('Active: ', el('strong', { text: state.active }));
   $('autostart-wrap').hidden = state.autostart === null;
   $('autostart').checked = !!state.autostart;
+  // U4: moved here from the tray menu; without triggers it does nothing yet.
+  const automation = state.automation || { on: true, triggers: false };
+  const hint = automation.triggers ? '' : 'No profile has triggers yet; set them under Triggers of a profile.';
+  $('automation').checked = automation.on;
+  $('automation').disabled = !automation.triggers;
+  $('automation-wrap').classList.toggle('unused', !automation.triggers);
+  $('automation-wrap').title = hint;
+  $('automation-hint').textContent = hint;
   $('config-file').textContent = state.config_file;
   if (localStatus) setStatus(localStatus.text, localStatus.isError);
   else setStatus(state.status);
@@ -663,6 +671,7 @@ $('triggers-form').addEventListener('submit', async (event) => {
 $('add-program').addEventListener('click', openAdd);
 $('refresh-unassigned').addEventListener('click', loadUnassigned);
 $('autostart').addEventListener('change', (event) => call('set_autostart', { on: event.target.checked }));
+$('automation').addEventListener('change', (event) => call('set_automation', { on: event.target.checked }));
 $('update-mode').addEventListener('change', (event) => call('set_update_mode', { mode: event.target.value }));
 $('check-updates').addEventListener('click', () => call('check_updates'));
 $('install-update').addEventListener('click', () => call('install_update'));

@@ -18,9 +18,7 @@ use std::time::Duration;
 use common::*;
 use kaltstellen::autostart::{self, RUN_KEY, VALUE};
 use kaltstellen::state::Store;
-use kaltstellen::tray::model::{
-    ID_AUTOMATIC, ID_AUTOSTART, ID_BACK, ID_LAST, ID_NEUTRAL, ID_OPEN, ID_PROFILE_BASE, ID_QUIT,
-};
+use kaltstellen::tray::model::{ID_BACK, ID_LAST, ID_NEUTRAL, ID_OPEN, ID_PROFILE_BASE, ID_QUIT};
 use kaltstellen::win32::registry;
 use kaltstellen::win32::tray::{CLASS, WM_TRAY};
 use std::os::windows::process::CommandExt;
@@ -718,7 +716,7 @@ fn s5_t7_end_of_session_resumes_keeps_the_profile_for_next_time() {
 }
 
 #[test]
-fn autostart_from_the_command_line_and_the_menu_uses_the_injected_key() {
+fn autostart_from_the_command_line_uses_the_injected_key_and_not_the_menu() {
     // The real Run key is only read, before and after.
     let real_before = registry::read(RUN_KEY, VALUE).unwrap();
     let mut t = Tray::new();
@@ -736,14 +734,19 @@ fn autostart_from_the_command_line_and_the_menu_uses_the_injected_key() {
     assert_eq!((code, out.trim()), (0, "start at sign-in: off"));
     assert_eq!(registry::read(&t.run_key(), VALUE).unwrap(), None);
 
-    // The tray's menu item toggles the same value.
+    // The setting is in the main window and on the command line, not in
+    // the tray menu (owner, 2026-11-23): the old menu ID does nothing, and
+    // the command line works the same while a tray runs.
     t.config("");
     t.start(1);
-    t.click(ID_AUTOSTART);
-    t.wait_log("tray: start at sign-in on", 1);
+    t.click(4);
+    t.wait_log("tray: command 4 has no meaning; ignored", 1);
+    assert_eq!(registry::read(&t.run_key(), VALUE).unwrap(), None);
+    let (code, out, _) = t.run(&["autostart", "on"]);
+    assert_eq!((code, out.trim()), (0, "start at sign-in: on"));
     assert_eq!(registry::read(&t.run_key(), VALUE).unwrap(), Some(expected));
-    t.click(ID_AUTOSTART);
-    t.wait_log("tray: start at sign-in off", 1);
+    let (code, _, _) = t.run(&["autostart", "off"]);
+    assert_eq!(code, 0);
     assert_eq!(registry::read(&t.run_key(), VALUE).unwrap(), None);
     assert_eq!(t.quit(), Some(0));
 
@@ -1422,7 +1425,15 @@ fn u4_automatic_switching_can_be_paused_and_stays_paused() {
     ));
     t.start(1);
     t.wait_log("tray: trigger poll every", 1);
-    t.click(ID_AUTOMATIC);
+    // The switch is in the main window (owner, 2026-11-23); the window and
+    // `kaltstellen automation` hand it to the running tray over the pipe
+    // (`set_automation`), which takes it over at once and writes it.
+    let (code, out, err) = t.run(&["automation", "off"]);
+    assert_eq!(
+        (code, out.trim()),
+        (0, "automatic switching: paused"),
+        "{err}"
+    );
     t.wait_log("tray: automatic switching paused", 1);
     t.wait_log("tray: trigger poll stopped", 1);
     assert!(
@@ -1430,13 +1441,25 @@ fn u4_automatic_switching_can_be_paused_and_stays_paused() {
         "{}",
         t.settings()
     );
+    // The same again changes nothing.
+    let (code, _, _) = t.run(&["automation", "off"]);
+    assert_eq!(code, 0);
+    t.wait_log("tray: automatic switching already paused; unchanged", 1);
+    let (_, out, _) = t.run(&["automation"]);
+    assert_eq!(out.trim(), "automatic switching: paused");
+    // The old menu ID does nothing.
+    t.click(12);
+    t.wait_log("tray: command 12 has no meaning; ignored", 1);
     let _sim = t.program("ks-trig4-sim.exe");
     // The poll is stopped while paused; Quit is the later marker.
     assert!(t.is_beating("ks-trig4-a.exe"));
     assert_eq!(t.quit(), Some(0));
     assert_eq!(t.logged("automatic switch to"), 0);
 
-    // Remembered across a restart (settings.json).
+    // Remembered across a restart (settings.json), and shown from it
+    // without a tray.
+    let (_, out, _) = t.run(&["automation"]);
+    assert_eq!(out.trim(), "automatic switching: paused");
     t.start(2);
     assert_eq!(t.logged("tray: automatic switching is paused"), 1);
     let (_, out, _) = t.run(&["status"]);
@@ -1444,7 +1467,8 @@ fn u4_automatic_switching_can_be_paused_and_stays_paused() {
     assert_eq!(t.logged("automatic switch to"), 0);
 
     // On again: a trigger that runs counts as starting.
-    t.click(ID_AUTOMATIC);
+    let (code, out, _) = t.run(&["automation", "on"]);
+    assert_eq!((code, out.trim()), (0, "automatic switching: on"));
     t.wait_log("tray: automatic switching on", 1);
     t.wait_log("tray: automatic switch to \"flight\" finished", 1);
     assert!(t.is_frozen("ks-trig4-a.exe"));
@@ -1453,8 +1477,22 @@ fn u4_automatic_switching_can_be_paused_and_stays_paused() {
         "{}",
         t.settings()
     );
+    // On again while on: nothing is applied again.
+    let (code, _, _) = t.run(&["automation", "on"]);
+    assert_eq!(code, 0);
+    t.wait_log("tray: automatic switching already on; unchanged", 1);
+    assert_eq!(t.logged("automatic switch to \"flight\" finished"), 1);
     assert_eq!(t.quit(), Some(0));
     assert!(t.is_beating("ks-trig4-a.exe"));
+
+    // Without a tray the command line writes the file; the next tray
+    // starts paused.
+    let (code, out, _) = t.run(&["automation", "off"]);
+    assert_eq!((code, out.trim()), (0, "automatic switching: paused"));
+    assert!(t.settings().contains("\"triggers_paused\": true"));
+    t.start(3);
+    assert_eq!(t.logged("tray: automatic switching is paused"), 2);
+    assert_eq!(t.quit(), Some(0));
 }
 
 #[test]
