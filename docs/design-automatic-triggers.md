@@ -1,10 +1,9 @@
 # Design note: automatic triggers (M4; U4)
 
-Status: **direction decided** by the owner on 2026-11-23: trigger programs
-per profile, opt-in, a manual choice always wins, built **after version 1**.
-Nothing of this is implemented; version 1 is manual only (spec section 1, U5).
-The details below are a proposal; the points still open are listed at the
-end.
+Status: **decided** by the owner on 2026-11-23: the direction, and all open
+points of this note (section "Decided details"). To be built **after
+version 1**; nothing of this is implemented, version 1 is manual only (spec
+section 1, U5). Details the owner did not decide are marked `[assumed]`.
 
 ## Decided
 
@@ -14,6 +13,31 @@ end.
 - **Opt-in**: nothing happens unless a profile names trigger programs.
 - **Manual always wins** (conflict rule 1 below).
 - **After version 1**: a post-v1 item in `docs/plan.md`.
+
+## Decided details (owner, 2026-11-23)
+
+1. **Notification and undo**: an automatic switch shows a notification with
+   a one-click `Back to <previous>`.
+2. **How long manual wins**: until the trigger situation changes (the
+   trigger program ends, or a trigger program starts).
+3. **Detection**: a poll of the handle-free snapshot every 2 to 5 s, only
+   while some profile has triggers, provided it measures below the Q1
+   thresholds; not event-based. The interval within that range is fixed
+   when measured `[assumed]`.
+4. **Two triggers at once**: a `priority` per profile decides (see conflict
+   rule 2).
+5. **Return when the trigger ends**: back to the profile that was active
+   before the trigger, after the trigger stayed gone for a debounce time of
+   about 5 s `[assumed]`.
+6. **Configuration form**: `trigger = ["simulator.exe"]` per profile, with
+   optional paths as in A7; the configuration check refuses a trigger
+   program that its own profile stops or freezes. In the main window the
+   triggers are a section of their own in the profile view.
+7. **Global off switch**: a tray item `Automatic switching` pauses all
+   triggers; its state is remembered across restarts (`settings.json`).
+8. **After sign-in (S5)**: the profile from before the trigger is offered,
+   not the triggered one; if the trigger program starts again, its trigger
+   applies as usual.
 
 ## Background: why only the narrow case
 
@@ -25,38 +49,42 @@ narrow case: "when the flight simulator starts, apply the flight profile;
 when it ends, go back to neutral".
 
 This is why only the narrow case below was chosen, opt-in per profile, with
-a visible, reversible effect (notification plus one-click undo proposed).
+a visible, reversible effect (notification plus one-click undo).
 
-## Trigger model (if wanted)
+## Trigger model
 
 - A profile may name trigger programs:
-  `trigger = ["simulator.exe"]` (executable names, optional paths as in A7).
+  `trigger = ["simulator.exe"]` (executable names, optional paths as in A7),
+  and a `priority` (an integer, default `0`, higher wins) `[assumed]` for
+  the form and the default.
 - **Start of a trigger** (a matching process appears in the session):
-  apply the profile, unless the user switched manually within the last N
-  minutes (see conflicts).
-- **End of the last trigger process**: return to the profile that was active
-  before the trigger fired (usually `neutral`), not blindly to `neutral`.
-- Detection without polling: the tray already runs; it can subscribe to
-  process start and stop events. Options: WMI `__InstanceCreationEvent`
-  (convenient, but WMI costs memory and CPU and needs COM), ETW kernel
-  process provider (needs admin for the kernel session; no), or polling the
-  existing handle-free snapshot every few seconds (simple, a few hundred
-  microseconds per poll; measure against Q1). Recommended: a 2 to 5 s poll
-  of the snapshot, only while at least one profile has triggers.
+  apply the profile, unless a manual switch holds automation (conflict
+  rule 1) or automatic switching is paused.
+- **End of the last trigger process** (gone for the debounce time): return
+  to the profile that was active before the trigger fired (usually
+  `neutral`), not blindly to `neutral`.
+- Detection: a poll of the existing handle-free snapshot every 2 to 5 s,
+  only while at least one profile has triggers and automatic switching is
+  not paused (a few hundred microseconds per poll; measured against Q1
+  before it is built).
 - Triggers go through the same W3 queue as menu, hotkey and pipe requests,
   tagged as automatic.
 
 ## Conflict rules
 
 1. **Manual beats automatic.** A manual switch (menu, hotkey, command line,
-   window) suspends automation until the trigger situation changes (the
-   trigger program ends, or a new trigger program starts). Automatic
-   switches never supersede a waiting manual request in W3; a manual request
-   always supersedes a waiting automatic one.
-2. **Two triggers at once** (programs of two profiles run): the first one
-   wins; the second is logged and shown in the menu as "Trigger for X
-   ignored while Y is active". Alternative: a `priority` per profile. Keep
-   first-wins until a real case needs priority.
+   window) suspends automation until the trigger situation changes (a
+   trigger program ends, or a trigger program starts). Automatic switches
+   never supersede a waiting manual request in W3; a manual request always
+   supersedes a waiting automatic one.
+2. **Two triggers at once** (programs of two profiles run): the profile
+   with the higher `priority` wins. `[assumed]` for the details: a trigger
+   of higher priority that starts while a lower one is active switches to
+   its profile; when it ends, the lower profile comes back if its trigger
+   still runs, otherwise the profile from before the first trigger. A
+   trigger of lower or equal priority that starts while another is active
+   is logged and shown in the menu as "Trigger for X waits while Y is
+   active"; at equal priority the one that came first stays.
 3. **Trigger fires while a switch runs**: queued like any request; if the
    running switch leads to the trigger's profile, dropped (W3 rule).
 4. **Trigger program is itself frozen or stopped by the target profile**:
@@ -69,32 +97,9 @@ a visible, reversible effect (notification plus one-click undo proposed).
 
 | Failure | Effect | Mitigation |
 | --- | --- | --- |
-| Trigger program crashes and restarts quickly | Flapping: switch out and in again | Debounce: act on "ended" only after it stayed gone for some seconds. |
+| Trigger program crashes and restarts quickly | Flapping: switch out and in again | Debounce: act on "ended" only after it stayed gone for about 5 s. |
 | Launcher process starts and hands over to the real program | Trigger fires and ends at once | Trigger on the real program; debounce; document. |
 | Switch fails partly | W2 as usual: error icon, collected errors | Same as manual. |
-| User is in a call when the trigger freezes the call program | Unwanted interruption | Notification before or with the switch, one-click undo ("Back to neutral"); do not freeze programs with active audio (would need audio session checks, R3). |
+| User is in a call when the trigger freezes the call program | Unwanted interruption | Notification with the switch and one-click undo (`Back to <previous>`); do not freeze programs with active audio (would need audio session checks, R3). |
 | Poll misses a very short-lived trigger | No switch | Acceptable; triggers are long-running programs. |
-| Sign-out while triggered | S5 resume as usual; the offer after sign-in is the triggered profile | Offer the profile that was active before the trigger instead. |
-
-## Open points (to settle before it is built)
-
-1. **Notification and undo**: should an automatic switch show a
-   notification with a one-click `Back to <previous>`? (Proposed: yes.)
-2. **How long manual wins**: until the trigger situation changes
-   (proposed), a fixed time, or until automation is switched on again from
-   the menu?
-3. **Detection and Q1**: a 2 to 5 s poll of the handle-free snapshot, only
-   while some profile has triggers, if measured below the Q1 thresholds; or
-   must it be event-based?
-4. **Two triggers at once**: first wins (proposed) or a `priority` per
-   profile?
-5. **Return when the trigger ends**: back to the profile active before the
-   trigger (proposed), or always `neutral`; and the debounce time before
-   "ended" counts (proposed: some seconds).
-6. **Configuration form**: `trigger = ["simulator.exe"]` per profile with
-   optional paths as in A7, and the check that a trigger program is not
-   stopped or frozen by its own profile; where to edit it in the main window.
-7. **A global off switch**: a tray item `Automatic switching` to pause all
-   triggers, and whether its state is remembered.
-8. **After sign-in (S5)**: offer the profile from before the trigger rather
-   than the triggered one?
+| Sign-out while triggered | S5 resume as usual | The offer after sign-in is the profile from before the trigger (decided detail 8). |

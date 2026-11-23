@@ -38,8 +38,9 @@ name. Purpose: find out which real apps tolerate being frozen.
 ## After version 1
 
 - Automatic triggers (U4), direction decided by the owner on 2026-11-23:
-  trigger programs per profile, opt-in, a manual choice always wins. Open
-  points in [design-automatic-triggers.md](design-automatic-triggers.md).
+  trigger programs per profile with a priority, opt-in, a manual choice
+  always wins; all details decided the same day, see
+  [design-automatic-triggers.md](design-automatic-triggers.md).
 
 ## Later, if wanted
 
@@ -142,8 +143,8 @@ name. Purpose: find out which real apps tolerate being frozen.
   `tests/fixtures/tests/update.rs` (check, mode, full update with a tray
   holding a frozen program, rollback of a tray that does not start, wrong
   checksum, a file that is no program, the tray's check switched on from
-  the menu). The non-goal "no network access" is reworded (open decision
-  12). Still open: a real release (`docs/release-requirements.md`),
+  the menu). The non-goal "no network access" is reworded (owner decision of
+  2026-11-23). Still open: a real release (`docs/release-requirements.md`),
   signing, the manual checks in `docs/manual-checks.md`.
 - Main window on WebView2 (2026-11-23, owner decision; branch `gui-webview`):
   the native window is replaced by a WebView2 page (`ui/`, embedded; host in

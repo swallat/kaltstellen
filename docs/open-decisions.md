@@ -15,58 +15,16 @@ reasoning is. Implementation choices made without the owner are marked
 3. **Update signing (UP1)**: integrity by SHA-256 from `checksums.txt` only
    for now. Signing (Authenticode certificate or an own key pair) is decided
    together with the release pipeline.
-4. **M6 WebView details** `[assumed]`: origin
-   `https://ui.kaltstellen.invalid/` with a 403 for everything else; dev
-   tools only in debug builds; user data folder `webview2` in the data
-   directory; window 1040 x 760 at 100 %; the review options
-   `--screenshot`, `--view`, `--theme`, `--drive` stay in the release
-   executable, hidden from help.
-5. **M6 bridge** `[assumed]`: the message set of
-   [gui-bridge.md](gui-bridge.md); every edit is one request and one save;
-   the page gets the whole state with every reply.
-
-6. **L11 callers joining a running switch** `[assumed]`: a caller whose
-   request equals the running switch is protected from that switch's next
-   snapshot on; what was frozen before stays frozen.
-7. **L11 `--no-wait` callers** `[assumed]`: protected only while they still
-   run; after they exit, their ancestors are ordinary processes for the rest
-   of that switch.
-
-8. **L9 re-check** `[assumed]`: errors are checked again when the menu
-   opens and every 30 s while one could still resolve; rules per error code
-   in spec L9 (start errors resolve when the program runs, stop and freeze
-   errors when it no longer runs, the rest stays until the next switch).
-
-9. **L8 question** `[assumed]`: a message box on its own thread so start-up
-   is not held up; `KALTSTELLEN_AUTOSTART_PROMPT` (`yes`, `no`, `skip`) for
-   tests and managed installations.
-
-10. **UP1 automatic install timing** `[assumed]`: retried when a switch ends
-    with `neutral` active and after every later check; logged once per
-    version while it waits; a saved `on` (earlier name) reads as `auto`.
-    The condition is checked again right before the tray quits
-    (`quit_if_idle`); a busy tray stays and the install starts again the
-    next time the tray is idle in `neutral`. A version that could not be
-    installed after it was verified (`KS806` did not start, `KS805` not
-    swapped after the tray quit; not a start check that only timed out) is recorded in
-    `update.json` and never installed automatically again; on request it
-    still can be. Only the last such version is remembered. Failures before
-    the tray is touched are retried after the next check (daily). No
-    automatic install while the session ends; one install at a time.
-
-11. **UP1 in the main window** `[assumed]`: a section `Updates` at the bottom
-    of the sidebar; the window checks by running `kaltstellen update --check
-    --quiet` (no network code in the window either); choosing a mode that
-    checks starts a check at once; `Install` opens the same console window as
-    the tray item rather than installing silently, so a window that the user
-    is looking at shows the steps.
-
-12. **M2 program icons** `[assumed]`: shown at 20 CSS pixels in the three
-    lists; read only from files on a fixed local disk (no shares, mapped
-    network drives or device paths), from a running process of that name
-    first, else from an entry's configured path; at most 96 device pixels;
-    kept while the window is open, at most 4 MiB; a program without an icon
-    shows a grey square of the same size; monochrome icons show the square.
+4. **UP1 retry waits** `[assumed]`: the owner decided that a version that
+   could not be installed is tried again regularly and left the rhythm to
+   the author: 1 day after the first failure, 2 after the second, 4 after
+   the third, 7 after every later one in a row.
+5. **Automatic trigger details** `[assumed]`
+   ([design-automatic-triggers.md](design-automatic-triggers.md)): `priority`
+   is an integer, default `0`, higher wins; a higher trigger takes over from
+   a lower one and hands back to it when it ends; equal priority keeps the
+   first; debounce about 5 s; the poll interval within 2 to 5 s is fixed
+   when measured.
 
 ## Decided by the owner on 2026-11-23
 
@@ -76,25 +34,62 @@ reasoning is. Implementation choices made without the owner are marked
   everything, `neutral`, exit code 1.
 - **L7 session end**: as built, except the 4 s wait (open item 1).
 - **L8 start at sign-in**: never written without consent; the tray asks once
-  on its first start (built after this decision).
+  on its first start (built after this decision). The question is a message
+  box on its own thread; `KALTSTELLEN_AUTOSTART_PROMPT` (`yes`, `no`, `skip`)
+  for tests and managed installations.
 - **L9 error state**: no manual acknowledging; errors stay until the next
   switch or until their cause disappears by itself (built after this
-  decision).
+  decision). Checked again when the menu opens and every 30 s while one
+  could still resolve, with the rules per error code in spec L9.
 - **L10 hotkeys**: as built: a taken hotkey is listed in the menu, the icon
   does not turn red, it is retried.
+- **L11 callers**: a caller whose request equals the running switch is
+  protected from that switch's next snapshot on, and what was frozen before
+  stays frozen; a `--no-wait` caller is protected only while it still runs.
 - **M6 toolkit**: WebView2 directly, plain HTML/CSS/JS without build step,
   native window removed, missing runtime gives a clear message and `KS702`.
 - **M6 behaviour**: instant save without Save button and undo, as built; a
   second window brings the open one to the front (built after this
   decision).
+- **M6 WebView details and bridge**: origin `https://ui.kaltstellen.invalid/`
+  with a 403 for everything else; dev tools only in debug builds; user data
+  folder `webview2` in the data directory; window 1040 x 760 at 100 %; the
+  review options `--screenshot`, `--view`, `--theme`, `--drive` stay in the
+  release executable, hidden from help. The message set of
+  [gui-bridge.md](gui-bridge.md); every edit is one request and one save;
+  the page gets the whole state with every reply.
+- **M2 program icons**: shown at 20 CSS pixels in the three lists; read only
+  from files on a fixed local disk (no icons for programs on network drives,
+  shares or device paths), from a running process of that name first, else
+  from an entry's configured path; at most 96 device pixels; kept while the
+  window is open, at most 4 MiB; a grey square of the same size otherwise.
 - **N2 unassigned programs**: as built: only running programs, compared by
   executable name.
 - **Automatic triggers (U4)**: trigger programs per profile, opt-in, a manual
-  choice always wins, built after version 1; details in
-  [design-automatic-triggers.md](design-automatic-triggers.md).
+  choice always wins, built after version 1. All points of
+  [design-automatic-triggers.md](design-automatic-triggers.md) decided: a
+  notification with `Back to <previous>`; manual wins until the trigger
+  situation changes; a 2 to 5 s snapshot poll if it stays within Q1; a
+  `priority` per profile for two triggers at once; back to the previous
+  profile when the trigger ends, after a debounce; `trigger = [...]` per
+  profile, checked against its own profile, a section of its own in the
+  window; a remembered tray item `Automatic switching`; after sign-in the
+  profile from before the trigger is offered.
 - **Updates (UP1)**: network access for the update accepted (non-goal
   reworded); only the tray checks, daily; release layout, development
   builds and package-manager behaviour as built; `kaltstellen.old.exe` kept
   until the next update; after an update the last profile is offered, not
   applied; installing automatically by default with a manual and an off
   mode, and updates shown in the main window (built after this decision).
+- **UP1 automatic install timing**: retried when a switch ends with
+  `neutral` active and after every later check; logged once per version
+  while it waits; a saved `on` reads as `auto`; checked again right before
+  the tray quits (`quit_if_idle`); no automatic install while the session
+  ends; one install at a time. A version that could not be installed after
+  it was verified is **tried again regularly**, not over and over (waits:
+  open item 4): the tray's timer tries it when the wait ends; on request it
+  can be installed at any time.
+- **UP1 in the main window**: a section `Updates` at the bottom of the
+  sidebar; the window checks by running `kaltstellen update --check
+  --quiet`; choosing a mode that checks starts a check at once; `Install`
+  opens the same console window as the tray item.

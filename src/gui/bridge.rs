@@ -78,9 +78,12 @@ pub struct UpdateInfo {
     pub available: Option<String>,
     /// Why this copy cannot install it here.
     pub blocked: Option<String>,
-    /// The available version could not be installed here before: it is not
-    /// installed automatically, only with `install_update`.
+    /// The available version could not be installed here last time;
+    /// `install_update` still installs it.
     pub failed: bool,
+    /// After such a failure: when the automatic install tries it again
+    /// (seconds since 1970), or `null`.
+    pub retry_at: Option<u64>,
     /// Seconds since 1970 of the last check.
     pub last_check: Option<u64>,
     /// Why the last check failed.
