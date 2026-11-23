@@ -480,5 +480,32 @@ fn assert_no_webview_left(world: &World, webview: &HashSet<Proc>, timeout: Durat
         left = (alive(webview), webview_of(world));
         left.0.is_empty() && left.1.is_empty()
     });
-    assert!(gone, "{what}: WebView2 processes left behind: {left:?}");
+    if gone {
+        return;
+    }
+    // For the report: what they are, and whether they end later after all
+    // (slow) or not at all (left behind).
+    let pids: Vec<String> = left.0.iter().map(|((pid, _), _)| pid.to_string()).collect();
+    let lines = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!(
+                "Get-CimInstance Win32_Process | Where-Object {{ @({}) -contains $_.ProcessId }} | \
+                 ForEach-Object {{ \"$($_.ProcessId) parent $($_.ParentProcessId): $($_.CommandLine)\" }}",
+                pids.join(",")
+            ),
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let later = wait_for(Duration::from_secs(90), || alive(webview).is_empty());
+    panic!(
+        "{what}: WebView2 processes left behind after {} s: {left:?}\n\
+         gone 90 s later: {later}; data folder {}\n{lines}",
+        timeout.as_secs(),
+        world.path("data").join("webview2").display()
+    );
 }
