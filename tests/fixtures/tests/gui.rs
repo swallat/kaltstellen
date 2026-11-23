@@ -146,7 +146,10 @@ fn descendants(root: Proc) -> HashSet<Proc> {
 /// or gone between two polls). Only processes in a snapshot before and one
 /// after the query count, so a PID that ended and was taken by another
 /// WebView2 meanwhile is left out. A failed query fails the test, so it
-/// never reads as "none left".
+/// never reads as "none left". It finds running processes; one that is
+/// being torn down may have no readable command line any more and is not
+/// listed (seen on the ARM64 runner), so it does not replace the tree for
+/// processes that are ending.
 fn webview_of(world: &World) -> HashSet<Proc> {
     let snapshot = |s: Snapshot| -> HashSet<Proc> {
         s.processes()
@@ -158,7 +161,7 @@ fn webview_of(world: &World) -> HashSet<Proc> {
     let before = snapshot(Snapshot::take().unwrap());
     let folder = world.path("data").join("webview2");
     let script = format!(
-        "$ErrorActionPreference = 'Stop'; \
+        "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; \
          Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | \
          Where-Object {{ $_.CommandLine -and $_.CommandLine.Contains('{}') }} | \
          ForEach-Object {{ $_.ProcessId }}",
@@ -193,18 +196,21 @@ fn page_ready(world: &World) -> bool {
 /// The processes of `procs` that still run (same PID and creation time),
 /// with their names. A process that has exited but is still listed because
 /// some other process holds a handle to it (WMI, for example) does not
-/// count; one that cannot be opened is taken as running.
+/// count: opening it checks creation time and exit code. One that cannot be
+/// opened is taken as running, with the reason in its name.
 fn alive(procs: &HashSet<Proc>) -> Vec<(Proc, String)> {
     let snapshot = Snapshot::take().unwrap();
     procs
         .iter()
         .filter_map(|&(pid, created)| snapshot.find(pid, created))
-        .filter(|info| match Target::open(info, Access::Stop) {
-            Ok(Some(target)) => !target.wait_exit(Duration::ZERO),
-            Ok(None) => false,
-            Err(_) => true,
+        .filter_map(|info| {
+            let name = match Target::open(info, Access::Query) {
+                Ok(Some(_)) => info.name.clone(),
+                Ok(None) => return None,
+                Err(err) => format!("{} (open: {err})", info.name),
+            };
+            Some(((info.pid, info.created), name))
         })
-        .map(|info| ((info.pid, info.created), info.name.clone()))
         .collect()
 }
 
@@ -488,9 +494,17 @@ fn assert_no_webview_left(world: &World, webview: &HashSet<Proc>, what: &str) {
         "{what}: WebView2 processes below the window still run after {} s: {below:?}",
         WEBVIEW_END.as_secs()
     );
+    // At least 15 s for this phase; a second between queries, so they do
+    // not load the runner that WebView2 is ending on.
     let mut by_folder = HashSet::new();
-    let folder_clear = wait_for(WEBVIEW_END.saturating_sub(start.elapsed()), || {
+    let budget = WEBVIEW_END
+        .saturating_sub(start.elapsed())
+        .max(Duration::from_secs(15));
+    let folder_clear = wait_for(budget, || {
         by_folder = webview_of(world);
+        if !by_folder.is_empty() {
+            std::thread::sleep(Duration::from_secs(1));
+        }
         by_folder.is_empty()
     });
     assert!(
