@@ -727,7 +727,11 @@ fn autostart_from_the_command_line_and_the_menu_uses_the_injected_key() {
 }
 
 #[test]
-fn l9_an_error_resolves_by_itself_when_its_cause_is_gone() {
+fn l9_a_failed_start_waits_for_the_next_switch_even_when_the_program_runs() {
+    // M5 decision: a failed start names its path, and the snapshot has no
+    // image paths (A7), so a process of that name does not resolve it (it
+    // could come from another folder). The rules by name for errors without
+    // a path are unit tests of `tray::model`.
     let mut t = Tray::new();
     t.cleanup.push(KillProgram("ks-l9-tool.exe".to_owned()));
     let missing = t.dir.path().join("tools").join("ks-l9-tool.exe");
@@ -738,27 +742,26 @@ fn l9_an_error_resolves_by_itself_when_its_cause_is_gone() {
     t.start(1);
     t.click(ID_PROFILE_BASE);
     t.wait_log("tray: icon error", 1);
-    // A re-check before anything changed keeps the error.
-    t.post(WM_TIMER, 2);
-    // A pipe request is answered on the window thread after the timer
-    // message posted before it, so the re-check has run by then.
-    assert_eq!(t.run(&["status"]).0, 0);
-    assert_eq!(t.logged("error resolved by itself"), 0);
-    // The owner starts the program by hand: the error is gone without a
-    // switch at the next re-check (posted here instead of waiting 30 s).
+    // The owner starts the program by hand: a re-check (posted here instead
+    // of waiting 30 s) and a status request keep the error.
     fs::create_dir_all(missing.parent().unwrap()).unwrap();
     fs::copy(HEARTBEAT, &missing).unwrap();
     let beat = t.dir.path().join("tool.beat");
     let _tool = Fixture::spawn(str_of(&missing), &[str_of(&beat)]);
     assert!(beating(&beat));
     t.post(WM_TIMER, 2);
-    t.wait_log("tray: error resolved by itself: KS110", 1);
-    t.wait_log("tray: icon active", 1);
-    assert_eq!(
-        t.store().peek().unwrap().active_profile,
-        "work",
-        "no switch"
+    // A pipe request is answered on the window thread after the timer
+    // message posted before it, so the re-check has run by then.
+    assert_eq!(t.run(&["status"]).0, 0);
+    assert_eq!(t.logged("error resolved by itself"), 0);
+    assert_eq!(t.logged("tray: icon active"), 0);
+    // The next switch finds the program running and is clean.
+    t.click(ID_PROFILE_BASE);
+    t.wait_log(
+        "tray: switch to \"work\" finished, active profile \"work\", 0 error(s)",
+        1,
     );
+    t.wait_log("tray: icon active", 1);
     assert_eq!(t.quit(), Some(0));
 }
 

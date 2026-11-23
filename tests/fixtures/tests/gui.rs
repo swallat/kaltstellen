@@ -414,7 +414,7 @@ impl Drop for TrayOf {
 }
 
 #[test]
-fn m5_failure_markers_come_from_the_trays_error_state_and_clear_when_resolved() {
+fn m5_failure_markers_come_from_the_trays_error_state_and_clear_with_a_clean_switch() {
     // A start entry whose file is missing (KS110) beside one that works.
     let world = World::new("");
     let missing = world.path("ks-wv-m5.exe");
@@ -452,57 +452,88 @@ fn m5_failure_markers_come_from_the_trays_error_state_and_clear_when_resolved() 
     );
     assert_eq!(entries(&results[1])[1]["errors"], serde_json::json!([]));
 
-    // L9: started by hand, the error resolves; the next refresh shows no
-    // marker, without a switch.
+    // Started by hand, the error stays: it names a path, and the snapshot
+    // cannot tell a process from this path from one of the same name
+    // elsewhere (A7), so it waits for the next switch. That switch finds the
+    // program running and is clean: the marker goes.
     copy_fixture(HEARTBEAT, world.dir.path(), "ks-wv-m5.exe");
     let beat = world.path("m5.beat");
     let _program = Fixture::spawn(str_of(&missing), &[str_of(&beat)]);
     assert!(beating(&beat));
-    let results = drive(&world, "m5-resolved", r#"[{"type": "get_state"}]"#);
+    let results = drive(
+        &world,
+        "m5-again",
+        r#"[{"type": "get_state"}, {"type": "apply", "profile": "broken"}]"#,
+    );
     assert_eq!(
-        entries(&results[0])[0]["errors"],
+        entries(&results[0])[0]["errors"][0]["code"],
+        "KS110",
+        "{results}"
+    );
+    assert_eq!(results[1]["status"], "Applied \"broken\".", "{results}");
+    assert_eq!(
+        entries(&results[1])[0]["errors"],
         serde_json::json!([]),
         "{results}"
     );
 }
 
 #[test]
-fn m2_a_drop_goes_through_the_page_handler_and_the_host_without_navigating() {
-    // A real drop from Explorer cannot be automated (docs/manual-checks.md
-    // 13d), and WebView2 hands over only files on disk: files made up in
-    // the page are refused by `postMessageWithAdditionalObjects` itself.
-    // This drives the page's own drop handler with such files: the refusal
-    // reaches the status line, nothing is added and the page stays. A
-    // `drop_files` without attached files is refused by the host: the page
-    // cannot name paths itself. The checks of real paths are unit tests of
-    // the bridge.
+fn m2_files_dropped_from_disk_are_added_through_the_host_and_nothing_navigates() {
+    // A drop from Explorer itself cannot be automated (docs/manual-checks.md
+    // 13d). The host drops files on disk through DevTools
+    // (`Input.dispatchDragEvent`, step `drop_real`), so the page's drop
+    // handler, `postMessageWithAdditionalObjects`, the host's reading of
+    // `ICoreWebView2File::Path` and the bridge's checks all run; then the
+    // page still answers (nothing navigated away). Files made up in the
+    // page (`drop`) are refused by WebView2 itself, and a `drop_files`
+    // without files by the host: the page cannot name paths.
     let world = World::new(CONFIG);
-    let results = drive(
-        &world,
-        "m2-drop",
+    let exe = copy_fixture(HEARTBEAT, world.dir.path(), "ks-wv-drop.exe");
+    let notes = world.path("notes.txt");
+    fs::write(&notes, "x").unwrap();
+    let paths = serde_json::to_string(&[str_of(&exe), str_of(&notes)]).unwrap();
+    let steps = format!(
         r#"[
-            {"type": "drop", "names": ["ks-made-up.exe", "notes.txt"]},
-            {"type": "drop_files"},
-            {"type": "get_state"}
-        ]"#,
+            {{"type": "drop_real", "paths": {paths}}},
+            {{"type": "drop", "names": ["ks-made-up.exe"]}},
+            {{"type": "drop_files"}},
+            {{"type": "get_state"}}
+        ]"#
     );
-    let drop = &results[0];
-    assert_eq!(drop["ok"], false, "{results}");
+    let results = drive(&world, "m2-drop", &steps);
+    let real = &results[0];
+    assert_eq!(real["ok"], true, "{results}");
+    assert_eq!(
+        real["data"]["files"][0]["exe"], "ks-wv-drop.exe",
+        "{results}"
+    );
+    assert_eq!(real["data"]["files"][0]["path"], str_of(&exe), "{results}");
     assert!(
-        drop["status"]
+        real["data"]["refused"][0]
             .as_str()
             .unwrap()
-            .contains("could not be handed over"),
+            .contains("not a program"),
+        "{results}"
+    );
+    assert!(
+        real["status"].as_str().unwrap().contains("1 of 2 added"),
         "{results}"
     );
     assert_eq!(results[1]["ok"], false, "{results}");
+    assert_eq!(results[2]["ok"], false, "{results}");
     assert!(
-        results[1]["error"].as_str().unwrap().contains("no file"),
+        results[2]["error"].as_str().unwrap().contains("no file"),
         "{results}"
     );
-    // Still the page (it answered), and the file is unchanged.
-    assert_eq!(results[2]["ok"], true, "{results}");
-    assert_eq!(world.config(), CONFIG);
+    // Still the page, and the status from the bridge survives a refresh.
+    assert_eq!(results[3]["ok"], true, "{results}");
+    let config = world.config();
+    assert!(
+        config.contains("exe = \"ks-wv-drop.exe\"") && config.contains(str_of(&exe)),
+        "{config}"
+    );
+    kaltstellen::config::parse(&config).expect("still valid");
 }
 
 #[test]

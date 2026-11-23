@@ -52,13 +52,16 @@ const QUICK: Duration = Duration::from_millis(500);
 /// M5: the tray's status for the main window, which must not hang on its
 /// own thread: no waiting for a tray that is still starting and only a
 /// short one for a busy pipe, and at most [`ANSWER`] for the answer (a tray
-/// that accepted but is slow, e.g. in its end-of-session wait). `None` when
-/// no tray answers that way.
-pub fn status_now(endpoints: &Endpoints) -> Option<protocol::TrayStatus> {
-    let conn = pipe::connect(&endpoints.pipe, QUICK).ok()??;
-    match pipe::with_deadline(ANSWER, || converse(conn, Command::Status, &mut || {})) {
-        Ok(Body::Status(status)) => Some(status),
-        _ => None,
+/// that accepted but is slow, e.g. in its end-of-session wait). `Ok(None)`
+/// when no tray has a pipe (none runs, or it is still starting and knows
+/// no switch yet); `Err` when a tray did not answer that way.
+pub fn status_now(endpoints: &Endpoints) -> Result<Option<protocol::TrayStatus>> {
+    let Some(conn) = pipe::connect(&endpoints.pipe, QUICK)? else {
+        return Ok(None);
+    };
+    match pipe::with_deadline(ANSWER, || converse(conn, Command::Status, &mut || {}))? {
+        Body::Status(status) => Ok(Some(status)),
+        _ => Err(unreachable("the tray did not answer the status request")),
     }
 }
 

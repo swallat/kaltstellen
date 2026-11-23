@@ -156,7 +156,8 @@ input[type="checkbox"] { min-height: auto; width: 1rem; height: 1rem; accent-col
   background: var(--color-error); color: var(--color-surface); font-size: 0.6875rem; line-height: 1;
 }
 /* M2: programs dropped from Explorer. */
-.detail.dropping #entries, .detail.dropping #entries-empty { outline: 2px dashed var(--color-primary); outline-offset: 2px; }.protection.hard { color: var(--color-error); }
+.detail.dropping #entries, .detail.dropping #entries-empty { outline: 2px dashed var(--color-primary); outline-offset: 2px; }
+.protection.hard { color: var(--color-error); }
 .protection.warn { color: var(--color-accent); }
 
 /* Status bar */

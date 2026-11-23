@@ -32,11 +32,25 @@ function setStatus(text, isError = false) {
   status.className = isError ? 'error-text' : '';
 }
 
-/** Sends a request, takes over the returned state, reports errors. */
-async function call(type, fields = {}) {
+/** A message of the page itself (an error, a refusal) in the status line.
+ * It stays until the next action, so a refresh of the state (focus) does
+ * not replace it with the host's status. */
+let localStatus = null;
+
+function notice(text, isError = true) {
+  localStatus = { text, isError };
+  setStatus(text, isError);
+}
+
+/** Sends a request, takes over the returned state, reports errors. A
+ * `quiet` request (a list being loaded) is not a new action of the user:
+ * the page's own message stays. */
+async function call(type, fields = {}, { quiet = false } = {}) {
+  if (!quiet) localStatus = null;
   const reply = await request(type, fields);
+  if (!reply.ok) localStatus = { text: reply.error, isError: true };
   if (reply.state) adopt(reply.state);
-  if (!reply.ok) setStatus(reply.error, true);
+  else if (!reply.ok) setStatus(reply.error, true);
   return reply;
 }
 
@@ -58,7 +72,8 @@ function render() {
   $('autostart-wrap').hidden = state.autostart === null;
   $('autostart').checked = !!state.autostart;
   $('config-file').textContent = state.config_file;
-  setStatus(state.status);
+  if (localStatus) setStatus(localStatus.text, localStatus.isError);
+  else setStatus(state.status);
   renderUpdate();
   renderProfiles();
   renderDetail();
@@ -297,7 +312,7 @@ async function loadUnassigned() {
   const profile = current();
   unassigned = [];
   if (profile) {
-    const reply = await call('unassigned', { profile: profile.name });
+    const reply = await call('unassigned', { profile: profile.name }, { quiet: true });
     // Another profile was selected meanwhile: its own request draws it.
     if (current()?.name !== profile.name) return;
     unassigned = reply.ok ? reply.data : [];
@@ -429,13 +444,16 @@ async function addProgram(exe, path, problems = null) {
   let confirmed = false;
   if (check.data.protection === 'hard') {
     $('add-error').textContent = check.data.message;
-    setStatus(check.data.message, true);
+    notice(check.data.message);
     problems?.push(check.data.message);
     return false;
   }
   if (check.data.protection === 'warn') {
     confirmed = await confirmDialog('Warn list', check.data.message, 'Add anyway');
-    if (!confirmed) return false;
+    if (!confirmed) {
+      problems?.push(`${exe} was not confirmed`);
+      return false;
+    }
   }
   const reply = await call('add_entry', { profile: current().name, exe, path, confirmed });
   if (reply.ok) await loadUnassigned();
@@ -483,25 +501,28 @@ addEventListener('drop', (event) => {
  * would, one after the other; refused files are named in the status line. */
 async function dropFiles(files) {
   const profile = current().name;
+  localStatus = null;
   const reply = await requestWithFiles('drop_files', {}, files);
+  if (!reply.ok) localStatus = { text: reply.error, isError: true };
   if (reply.state) adopt(reply.state);
-  if (!reply.ok) {
-    setStatus(reply.error, true);
-    return reply;
-  }
+  else if (!reply.ok) setStatus(reply.error, true);
+  if (!reply.ok) return reply;
   const problems = [...reply.data.refused];
   let added = 0;
-  for (const file of reply.data.files) {
-    if (current()?.name !== profile) break;
+  for (const [index, file] of reply.data.files.entries()) {
+    if (current()?.name !== profile) {
+      // Another profile is shown now: the rest is not added anywhere.
+      for (const rest of reply.data.files.slice(index)) {
+        problems.push(`${rest.exe} was not added: another profile was selected`);
+      }
+      break;
+    }
     if (await addProgram(file.exe, file.path, problems)) added++;
   }
   if (added > 0 && $('add-dialog').open) $('add-dialog').close();
-  const total = reply.data.files.length + reply.data.refused.length;
-  if (problems.length > 0) {
-    setStatus(`${added} of ${total} added to "${profile}". Not added: ${problems.join('; ')}`, true);
-  } else if (added > 1) {
-    setStatus(`${added} programs added to "${profile}"; saved.`);
-  }
+  // The summary goes into the host's status line, so a refresh keeps it.
+  await call('drop_done', { profile, added, not_added: problems });
+  if (problems.length > 0) $('status').className = 'error-text';
   return reply;
 }
 
@@ -603,6 +624,8 @@ addEventListener('focus', async () => {
 });
 
 onEvent(async (event) => {
+  // The end of something the user started: its result is the news now.
+  localStatus = null;
   if (event.event === 'applied') {
     adopt(event.state);
     await loadUnassigned();
@@ -613,8 +636,20 @@ onEvent(async (event) => {
 // Test driver: runs bridge requests in order (kaltstellen gui --drive).
 globalThis.kaltstellenDrive = async (steps) => {
   const results = [];
-  for (const step of steps) {
+  for (const [index, step] of steps.entries()) {
     const { type, ...fields } = step;
+    if (type === 'drop_real') {
+      // M2: the host drops the step's files from disk through DevTools
+      // (Input.dispatchDragEvent) onto the middle of the profile.
+      const box = $('detail').getBoundingClientRect();
+      dropping = null;
+      notify('drive_drop', { step: index, x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) });
+      const deadline = Date.now() + 20000;
+      while (!dropping && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+      const reply = dropping ? await dropping : { ok: false, error: 'no drop arrived', state };
+      results.push({ type, ok: reply.ok, error: reply.error || null, status: $('status').textContent, data: reply.data ?? null, state });
+      continue;
+    }
     if (type === 'drop') {
       // M2: a drop event as Explorer's would arrive, with files made up in
       // the page (they have names, no paths), through the real handler.

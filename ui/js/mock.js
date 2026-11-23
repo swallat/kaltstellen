@@ -179,6 +179,14 @@ function handle(message) {
       }
       return { ok: true, data: { files, refused } };
     }
+    case 'drop_done': {
+      const notAdded = m.not_added || [];
+      const total = m.added + notAdded.length;
+      state.status = notAdded.length
+        ? `${m.added} of ${total} added to "${m.profile}". Not added: ${notAdded.join('; ')}`
+        : `${m.added} program${m.added === 1 ? '' : 's'} added to "${m.profile}"; saved.`;
+      return { ok: true };
+    }
     case 'running': return { ok: true, data: clone(running) };
     case 'icons': {
       if (!Array.isArray(m.programs) || m.programs.length > 256) return fail('at most 256 icons per request');

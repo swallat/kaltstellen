@@ -9,11 +9,23 @@ use crate::config::NEUTRAL;
 use crate::error::{Code, Error, Step};
 use crate::process::Guest;
 
-/// M5: most errors the status reply carries, and the longest text of one;
-/// keeps the reply far below the pipe's line limit whatever a profile
-/// holds.
-const MAX_ERROR_LINES: usize = 32;
-const MAX_ERROR_TEXT: usize = 300;
+/// M5: the encoded size `last_switch` may take in the status reply, in
+/// bytes, so the reply stays far below the pipe's 64 KiB line whatever a
+/// profile holds; errors beyond it are left out (the menu still has them).
+const MAX_LAST_SWITCH: usize = 16 * 1024;
+/// Longest program name, text and profile name of one error, in bytes.
+const MAX_ERROR_FIELD: usize = 512;
+/// Longest path sent with an error, in bytes.
+const MAX_ERROR_PATH: usize = 1024;
+
+/// `text` cut to at most `max` bytes, on a character boundary.
+fn cut(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
 
 /// Profile names compare like `Config::profile` does: trimmed, any case.
 fn same_profile(a: &str, b: &str) -> bool {
@@ -249,10 +261,15 @@ impl SwitchError {
     ///   suspend step: resolved when the program no longer runs.
     /// - Everything else (state or log I/O, warn list, resume, snapshot):
     ///   stays until the next switch.
+    /// - An error that names a path (a failed start) stays until the next
+    ///   switch too (M5): the handle-free snapshot has no image paths (A7),
+    ///   so a process of that name started from another folder would
+    ///   resolve it wrongly.
     pub fn of(error: &Error) -> Self {
         let resolution = error
             .program
             .clone()
+            .filter(|_| error.path.is_none())
             .and_then(|exe| match (error.code, error.step) {
                 (Code::StartFailed | Code::ElevationRequired, _) => Some(Resolution::Runs(exe)),
                 (Code::CloseTimeout | Code::TerminateFailed | Code::SuspendFailed, _) => {
@@ -371,25 +388,31 @@ impl Status {
     /// markers of the main window; `None` when there are none. They belong
     /// to the profile that switch made active.
     pub fn last_switch(&self) -> Option<LastSwitch> {
-        let errors: Vec<ErrorLine> = self
-            .switch_errors
-            .iter()
-            .filter_map(|e| {
-                Some(ErrorLine {
-                    code: e.code?.to_string(),
-                    program: e.program.clone()?,
-                    // A path too long to send is left out; the marker then
-                    // goes by name only.
-                    path: e.path.clone().filter(|p| p.len() <= MAX_ERROR_TEXT),
-                    text: e.text.chars().take(MAX_ERROR_TEXT).collect(),
-                })
-            })
-            .take(MAX_ERROR_LINES)
-            .collect();
-        (!errors.is_empty()).then(|| LastSwitch {
-            profile: self.active.clone(),
-            errors,
-        })
+        let profile = cut(&self.active, MAX_ERROR_FIELD);
+        // Measured as sent (JSON escapes double every backslash).
+        let encoded = |value: &str| serde_json::to_string(value).map_or(usize::MAX, |s| s.len());
+        let mut used = encoded(&profile);
+        let mut errors = Vec::new();
+        for e in &self.switch_errors {
+            let (Some(code), Some(program)) = (e.code, &e.program) else {
+                continue;
+            };
+            let line = ErrorLine {
+                code: code.to_string(),
+                program: cut(program, MAX_ERROR_FIELD),
+                // A cut path would match no entry; one too long is left out
+                // and the marker goes by name only.
+                path: e.path.clone().filter(|p| p.len() <= MAX_ERROR_PATH),
+                text: cut(&e.text, MAX_ERROR_FIELD),
+            };
+            let size = serde_json::to_string(&line).map_or(usize::MAX, |s| s.len() + 1);
+            if used.saturating_add(size) > MAX_LAST_SWITCH {
+                break;
+            }
+            used += size;
+            errors.push(line);
+        }
+        (!errors.is_empty()).then_some(LastSwitch { profile, errors })
     }
 
     /// Whether a later check could still resolve an error (the re-check
@@ -966,12 +989,73 @@ mod tests {
             }]
         );
         // Resolved (L9) or replaced by a clean switch: nothing to mark.
-        status.resolve(&|exe: &str| exe == "tool.exe");
+        let freeze = Error::new(Code::SuspendFailed, "denied")
+            .program("chat.exe")
+            .step(Step::Suspend);
+        status.finished("focus".into(), vec![SwitchError::of(&freeze)]);
+        assert!(status.last_switch().is_some());
+        status.resolve(&|_: &str| false);
         assert_eq!(status.last_switch(), None);
         status.finished("focus".into(), vec![SwitchError::of(&start)]);
         assert!(status.last_switch().is_some());
         status.finished("focus".into(), vec![]);
         assert_eq!(status.last_switch(), None);
+    }
+
+    #[test]
+    fn m5_a_failed_start_with_a_path_is_not_resolved_by_its_name() {
+        // tool.exe in C:\A is missing; a tool.exe from C:\B runs. The
+        // snapshot has no image paths (A7), so the error must stay.
+        let start = Error::new(Code::StartFailed, "missing")
+            .program("tool.exe")
+            .path("C:\\A\\tool.exe")
+            .step(Step::Start);
+        let mut status = Status::default();
+        status.finished("focus".into(), vec![SwitchError::of(&start)]);
+        assert!(!status.resolvable(), "no re-check timer for it");
+        assert!(status.resolve(&|exe: &str| exe == "tool.exe").is_empty());
+        let last = status.last_switch().unwrap();
+        assert_eq!(last.errors[0].path.as_deref(), Some("C:\\A\\tool.exe"));
+        assert_eq!(status.icon(), Icon::Error);
+        // The next switch replaces it.
+        status.finished("focus".into(), vec![]);
+        assert_eq!(status.last_switch(), None);
+    }
+
+    #[test]
+    fn m5_last_switch_stays_below_its_byte_budget_and_the_pipe_line() {
+        use super::super::protocol::{Body, MAX_LINE, TrayStatus, encode, reply};
+        let long = "ü€".repeat(400);
+        let path = format!("C:{}", "\\a".repeat(400));
+        let errors: Vec<SwitchError> = (0..200)
+            .map(|i| {
+                SwitchError::of(
+                    &Error::new(Code::SuspendFailed, format!("{i} {long}"))
+                        .program(format!("{long}{i}.exe"))
+                        .path(&path)
+                        .step(Step::Suspend),
+                )
+            })
+            .collect();
+        let mut status = Status::default();
+        status.finished(long.clone(), errors);
+        let last = status.last_switch().unwrap();
+        assert!(!last.errors.is_empty() && last.errors.len() < 200);
+        let encoded = serde_json::to_string(&last).unwrap();
+        assert!(encoded.len() <= MAX_LAST_SWITCH + 64, "{}", encoded.len());
+        for line in &last.errors {
+            // Cut by bytes, on character boundaries (a `String` cannot be
+            // anything else; `cut` would panic otherwise).
+            assert!(line.text.len() <= MAX_ERROR_FIELD && line.program.len() <= MAX_ERROR_FIELD);
+            assert!(line.path.is_some(), "a path of 802 bytes is sent");
+        }
+        let line = encode(&reply(Body::Status(TrayStatus {
+            state: crate::state::State::default(),
+            running: Some(long.clone()),
+            waiting: None,
+            last_switch: Some(last),
+        })));
+        assert!(line.len() < MAX_LINE, "{}", line.len());
     }
 
     #[test]

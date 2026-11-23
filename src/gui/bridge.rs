@@ -53,8 +53,9 @@ pub trait Host {
     /// there is none, in the order asked.
     fn icons(&self, wanted: &[Wanted], size: u32) -> Vec<Option<String>>;
     /// M5: the open errors of the last switch, from the running tray;
-    /// `None` without a tray or without errors.
-    fn last_switch(&self) -> Option<LastSwitch>;
+    /// `Ok(None)` without a tray or without errors, `Err` when the tray did
+    /// not answer in time (the markers shown stay as they are).
+    fn last_switch(&self) -> Result<Option<LastSwitch>, String>;
 }
 
 /// Most programs one `icons` request may name.
@@ -145,6 +146,13 @@ pub enum Request {
     /// M2: files dropped onto the window. Their paths are not in the
     /// message: the host reads them from the dropped file objects.
     DropFiles,
+    /// M2: the page has added what it could of a drop; the summary goes
+    /// into the status line, so a later refresh of the state keeps it.
+    DropDone {
+        profile: String,
+        added: usize,
+        not_added: Vec<String>,
+    },
     Running,
     Unassigned {
         profile: String,
@@ -489,7 +497,7 @@ impl<H: Host> Bridge<H> {
             Request::GetState => {
                 // M5: asked here and when a switch ends, not with every
                 // reply: it is a round trip to the tray.
-                self.last_switch = self.host.last_switch();
+                self.refresh_errors();
                 Ok(None)
             }
             Request::CreateProfile { name } => {
@@ -664,6 +672,29 @@ impl<H: Host> Bridge<H> {
                 }
                 Ok(Some(json!({"files": files, "refused": refused})))
             }
+            Request::DropDone {
+                profile,
+                added,
+                not_added,
+            } => {
+                if added > MAX_DROPPED || not_added.len() > MAX_DROPPED {
+                    return Err(format!("at most {MAX_DROPPED} files at once"));
+                }
+                let mut texts = vec![profile.as_str()];
+                texts.extend(not_added.iter().map(String::as_str));
+                check_text(&texts)?;
+                let profile = profile.trim();
+                let total = added + not_added.len();
+                self.status = match (added, not_added.is_empty()) {
+                    (1, true) => format!("1 program added to \"{profile}\"; saved."),
+                    (_, true) => format!("{added} programs added to \"{profile}\"; saved."),
+                    (_, false) => format!(
+                        "{added} of {total} added to \"{profile}\". Not added: {}",
+                        not_added.join("; ")
+                    ),
+                };
+                Ok(None)
+            }
             Request::Running => {
                 let list: Vec<Value> = self
                     .host
@@ -814,11 +845,19 @@ impl<H: Host> Bridge<H> {
         json!({"v": VERSION, "event": "update_checked", "state": self.state()}).to_string()
     }
 
+    /// M5 `[assumed]`: only an answer of the tray replaces the markers; a
+    /// tray that did not answer in time leaves the last known ones.
+    fn refresh_errors(&mut self) {
+        if let Ok(last) = self.host.last_switch() {
+            self.last_switch = last;
+        }
+    }
+
     /// The switch started by `apply` ended; returns the event for the page.
     pub fn applied(&mut self, target: &str, code: u8, stderr: &str) -> String {
         self.applying = false;
         self.status = model::applied(target, code, stderr);
-        self.last_switch = self.host.last_switch();
+        self.refresh_errors();
         if let Some(name) = self.pending_delete.take() {
             if target == NEUTRAL && code <= crate::exit::ERRORS {
                 self.snapshot = Some(self.document.clone());
@@ -850,6 +889,7 @@ mod tests {
         checks: Rc<RefCell<usize>>,
         installs: Rc<RefCell<usize>>,
         last_switch: Rc<RefCell<Option<LastSwitch>>>,
+        tray_silent: Rc<std::cell::Cell<bool>>,
     }
 
     impl Host for Fake {
@@ -917,8 +957,11 @@ mod tests {
                 })
                 .collect()
         }
-        fn last_switch(&self) -> Option<LastSwitch> {
-            self.last_switch.borrow().clone()
+        fn last_switch(&self) -> Result<Option<LastSwitch>, String> {
+            if self.tray_silent.get() {
+                return Err("no answer".into());
+            }
+            Ok(self.last_switch.borrow().clone())
         }
     }
 
@@ -996,6 +1039,33 @@ mod tests {
         assert!(b.document().config().profile("x").is_none());
         let many = vec![tool; MAX_DROPPED + 1];
         assert_eq!(drop(&mut b, many)["ok"], false);
+
+        // The page's summary goes into the bridge's status, so a refresh
+        // of the state (focus) shows it still.
+        let done = send(
+            &mut b,
+            json!({"v": 1, "id": 5, "type": "drop_done", "profile": "focus", "added": 1,
+                   "not_added": ["notes.txt is not a program (.exe)", "x.exe cannot be found"]}),
+        );
+        assert_eq!(done["ok"], true, "{done}");
+        let summary = "1 of 3 added to \"focus\". Not added: notes.txt is not a program (.exe); x.exe cannot be found";
+        assert_eq!(done["state"]["status"], summary);
+        let later = send(&mut b, json!({"v": 1, "id": 6, "type": "get_state"}));
+        assert_eq!(later["state"]["status"], summary);
+        let done = send(
+            &mut b,
+            json!({"v": 1, "id": 7, "type": "drop_done", "profile": "focus", "added": 2, "not_added": []}),
+        );
+        assert_eq!(
+            done["state"]["status"],
+            "2 programs added to \"focus\"; saved."
+        );
+        let bad = send(
+            &mut b,
+            json!({"v": 1, "id": 8, "type": "drop_done", "profile": "focus", "added": 0,
+                   "not_added": ["a\u{0}b"]}),
+        );
+        assert_eq!(bad["ok"], false);
     }
 
     #[test]
@@ -1027,7 +1097,25 @@ mod tests {
         *fake.last_switch.borrow_mut() = None;
         let reply = send(&mut b, json!({"v": 1, "id": 3, "type": "running"}));
         assert_eq!(errors(&reply).as_array().unwrap().len(), 1);
-        // ...which the end of a switch is too.
+        // ...and through a refresh the tray did not answer in time.
+        fake.tray_silent.set(true);
+        let reply = send(&mut b, json!({"v": 1, "id": 4, "type": "get_state"}));
+        assert_eq!(errors(&reply).as_array().unwrap().len(), 1);
+        fake.tray_silent.set(false);
+        // An answer replaces them, as the end of a switch does.
+        let reply = send(&mut b, json!({"v": 1, "id": 5, "type": "get_state"}));
+        assert_eq!(errors(&reply), json!([]));
+        *fake.last_switch.borrow_mut() = Some(LastSwitch {
+            profile: "focus".into(),
+            errors: vec![ErrorLine {
+                code: "KS105".into(),
+                program: "browser.exe".into(),
+                path: None,
+                text: "x".into(),
+            }],
+        });
+        send(&mut b, json!({"v": 1, "id": 6, "type": "get_state"}));
+        *fake.last_switch.borrow_mut() = None;
         let event: Value = serde_json::from_str(&b.applied("focus", 0, "")).unwrap();
         assert_eq!(errors(&event), json!([]));
     }

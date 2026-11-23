@@ -91,6 +91,9 @@ pub enum Answer {
     Script(String),
     /// Capture the page as PNG into the file, then close.
     CaptureAndClose(PathBuf),
+    /// Call these DevTools protocol methods (name, parameters as JSON) one
+    /// after the other (test driver: a drop of files on disk, M2).
+    DevTools(Vec<(String, String)>),
     Close,
 }
 
@@ -329,6 +332,30 @@ fn act(hwnd: HWND, answer: Answer) {
             let _ = unsafe { PostMessageW(Some(hwnd), WM_CAPTURE, WPARAM(0), LPARAM(0)) };
         }
         Answer::Close => close(hwnd),
+        Answer::DevTools(calls) => dev_tools(webview, calls.into()),
+    }
+}
+
+/// Runs the first call, and the rest once it has completed.
+fn dev_tools(webview: ICoreWebView2, mut calls: std::collections::VecDeque<(String, String)>) {
+    let Some((method, params)) = calls.pop_front() else {
+        return;
+    };
+    let name = wide(&method);
+    let params = wide(&params);
+    let next = webview.clone();
+    let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, _| {
+        if let Err(err) = result {
+            log::warn!("gui: {method}: {err}");
+        }
+        dev_tools(next, calls);
+        Ok(())
+    }));
+    // SAFETY: NUL-terminated strings that outlive the call.
+    if let Err(err) = unsafe {
+        webview.CallDevToolsProtocolMethod(PCWSTR(name.as_ptr()), PCWSTR(params.as_ptr()), &handler)
+    } {
+        log::warn!("gui: DevTools call failed: {err}");
     }
 }
 
@@ -615,7 +642,7 @@ const MAX_ATTACHED: u32 = 1024;
 /// `chrome.webview.postMessageWithAdditionalObjects` (files dropped from
 /// Explorer: the page itself only sees their names). An object that is not
 /// a file, or a file without a path, gives an empty path, which the bridge
-/// refuses. Needs a runtime with `ICoreWebView2WebMessageReceivedEventArgs2`;
+/// refuses as "an item that is not a file". Needs a runtime with `ICoreWebView2WebMessageReceivedEventArgs2`;
 /// an older one gives none.
 fn attached_files(args: &ICoreWebView2WebMessageReceivedEventArgs) -> Vec<PathBuf> {
     use windows::core::Interface;

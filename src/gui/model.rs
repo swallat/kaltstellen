@@ -7,6 +7,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::error::Code;
 use crate::exit;
 use crate::process::ProcessInfo;
 use crate::protection::{self, Protection};
@@ -73,9 +74,17 @@ pub fn check_add(exe: &str) -> AddCheck {
 
 /// M2: checks a file dropped onto the window. The path comes from WebView2
 /// (the file the user dropped), but is untrusted like every other input of
-/// the page: it must be a full path to an existing `.exe` file. Returns the
-/// executable name, or why the file is refused.
+/// the page: it must be a full path to an existing `.exe` file on a fixed
+/// local disk. Returns the executable name, or why the file is refused.
+/// `[assumed]`: like icons (M2), only fixed local disks; that is checked
+/// before the file system is asked anything, so a share, a mapped or
+/// removable drive or a device path (`\\?\`, `\\.\`) causes no I/O. An
+/// empty path is what the host gives for an attached object that is not a
+/// file.
 pub fn check_dropped(path: &Path, max_text: usize) -> Result<String, String> {
+    if path.as_os_str().is_empty() {
+        return Err("an item that is not a file was dropped".to_owned());
+    }
     let text = path.to_str().ok_or("a dropped name is not valid text")?;
     if text.len() > max_text || text.chars().any(char::is_control) {
         return Err("a dropped name is too long or has control characters".to_owned());
@@ -86,6 +95,11 @@ pub fn check_dropped(path: &Path, max_text: usize) -> Result<String, String> {
     if !path.is_absolute() {
         return Err(format!(
             "\"{name}\" has no full path; drop it from Explorer"
+        ));
+    }
+    if !crate::win32::icon::on_a_local_disk(path) {
+        return Err(format!(
+            "{name} is not on a local disk (network, removable and device paths are refused); copy it to a local folder first"
         ));
     }
     if path.is_dir() {
@@ -140,8 +154,9 @@ pub fn failure_label(code: &str) -> &'static str {
 /// switch made active gets markers. An error belongs to an entry of the
 /// same executable name; where both the error and the entry name a path,
 /// the paths must be the same too, since C2 lets two entries share a name
-/// with different paths. Errors that name a child process or no program
-/// stay in the status line only.
+/// with different paths. Errors that name a child process or no program,
+/// and failed resumes (KS106, programs of the profile left behind), stay
+/// in the status line only.
 pub fn failures(
     last: Option<&LastSwitch>,
     profile: &str,
@@ -153,6 +168,9 @@ pub fn failures(
     };
     last.errors
         .iter()
+        // A failed resume (KS106) concerns a program of the profile left
+        // behind, even if the new one has an entry of that name.
+        .filter(|e| e.code != Code::ResumeFailed.to_string())
         .filter(|e| e.program.eq_ignore_ascii_case(exe))
         .filter(|e| match (path, e.path.as_deref()) {
             (Some(entry), Some(error)) => crate::process::same_path(entry, Path::new(error)),
@@ -244,7 +262,18 @@ mod tests {
         assert!(refused(&folder).contains("is a folder"));
         assert!(refused(&dir.path().join("gone.exe")).contains("cannot be found"));
         assert!(refused(Path::new("tool.exe")).contains("no full path"));
-        assert!(refused(Path::new("")).contains("no full path"));
+        assert!(refused(Path::new("")).contains("not a file"));
+        // Not a fixed local disk: refused before any file-system call.
+        for path in [
+            "\\\\server\\share\\tool.exe",
+            "\\\\?\\C:\\tools\\tool.exe",
+            "\\\\.\\pipe\\tool.exe",
+        ] {
+            assert!(
+                refused(Path::new(path)).contains("not on a local disk"),
+                "{path}"
+            );
+        }
         let control = dir.path().join("a\u{7}b.exe");
         assert!(refused(&control).contains("control"));
         assert!(check_dropped(&exe, 10).is_err(), "too long");
@@ -265,6 +294,7 @@ mod tests {
                 line("KS110", "tool.exe", Some("C:\\A\\tool.exe")),
                 line("KS105", "Browser.exe", None),
                 line("KS999", "odd.exe", None),
+                line("KS106", "chat.exe", None),
             ],
         };
         let p = |s: &str| Some(Path::new(s).to_owned());
@@ -295,6 +325,8 @@ mod tests {
         assert!(of("focus", "other.exe", None).is_empty());
         assert!(of("play", "browser.exe", None).is_empty());
         assert!(failures(None, "focus", "browser.exe", None).is_empty());
+        // A failed resume concerns the profile left behind: no marker.
+        assert!(of("focus", "chat.exe", None).is_empty());
     }
 
     #[test]
