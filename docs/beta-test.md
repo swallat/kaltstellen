@@ -35,7 +35,9 @@ If PowerShell refuses to run scripts, start it with
   `1.0.0-beta.1`), refuses the file if its SHA-256 differs, and installs it
   as `%LOCALAPPDATA%\Programs\kaltstellen\kaltstellen.exe` (`-InstallDir`).
   `-Exe <file>` installs a local build instead. This download is the
-  script's only network access.
+  script's only network access; the test tray itself may check GitHub for
+  updates unless the update mode is off. With `-Sandbox`, an `-InstallDir`
+  that holds a `kaltstellen.exe` (or the real install folder) is refused.
 - Copies `%APPDATA%\kaltstellen`, `%LOCALAPPDATA%\kaltstellen` and the
   Run value `kaltstellen` to `%LOCALAPPDATA%\kaltstellen-beta-backup\<time>\`
   and checks the copies (SHA-256 of every file) before it changes anything,
@@ -125,19 +127,26 @@ at sign-in and offers the last profile without applying it.
 of the first tray start after it are taken, not the time between. The
 results include the output of `kaltstellen list` and `status
 --unassigned`, which names programs that ran; `collect -NoProgramLists`
-leaves it out. Your profile folder (also in its short 8.3 form), user name
-and computer name appear as `%USERPROFILE%`, `%USERNAME%` and
-`%COMPUTERNAME%`; nothing else is collected. Look at it before you send it.
+leaves it out, and `state.json` too (it names what was frozen); the results
+and log lines still name the programs of `beta-test.json`, which are the
+test. Your profile folder (also in its short 8.3 form), user name, domain
+and computer name appear as `%USERPROFILE%`, `%USERNAME%`, `%USERDOMAIN%`
+and `%COMPUTERNAME%`, account SIDs as `S-1-5-21-<sid>`; nothing else is
+collected. Look at it before you send it.
 
 **teardown** is safe to repeat, also after an abort or a crash: `recover`,
 `neutral`, quit the tray (and windows) it started, end the programs it
 started (fixtures and copies in the test folder are killed, your programs
 are asked to close), end the WebView2 processes of the test's data folder,
-check each backup against its manifest and only then put the folders and
+wait until no kaltstellen runs in the session (it asks you to quit any
+other copy), check each backup against its manifest and only then put the folders and
 the Run value back exactly (and remove them if they did not exist before),
 remove the test folder (links in it are removed, never followed) and test
 registry key. `-Uninstall` also removes the installed
-executable (and puts back one that setup replaced). Results and backups
+executable, or puts back the one setup replaced after checking its SHA-256.
+If setup replaced your own `kaltstellen.exe` and you leave `-Uninstall` out,
+teardown restores everything else and then waits: `teardown -Uninstall`
+puts yours back, `teardown -KeepBeta` keeps the beta. Results and backups
 stay in `%LOCALAPPDATA%\kaltstellen-beta-backup`; delete that folder when
 you no longer need them.
 

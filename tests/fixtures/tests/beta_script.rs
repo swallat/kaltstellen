@@ -95,16 +95,23 @@ fn script(ps: &Path, args: &[&str]) -> String {
 }
 
 /// What the real configuration looks like: the Run value and the files of
-/// %APPDATA%\kaltstellen (name and size). The sandbox must not change either.
+/// %APPDATA%\kaltstellen and %LOCALAPPDATA%\kaltstellen (name and size, top
+/// level). The sandbox must not change any of them.
 fn real_state() -> (Option<String>, Vec<(String, u64)>) {
     let run = registry::read(RUN_KEY, VALUE).expect("read the Run key");
     let mut files = Vec::new();
-    if let Some(appdata) = std::env::var_os("APPDATA") {
-        let dir = Path::new(&appdata).join("kaltstellen");
+    for base in ["APPDATA", "LOCALAPPDATA"] {
+        let Some(root) = std::env::var_os(base) else {
+            continue;
+        };
+        let dir = Path::new(&root).join("kaltstellen");
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                files.push((entry.file_name().to_string_lossy().into_owned(), len));
+                files.push((
+                    format!("{base}\\{}", entry.file_name().to_string_lossy()),
+                    len,
+                ));
             }
         }
     }
@@ -294,7 +301,7 @@ fn beta_script_runs_in_a_sandbox_and_leaves_nothing_behind() {
     assert_eq!(
         real_state(),
         real_before,
-        "the real Run value or %APPDATA%\\kaltstellen changed"
+        "the real Run value, %APPDATA%\\kaltstellen or %LOCALAPPDATA%\\kaltstellen changed"
     );
     // Teardown is idempotent.
     let again = script(&ps, &[&["teardown"][..], &common[..]].concat());
