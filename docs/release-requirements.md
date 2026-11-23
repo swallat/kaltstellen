@@ -1,7 +1,7 @@
 # What a release must contain for the updater
 
 Implemented by `.github/workflows/release.yml` (see [releasing.md](releasing.md));
-signing and the ARM64 build are still open. The client side is
+signing is still open. The client side is
 described in [spec.md](spec.md) UP1 and implemented in `src/update/`. A
 release that follows this page is picked up by every client that has the
 updater, without changing the client.
@@ -26,15 +26,16 @@ updater, without changing the client.
 - Built with the environment variable `KALTSTELLEN_RELEASE=1`. Without it
   the binary is a development build: it never checks by itself and refuses
   to install.
-- Release profile, Windows MSVC targets `x86_64-pc-windows-msvc` and, if
-  wanted, `aarch64-pc-windows-msvc`.
+- Release profile, Windows MSVC targets `x86_64-pc-windows-msvc` and
+  `aarch64-pc-windows-msvc`, each built and version-checked on a runner of
+  its own architecture (`windows-latest`, `windows-11-arm`).
 
 ## Files (release assets)
 
 | File | Content |
 | --- | --- |
 | `kaltstellen-<version>-windows-x86_64.exe` | The executable itself, not packed. |
-| `kaltstellen-<version>-windows-aarch64.exe` | The same for ARM64, if built. |
+| `kaltstellen-<version>-windows-aarch64.exe` | The same for ARM64. |
 | `checksums.txt` | One line per file: `<sha256, 64 lower-case hex digits>  <file name>` (two spaces, `sha256sum` format). Must list every executable above. |
 
 The architecture part is Rust's `std::env::consts::ARCH`. Other files (a zip
