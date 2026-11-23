@@ -38,8 +38,9 @@ name. Purpose: find out which real apps tolerate being frozen.
 ## After version 1
 
 - Automatic triggers (U4), direction decided by the owner on 2026-11-23:
-  trigger programs per profile, opt-in, a manual choice always wins. Open
-  points in [design-automatic-triggers.md](design-automatic-triggers.md).
+  trigger programs per profile with a priority, opt-in, a manual choice
+  always wins; all details decided the same day, see
+  [design-automatic-triggers.md](design-automatic-triggers.md).
 
 ## Later, if wanted
 
