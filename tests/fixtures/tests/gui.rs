@@ -102,29 +102,43 @@ impl World {
     }
 }
 
+/// A process for good: PID and creation time (S6). A PID alone may be
+/// reused by an unrelated process, for example one of a test running in
+/// parallel, which would then look like a WebView2 process left behind.
+type Proc = (u32, u64);
+
 /// Processes below `pid` (WebView2 starts its browser process as a child).
-fn descendants(pid: u32) -> HashSet<u32> {
+/// A child counts only if it was created after its parent: Windows keeps a
+/// dead parent's PID in `parent_pid`, and that PID may be in use again.
+fn descendants(pid: u32) -> HashSet<Proc> {
     let snapshot = Snapshot::take().unwrap();
-    let mut found: HashSet<u32> = HashSet::from([pid]);
+    let Some(root) = snapshot.get(pid) else {
+        return HashSet::new();
+    };
+    let mut found: Vec<Proc> = vec![(root.pid, root.created)];
     loop {
         let before = found.len();
         for p in snapshot.processes() {
-            if found.contains(&p.parent_pid) {
-                found.insert(p.pid);
+            let child = (p.pid, p.created);
+            if !found.contains(&child)
+                && found
+                    .iter()
+                    .any(|&(parent, created)| parent == p.parent_pid && created <= p.created)
+            {
+                found.push(child);
             }
         }
         if found.len() == before {
             break;
         }
     }
-    found.remove(&pid);
-    found
+    found.into_iter().skip(1).collect()
 }
 
 /// The WebView2 processes of `world`, by the user data folder on their
 /// command line. Not every runtime starts them as descendants of the
 /// window process (seen on the CI runner), so the tree alone misses them.
-fn webview_of(world: &World) -> HashSet<u32> {
+fn webview_of(world: &World) -> HashSet<Proc> {
     let folder = world.path("data").join("webview2");
     let script = format!(
         "Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | \
@@ -137,9 +151,13 @@ fn webview_of(world: &World) -> HashSet<u32> {
         .stdin(Stdio::null())
         .output()
         .expect("powershell.exe");
+    let snapshot = Snapshot::take().unwrap();
     String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter_map(|l| l.trim().parse().ok())
+        .filter_map(|pid| snapshot.get(pid))
+        .filter(|p| p.name.eq_ignore_ascii_case("msedgewebview2.exe"))
+        .map(|p| (p.pid, p.created))
         .collect()
 }
 
@@ -148,17 +166,19 @@ fn page_ready(world: &World) -> bool {
         .is_ok_and(|log| log.contains("gui: page ready"))
 }
 
-fn alive(pids: &HashSet<u32>) -> Vec<u32> {
+/// The processes of `procs` that still run (same PID and creation time).
+fn alive(procs: &HashSet<Proc>) -> Vec<Proc> {
     let snapshot = Snapshot::take().unwrap();
-    pids.iter()
+    procs
+        .iter()
         .copied()
-        .filter(|p| snapshot.get(*p).is_some())
+        .filter(|&(pid, created)| snapshot.get(pid).is_some_and(|p| p.created == created))
         .collect()
 }
 
 /// Runs `kaltstellen gui ARGS` to the end, watching the WebView2 processes
 /// it starts; returns its output and those processes.
-fn run_window(world: &World, args: &[&str]) -> (Output, HashSet<u32>) {
+fn run_window(world: &World, args: &[&str]) -> (Output, HashSet<Proc>) {
     let mut child = world.command(args).spawn().unwrap();
     let pid = child.id();
     let mut webview = HashSet::new();
@@ -321,7 +341,11 @@ fn wp10_screenshot_views_render_in_both_themes() {
             "{view}-{theme}"
         );
         // Three windows of the parallel tests may share the machine.
-        assert!(wait_for(Duration::from_secs(30), || alive(&webview).is_empty()));
+        assert!(
+            wait_for(Duration::from_secs(30), || alive(&webview).is_empty()),
+            "{view}-{theme}: WebView2 processes left behind: {:?}",
+            alive(&webview)
+        );
     }
 }
 
