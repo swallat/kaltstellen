@@ -32,6 +32,9 @@ pub struct Running {
     pub private_bytes: u64,
     /// No visible window and no notification-area icon (the scope of N2).
     pub background: bool,
+    /// It has an entry in the notification-area icon list of Windows 11
+    /// (the registry, not the icons on screen).
+    pub tray: bool,
     /// What its visible windows say (H3).
     pub windows: WindowInfo,
 }
@@ -53,6 +56,8 @@ pub struct Row {
     pub protection: Protection,
     pub elevated: bool,
     pub background: bool,
+    /// Running programs: it has a notification-area icon entry.
+    pub tray: bool,
     /// Group 2: the action that holds the program.
     pub held: Option<Action>,
     /// Group 3: seconds since 1970 when it was first seen.
@@ -145,6 +150,7 @@ pub fn assemble(running: &[Running], held: &[Held], seen: &Seen, entries: &[App]
             protection: protection::of(&program.exe),
             elevated: program.elevated,
             background: program.background,
+            tray: program.tray,
             held: None,
             first_seen: None,
             kind: guess_of(&program.exe, program.path.as_deref()).0,
@@ -170,6 +176,7 @@ pub fn assemble(running: &[Running], held: &[Held], seen: &Seen, entries: &[App]
             protection: protection::of(&program.exe),
             elevated: false,
             background: false,
+            tray: false,
             held: Some(program.action),
             first_seen: None,
             kind: guess_of(&program.exe, program.path.as_deref()).0,
@@ -204,6 +211,7 @@ pub fn assemble(running: &[Running], held: &[Held], seen: &Seen, entries: &[App]
             protection: protection::of(&program.exe),
             elevated: false,
             background: false,
+            tray: false,
             held: None,
             first_seen: Some(program.first_seen),
             kind: guess_of(&program.exe, program.path.as_deref()).0,
@@ -235,6 +243,7 @@ fn merge_unreadable(running: &[Running]) -> Vec<Running> {
             Some(target) => {
                 target.private_bytes += row.private_bytes;
                 target.background &= row.background;
+                target.tray |= row.tray;
                 target.windows.windows += row.windows.windows;
                 target.windows.dialog |= row.windows.dialog;
                 target.windows.unsaved |= row.windows.unsaved;
@@ -300,6 +309,7 @@ pub fn running_now() -> Vec<Running> {
             Err(_) => continue,
         };
         let shown = visible.contains(&p.pid) || icons.contains(&key);
+        let tray = icons.contains(&key);
         let row = rows
             .entry((key, path.clone().map(|p| p.to_lowercase())))
             .or_insert_with(|| Running {
@@ -308,6 +318,7 @@ pub fn running_now() -> Vec<Running> {
                 elevated,
                 private_bytes: 0,
                 background: true,
+                tray,
                 windows: WindowInfo::default(),
             });
         if let Some(info) = windows.get(&p.pid) {
@@ -336,6 +347,7 @@ mod tests {
             elevated: false,
             private_bytes: bytes,
             background,
+            tray: false,
             windows: WindowInfo::default(),
         }
     }

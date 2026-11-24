@@ -613,6 +613,7 @@ function renderSuggestions() {
     el('div', {},
       el('span', { class: 'exe', text: s.exe }),
       el('span', { class: 'tag', text: suggestionVerb[s.action] || s.action }),
+      s.tray && s.action !== 'start' ? trayTag() : null,
       el('p', { class: 'hint', text: s.reason })),
     el('div', { class: 'commands' },
       el('button', { type: 'button', class: 'button small', 'aria-label': `Add entry for ${s.exe}`, onclick: () => acceptSuggestion(s), text: s.entry === null ? 'Add entry' : 'Change entry' }),
@@ -687,7 +688,7 @@ async function acceptSuggestion(s) {
 function renderUnassigned() {
   const rows = unassigned.map((u) => el('tr', {},
     el('td', {}, el('div', { class: 'program' }, programIcon(u.exe, null),
-      el('span', { class: 'names' }, el('span', { class: 'exe', text: u.exe }), programAbout(u.exe, null), u.path ? el('span', { class: 'path', text: u.path }) : null))),
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: u.exe }), u.tray ? trayTag() : null, programAbout(u.exe, null), u.path ? el('span', { class: 'path', text: u.path }) : null))),
     el('td', {}, u.new ? el('span', { class: 'tag new', text: 'new' }) : 'earlier'),
     el('td', {},
       el('button', { type: 'button', class: 'button small', 'aria-label': `Add ${u.exe}`, onclick: () => addProgram(u.exe, null), text: 'Add' }),
@@ -885,6 +886,13 @@ async function runMeasurement() {
 
 const snapActionLabel = { ignore: 'Leave as it is', suspend: 'Freeze', stop: 'Stop', start: 'Keep running' };
 
+/** The tag for a program with a notification-area icon entry. Windows lists
+ * it in the registry; whether the icon shows right now is not known. */
+const TRAY_HELP = 'Has a tray icon entry. Stopping removes the icon; freezing leaves it standing, but the program no longer reacts to it.';
+function trayTag() {
+  return el('span', { class: 'diff-tag only_b', title: TRAY_HELP, text: 'Tray icon' });
+}
+
 /** H3: warnings from the open windows, as short texts. */
 function snapWarnings(row) {
   const w = row.windows || { count: 0 };
@@ -908,6 +916,7 @@ function snapKeeps(row, action) {
 function snapShown(row) {
   if (snap.data.running.includes(row) && row.background && !$('snapshot-background').checked) return false;
   if ($('snapshot-heavy').checked && !snap.load.get(row.exe.toLowerCase())?.heavy) return false;
+  if ($('snapshot-tray').checked && !row.tray) return false;
   return true;
 }
 
@@ -936,16 +945,18 @@ function snapSetDefaults() {
 function snapEverything() {
   snap.choices.clear();
   const set = (row, action) => snap.choices.set(snapKey(row), { action, confirmed: false });
-  // Only what the list shows: background programs stay out unless shown.
-  const shown = $('snapshot-background').checked;
-  for (const row of snap.data.running) if (shown || !row.background) set(row, row.path && !row.elevated ? 'start' : 'ignore');
+  // Only what the list shows: background programs stay out unless shown,
+  // and the filters (Heavy only, Tray icon only) count. What kaltstellen
+  // holds keeps its action either way.
+  for (const row of snap.data.running) if (snapShown(row)) set(row, row.path && !row.elevated ? 'start' : 'ignore');
   for (const row of snap.data.held) snap.choices.set(snapKey(row), { action: row.held, confirmed: row.protection === 'warn' });
   // A warn-list program is not stopped without its own confirmation (P6).
-  for (const row of snap.data.seen) if (row.protection !== 'warn') set(row, 'stop');
+  for (const row of snap.data.seen) if (row.protection !== 'warn' && snapShown(row)) set(row, 'stop');
 }
 
 function snapTable(title, rows, note) {
   if ($('snapshot-heavy').checked) rows = rows.filter((r) => snap.load.get(r.exe.toLowerCase())?.heavy);
+  if ($('snapshot-tray').checked) rows = rows.filter((r) => r.tray);
   if ($('snapshot-sort').checked) rows = [...rows].sort((a, b) => loadScore(snap.load.get(b.exe.toLowerCase())) - loadScore(snap.load.get(a.exe.toLowerCase())));
   const wrap = el('section', { class: 'snap-group' }, el('h3', { text: `${title} (${rows.length})` }));
   if (note) wrap.append(el('p', { class: 'hint', text: note }));
@@ -973,6 +984,7 @@ function snapTable(title, rows, note) {
         el('span', { class: 'names' }, el('span', { class: 'exe', text: row.exe }),
           row.path ? el('span', { class: 'path', text: row.path }) : el('span', { class: 'path', text: row.elevated ? 'higher integrity, path not readable' : 'path not known' }),
           row.protection === 'warn' ? el('span', { class: 'protection warn', text: 'warn list' }) : null,
+          row.tray ? trayTag() : null,
           row.kind && row.kind.known ? el('span', { class: 'hint', text: `probably ${row.kind.label}` }) : null,
           row.suggestion ? el('span', { class: 'hint', text: `Suggested: ${snapActionLabel[row.suggestion.action]} (${row.suggestion.reason})` }) : null,
           ...snapWarnings(row).map((text) => el('span', { class: 'diff-tag only_a', text }))))),
@@ -1053,6 +1065,7 @@ async function openSnapshot(mode) {
   $('snapshot-background').checked = false;
   $('snapshot-measuring').textContent = '';
   $('snapshot-heavy').checked = false;
+  $('snapshot-tray').checked = false;
   $('snapshot-sort').checked = false;
   if (!(await loadSnapshot())) return;
   openDialog($('snapshot-dialog'));
@@ -1064,6 +1077,7 @@ $('snapshot-update').addEventListener('click', () => openSnapshot('update'));
 $('snapshot-refresh').addEventListener('click', async () => { if (await loadSnapshot()) measureSnapshot(); });
 $('snapshot-measure').addEventListener('click', measureSnapshot);
 $('snapshot-heavy').addEventListener('change', renderSnapshot);
+$('snapshot-tray').addEventListener('change', renderSnapshot);
 $('snapshot-sort').addEventListener('change', renderSnapshot);
 $('snapshot-background').addEventListener('change', renderSnapshot);
 $('snapshot-suggestions').addEventListener('click', () => {

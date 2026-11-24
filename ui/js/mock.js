@@ -90,7 +90,7 @@ const neverSuggested = new Set();
 const unassigned = {
   'Flight': [
     { exe: 'game-launcher.exe', path: 'C:\\Games\\Launcher\\game-launcher.exe', new: true },
-    { exe: 'notes.exe', path: null, new: false },
+    { exe: 'notes.exe', path: null, new: false, tray: true },
   ],
 };
 
@@ -275,7 +275,7 @@ function handle(message) {
         ...extra,
       });
       const rows = running.filter((r) => r.protection !== 'hard' && r.exe !== 'chat.exe')
-        .map((r) => row(r.exe, { private_bytes: r.private_bytes, background: r.exe === 'notes.exe' }));
+        .map((r) => row(r.exe, { private_bytes: r.private_bytes, background: r.exe === 'notes.exe', tray: r.exe === 'mail.exe' || r.exe === 'sync.exe' }));
       const existing = rows.filter((r) => has(r.exe)).length;
       return { ok: true, data: {
         running: rows.filter((r) => !has(r.exe)),
@@ -416,7 +416,7 @@ function handle(message) {
       const known = entries.findIndex((e) => e.exe === 'chat.exe');
       const list = [];
       if (!state.learn || neverSuggested.has('chat.exe')) return { ok: true, data: list };
-      list.push({ exe: 'chat.exe', path: null, action: 'stop', reason: 'In 4 of the last 5 activations chat.exe was gone when you switched back (it ended or you closed it).', seen: 4, of: 5, entry: known >= 0 ? known : null });
+      list.push({ exe: 'chat.exe', path: null, action: 'stop', reason: 'In 4 of the last 5 activations chat.exe was gone when you switched back (it ended or you closed it).', seen: 4, of: 5, entry: known >= 0 ? known : null, tray: true });
       return { ok: true, data: list };
     }
     case 'suggestion_done':
