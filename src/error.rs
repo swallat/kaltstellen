@@ -116,6 +116,19 @@ pub enum Code {
     /// The tray could not be stopped for the update.
     UpdateTray = 808,
 
+    // 10xx: optional background helper (M4)
+    /// Installing, removing or controlling the helper service failed.
+    HelperService = 1001,
+    /// The helper is not reachable: not installed, stopped, or its pipe is
+    /// not served by the system account.
+    HelperUnreachable = 1002,
+    /// A helper pipe message was malformed or of another protocol version.
+    HelperProtocol = 1003,
+    /// `helper.toml` could not be read or is invalid.
+    HelperPolicy = 1004,
+    /// The action needs administrator rights and they were not granted.
+    HelperNeedsAdmin = 1005,
+
     // 9xx: internal
     /// Logging could not be set up.
     LogSetup = 901,
@@ -166,6 +179,11 @@ impl Code {
         Code::UpdateStart,
         Code::UpdateRecord,
         Code::UpdateTray,
+        Code::HelperService,
+        Code::HelperUnreachable,
+        Code::HelperProtocol,
+        Code::HelperPolicy,
+        Code::HelperNeedsAdmin,
         Code::LogSetup,
     ];
 

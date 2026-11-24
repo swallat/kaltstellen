@@ -18,6 +18,7 @@ pub mod instance;
 pub mod net;
 pub mod pipe;
 pub mod registry;
+pub mod service;
 pub mod tray;
 pub mod webview;
 

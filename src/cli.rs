@@ -128,6 +128,12 @@ enum Command {
         #[arg(value_enum)]
         switch: Option<OnOff>,
     },
+    /// The optional background helper (a Windows service with administrator
+    /// rights, installed later; kaltstellen works completely without it)
+    Helper {
+        #[command(subcommand)]
+        action: HelperAction,
+    },
     /// Install the newest release from GitHub, or only check for it
     Update {
         /// Only check and report, do not install
@@ -156,6 +162,31 @@ enum Command {
     },
 }
 
+#[derive(Subcommand)]
+enum HelperAction {
+    /// Install or update the helper from this executable (asks for
+    /// administrator rights; the helper runs a protected copy)
+    Install {
+        /// The user the helper serves; default: the user running this
+        #[arg(long)]
+        owner_sid: Option<String>,
+        /// Started by `install` itself with administrator rights: wait for
+        /// Enter at the end so the window stays readable
+        #[arg(long, hide = true)]
+        relaunched: bool,
+    },
+    /// Stop and remove the helper and its files (asks for administrator rights)
+    Uninstall {
+        #[arg(long, hide = true)]
+        relaunched: bool,
+    },
+    /// Show whether the helper is installed and running
+    Status,
+    /// The service itself (started by Windows, not by hand)
+    #[command(hide = true)]
+    Run,
+}
+
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum UpdateModeArg {
     Auto,
@@ -180,6 +211,16 @@ pub fn main() -> ExitCode {
         return ExitCode::from(crate::tray::main_and_window());
     }
     let cli = Cli::parse();
+    // The service logs into its own folder, not into the profile of the
+    // account it runs as.
+    if matches!(
+        cli.command,
+        Command::Helper {
+            action: HelperAction::Run
+        }
+    ) {
+        return ExitCode::from(crate::helper::run::main());
+    }
     init_logging();
     let code = match cli.command {
         Command::CheckConfig { file } => check_config(file),
@@ -226,6 +267,7 @@ pub fn main() -> ExitCode {
         }),
         Command::Autostart { switch } => autostart(switch),
         Command::Automation { switch } => automation(switch),
+        Command::Helper { action } => helper(action),
         Command::Update {
             check,
             force,
@@ -886,6 +928,115 @@ fn update_install(force: bool, unattended: bool) -> u8 {
     }
 }
 
+fn refused(err: Error) -> u8 {
+    warn!("helper: {err}");
+    eprintln!("error: {err}");
+    if err.code == Code::HelperNeedsAdmin {
+        exit::UNREACHABLE
+    } else {
+        exit::ERRORS
+    }
+}
+
+/// `kaltstellen helper …` (M4a, docs/design-optional-helper.md).
+fn helper(action: HelperAction) -> u8 {
+    use crate::helper::{client, protocol, setup};
+    use crate::win32::{pipe, service};
+    match action {
+        HelperAction::Status => {
+            let report = match setup::report() {
+                Ok(report) => report,
+                Err(err) => return refused(err),
+            };
+            let answer = client::ask(protocol::Command::Status);
+            for line in setup::describe(&report, &answer) {
+                println!("{line}");
+            }
+            exit::OK
+        }
+        HelperAction::Install {
+            owner_sid,
+            relaunched,
+        } => {
+            let code = if service::is_elevated() {
+                let sid = match owner_sid.map_or_else(pipe::current_user_sid, Ok) {
+                    Ok(sid) => sid,
+                    Err(err) => return refused(err),
+                };
+                match setup::install(&sid) {
+                    Ok(()) => {
+                        println!("the background helper is installed and running (serves {sid})");
+                        println!("kaltstellen without the helper keeps working as before");
+                        exit::OK
+                    }
+                    Err(err) => refused(err),
+                }
+            } else {
+                relaunch_elevated(|sid| format!("helper install --owner-sid {sid}"), owner_sid)
+            };
+            if relaunched {
+                finish_console(code);
+            }
+            code
+        }
+        HelperAction::Uninstall { relaunched } => {
+            let code = if service::is_elevated() {
+                match setup::uninstall() {
+                    Ok(true) => {
+                        println!("the background helper is removed");
+                        exit::OK
+                    }
+                    Ok(false) => {
+                        println!("the background helper was not installed");
+                        exit::OK
+                    }
+                    Err(err) => refused(err),
+                }
+            } else {
+                relaunch_elevated(|_| "helper uninstall".to_owned(), None)
+            };
+            if relaunched {
+                finish_console(code);
+            }
+            code
+        }
+        HelperAction::Run => unreachable!("handled in main"),
+    }
+}
+
+/// Runs this executable again with administrator rights (a UAC prompt) and
+/// returns its exit code. The unelevated caller names the user the helper
+/// serves, so an administrator's credentials typed at the prompt do not
+/// change who it is for.
+fn relaunch_elevated(arguments: impl FnOnce(&str) -> String, owner_sid: Option<String>) -> u8 {
+    let sid = match owner_sid.map_or_else(crate::win32::pipe::current_user_sid, Ok) {
+        Ok(sid) => sid,
+        Err(err) => return refused(err),
+    };
+    if !crate::helper::valid_sid(&sid) {
+        return refused(Error::new(
+            Code::HelperService,
+            format!("{sid:?} is not a SID"),
+        ));
+    }
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            return refused(Error::new(Code::HelperService, format!("own path: {e}")));
+        }
+    };
+    println!("kaltstellen asks Windows for administrator rights (a prompt follows)");
+    let parameters = format!("{} --relaunched", arguments(&sid));
+    match crate::win32::service::run_elevated(&exe, &parameters) {
+        Ok(0) => exit::OK,
+        Ok(_) => {
+            eprintln!("the elevated step failed; its window showed why");
+            exit::ERRORS
+        }
+        Err(err) => refused(err),
+    }
+}
+
 /// The console the tray opened for an update: keep a failure readable.
 fn finish_console(code: u8) {
     if code == exit::OK {
@@ -1204,6 +1355,7 @@ fn run(command: Command) -> Result<bool> {
         | Command::Gui { .. }
         | Command::Autostart { .. }
         | Command::Automation { .. }
+        | Command::Helper { .. }
         | Command::Update { .. } => unreachable!("handled in main"),
     }
 }

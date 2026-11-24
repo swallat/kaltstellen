@@ -1,0 +1,148 @@
+//! The optional background helper (M4a; docs/design-optional-helper.md).
+//!
+//! A Windows service, `kaltstellen-helper`, that runs a protected copy of
+//! this executable (`kaltstellen helper run`). The tray stays unelevated and
+//! keeps the policy; the helper is the privileged side. Without it
+//! everything works as before: nothing here is reached unless the owner ran
+//! `kaltstellen helper install`.
+//!
+//! This module is safe code only: file locations, the policy file, the
+//! pipe protocol and what the service answers. The service control manager,
+//! the access lists and the elevated relaunch are in `win32::service`.
+//!
+//! M4a answers `hello` and `status`. The roles *observe*, *act* and
+//! *services* are switched in the policy file but not implemented yet
+//! (M4b to M4e).
+
+pub mod client;
+pub mod policy;
+pub mod protocol;
+pub mod run;
+pub mod setup;
+
+use std::path::PathBuf;
+
+use crate::update;
+use crate::update::version::Version;
+
+/// Name of the Windows service.
+pub const SERVICE_NAME: &str = "kaltstellen-helper";
+/// Name of the helper's pipe (spec: `\\.\pipe\kaltstellen-helper`).
+pub const PIPE_NAME: &str = r"\\.\pipe\kaltstellen-helper";
+/// File name of the protected copy.
+pub const EXE_NAME: &str = "kaltstellen.exe";
+
+/// The folder of the protected copy: `%ProgramFiles%\kaltstellen`,
+/// writable by administrators only. `KALTSTELLEN_HELPER_PROGRAM_DIR`
+/// redirects it for tests.
+pub fn program_dir() -> Option<PathBuf> {
+    redirected("KALTSTELLEN_HELPER_PROGRAM_DIR", "ProgramFiles")
+}
+
+/// The helper's data folder: `%ProgramData%\kaltstellen` (policy file, `kaltstellen.log`,
+/// later the state record). `KALTSTELLEN_HELPER_DATA_DIR` redirects it for
+/// tests.
+pub fn data_dir() -> Option<PathBuf> {
+    redirected("KALTSTELLEN_HELPER_DATA_DIR", "ProgramData")
+}
+
+fn redirected(override_var: &str, base_var: &str) -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os(override_var).filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    std::env::var_os(base_var)
+        .filter(|v| !v.is_empty())
+        .map(|base| PathBuf::from(base).join("kaltstellen"))
+}
+
+/// The protected copy of the executable.
+pub fn installed_exe() -> Option<PathBuf> {
+    program_dir().map(|dir| dir.join(EXE_NAME))
+}
+
+/// The policy file `helper.toml`.
+pub fn policy_file() -> Option<PathBuf> {
+    data_dir().map(|dir| dir.join("helper.toml"))
+}
+
+/// The version of this executable (`0.0.0-dev+hash` in development builds).
+pub fn version() -> &'static str {
+    update::CURRENT
+}
+
+/// How the tray's version relates to the installed helper's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Freshness {
+    Same,
+    /// The helper is older than this executable: the owner should run
+    /// `kaltstellen helper install` again (the helper never updates itself).
+    Older,
+    /// The helper is newer than this executable.
+    Newer,
+    /// One of the versions could not be compared (development build).
+    Unknown,
+}
+
+/// Compares the helper's version with `ours`.
+pub fn freshness(helper: &str, ours: &str) -> Freshness {
+    if helper == ours {
+        return Freshness::Same;
+    }
+    let (Some(h), Some(o)) = (Version::parse(helper), Version::parse(ours)) else {
+        return Freshness::Unknown;
+    };
+    // Development builds (`0.0.0-dev+hash`) have no order.
+    if h.pre == "dev" || o.pre == "dev" {
+        return Freshness::Unknown;
+    }
+    match h.cmp(&o) {
+        std::cmp::Ordering::Less => Freshness::Older,
+        std::cmp::Ordering::Greater => Freshness::Newer,
+        std::cmp::Ordering::Equal => Freshness::Same,
+    }
+}
+
+/// Is `sid` a well-formed SID string (`S-1-5-21-…`)? Checked before one is
+/// put into an access list (the elevated installer gets it as an argument).
+pub fn valid_sid(sid: &str) -> bool {
+    let Some(rest) = sid.strip_prefix("S-1-") else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('-').collect();
+    parts.len() >= 2
+        && parts.len() <= 15
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.len() <= 20 && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sids_are_checked_before_they_reach_an_access_list() {
+        assert!(valid_sid("S-1-5-21-1004336348-1177238915-682003330-1001"));
+        assert!(valid_sid("S-1-5-18"));
+        for bad in [
+            "",
+            "S-1-",
+            "S-1-5",
+            "S-2-5-18",
+            "S-1-5-18)(A;;GA;;;WD",
+            "S-1-5--18",
+            "s-1-5-18",
+            "S-1-5-18 ",
+        ] {
+            assert!(!valid_sid(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn freshness_tells_when_the_helper_is_older() {
+        assert_eq!(freshness("1.2.0", "1.2.0"), Freshness::Same);
+        assert_eq!(freshness("1.1.0", "1.2.0"), Freshness::Older);
+        assert_eq!(freshness("1.3.0", "1.2.0"), Freshness::Newer);
+        assert_eq!(freshness("0.0.0-dev+abc", "1.2.0"), Freshness::Unknown);
+    }
+}

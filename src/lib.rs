@@ -33,6 +33,7 @@ pub mod engine;
 pub mod error;
 pub mod exit;
 pub mod gui;
+pub mod helper;
 pub mod hotkey;
 pub mod load;
 pub mod logging;
