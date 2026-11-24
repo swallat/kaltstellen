@@ -321,7 +321,7 @@ files) and, later, the real window.
    of 5; `Suggestions from use` on by default; `Forget what was learned`;
    `KS305`.
 10. **H6 compare**: profile with profile only; `Take over from B` and
-    `Remove from A` per row; `kaltstellen compare` always exits `0`.
+    `Remove from A` per row; `kaltstellen compare` exits `0` also when profiles differ (`4` unknown profile, `2` invalid configuration).
 
 ## Decided by the owner on 2026-11-24
 
