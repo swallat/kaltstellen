@@ -399,6 +399,23 @@ impl Host for RealHost {
         crate::unassigned::dismiss(&self.data, profile, exe).map_err(|e| e.to_string())
     }
 
+    fn tray_programs(&self) -> std::collections::HashSet<String> {
+        let Ok(snapshot) = crate::process::Snapshot::take() else {
+            return Default::default();
+        };
+        let session = snapshot.own_session().unwrap_or(0);
+        let names: std::collections::HashSet<String> = snapshot
+            .processes()
+            .iter()
+            .filter(|p| p.session_id == session)
+            .map(|p| p.name.to_lowercase())
+            .collect();
+        crate::unassigned::icon_programs(crate::unassigned::NOTIFY_ICONS_KEY, &names)
+            .into_iter()
+            .map(|o| o.exe.to_lowercase())
+            .collect()
+    }
+
     fn learning(&self) -> bool {
         crate::usage::enabled()
     }

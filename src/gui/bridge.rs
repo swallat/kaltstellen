@@ -39,6 +39,9 @@ pub trait Host {
     fn running(&self) -> Vec<Candidate>;
     fn unassigned(&self, config: &Config, profile: &str) -> Vec<Unassigned>;
     fn dismiss(&self, profile: &str, exe: &str) -> Result<(), String>;
+    /// Names (lower case) of the running programs that have an entry in the
+    /// notification-area icon list (Windows 11 registry).
+    fn tray_programs(&self) -> std::collections::HashSet<String>;
     /// H5: `Suggestions from use` is on.
     fn learning(&self) -> bool;
     fn set_learning(&self, on: bool) -> Result<(), String>;
@@ -444,6 +447,7 @@ fn groups_json(groups: &crate::snapshot::Groups) -> Value {
                     "protection": protection_name(&r.exe),
                     "elevated": r.elevated,
                     "background": r.background,
+                    "tray": r.tray,
                     "held": r.held.map(action_name),
                     "first_seen": r.first_seen,
                     "kind": {
@@ -1252,11 +1256,15 @@ impl<H: Host> Bridge<H> {
             }
             Request::Unassigned { profile } => {
                 check_text(&[&profile])?;
+                let tray = self.host.tray_programs();
                 let list: Vec<Value> = self
                     .host
                     .unassigned(self.document.config(), &profile)
                     .iter()
-                    .map(|u| json!({"exe": u.exe, "path": u.path, "new": u.new}))
+                    .map(|u| {
+                        json!({"exe": u.exe, "path": u.path, "new": u.new,
+                            "tray": tray.contains(&u.exe.to_lowercase())})
+                    })
                     .collect();
                 Ok(Some(Value::Array(list)))
             }
@@ -1267,6 +1275,7 @@ impl<H: Host> Bridge<H> {
                 }
                 let config = self.document.config();
                 let apps = config.profile(&profile).map(|p| p.apps.as_slice());
+                let tray = self.host.tray_programs();
                 let list: Vec<Value> = self
                     .host
                     .suggestions(config, &profile)
@@ -1283,6 +1292,7 @@ impl<H: Host> Bridge<H> {
                             "seen": s.seen,
                             "of": s.of,
                             "entry": entry,
+                            "tray": tray.contains(&s.exe.to_lowercase()),
                         })
                     })
                     .collect();
@@ -1635,6 +1645,7 @@ mod tests {
                 protection: protection::of(exe),
                 elevated: false,
                 background: false,
+                tray: exe == "chat.exe",
                 held,
                 first_seen: None,
                 kind: crate::kinds::classify(
@@ -1726,6 +1737,9 @@ mod tests {
         }
         fn triggers_paused(&self) -> bool {
             self.saved_paused.get()
+        }
+        fn tray_programs(&self) -> std::collections::HashSet<String> {
+            ["chat.exe".to_owned()].into()
         }
         fn learning(&self) -> bool {
             self.learn.get()
@@ -2162,6 +2176,7 @@ mod tests {
         assert_eq!(first["action"], "stop");
         assert_eq!(first["seen"], 3);
         assert!(first["entry"].is_null(), "chat.exe has no entry yet");
+        assert_eq!(first["tray"], true, "chat.exe has a tray icon entry");
         send(
             &mut b,
             json!({"v": 1, "id": 2, "type": "suggestion_done", "profile": "focus", "exe": "chat.exe", "never": true}),
