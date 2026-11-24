@@ -109,9 +109,12 @@ Filename: "{app}\kaltstellen.exe"; Parameters: "autostart off"; Flags: runhidden
 Filename: "{app}\kaltstellen.exe"; Parameters: "tray"; Description: "{cm:LaunchTray}"; Flags: postinstall nowait skipifsilent
 
 [UninstallRun]
-; Quit resumes everything the tray froze; recover catches what a crashed
+; Quit resumes everything the tray froze; the main window is a process of its
+; own that quit does not end and that would lock the executable, so it goes
+; next; recover catches what a crashed
 ; tray left frozen; then the Run value goes.
 Filename: "{app}\kaltstellen.exe"; Parameters: "quit"; Flags: runhidden waituntilterminated; RunOnceId: "quit"
+Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -Command ""Get-Process kaltstellen -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{app}\kaltstellen.exe' } | Stop-Process -Force"""; Flags: runhidden waituntilterminated; RunOnceId: "closewindow"
 Filename: "{app}\kaltstellen.exe"; Parameters: "recover"; Flags: runhidden waituntilterminated; RunOnceId: "recover"
 Filename: "{app}\kaltstellen.exe"; Parameters: "autostart off"; Flags: runhidden waituntilterminated; RunOnceId: "autostart"
 
@@ -156,7 +159,14 @@ begin
   if not Exec(Exe, 'quit', '', SW_HIDE, ewWaitUntilTerminated, Code) then
     Result := FmtMessage(CustomMessage('TrayStillRuns'), [SysErrorMessage(Code)])
   else if Code = 5 then
-    Result := FmtMessage(CustomMessage('TrayStillRuns'), ['kaltstellen quit: exit code 5']);
+    Result := FmtMessage(CustomMessage('TrayStillRuns'), ['kaltstellen quit: exit code 5'])
+  else
+    { The main window is a process of its own; it would lock the old
+      executable. Only copies in the installation folder are ended. }
+    Exec('powershell.exe',
+      '-NoProfile -NonInteractive -Command "Get-Process kaltstellen -ErrorAction SilentlyContinue | ' +
+      'Where-Object { $_.Path -eq ''' + ExpandConstant('{app}\kaltstellen.exe') + ''' } | Stop-Process -Force"',
+      '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
 function HasParam(const Name: String): Boolean;
@@ -175,6 +185,16 @@ begin
   Result := GetEnv(OverrideVar);
   if Result = '' then
     Result := ExpandConstant(BaseConstant) + '\kaltstellen';
+end;
+
+{ Environment overrides (tests, portable use) may point anywhere: only a
+  folder that is clearly kaltstellen's own is ever deleted as a whole. }
+function IsOwnFolder(const Dir: String): Boolean;
+var
+  Name: String;
+begin
+  Name := Lowercase(ExtractFileName(RemoveBackslash(Dir)));
+  Result := (Length(ExtractFileDrive(Dir)) > 0) and (Pos('kaltstellen', Name) > 0);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -199,7 +219,9 @@ begin
       mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
   if Remove then
   begin
-    DelTree(ConfigDir, True, True, True);
-    DelTree(DataDir, True, True, True);
+    if IsOwnFolder(ConfigDir) then
+      DelTree(ConfigDir, True, True, True);
+    if IsOwnFolder(DataDir) then
+      DelTree(DataDir, True, True, True);
   end;
 end;

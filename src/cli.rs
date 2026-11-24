@@ -166,8 +166,7 @@ pub fn main() -> ExitCode {
     if std::env::args_os().len() == 1 && crate::win32::console::is_own() {
         init_logging();
         info!("started without arguments and without a terminal: main window and tray");
-        crate::tray::open_window();
-        return ExitCode::from(crate::tray::main());
+        return ExitCode::from(crate::tray::main_and_window());
     }
     let cli = Cli::parse();
     init_logging();

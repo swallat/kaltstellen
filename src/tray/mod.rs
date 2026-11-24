@@ -99,7 +99,7 @@ impl Endpoints {
 /// Starts `kaltstellen gui` as a process of its own, without a console
 /// window (spec section 8). It inherits the environment, so a test tray
 /// opens a test window.
-pub(crate) fn open_window() {
+fn open_window() {
     use std::os::windows::process::CommandExt;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     let started = std::env::current_exe().and_then(|exe| {
@@ -123,6 +123,18 @@ fn lock(source: &Mutex<Source>) -> MutexGuard<'_, Source> {
 
 /// `kaltstellen tray`. Returns the process exit code.
 pub fn main() -> u8 {
+    run(false)
+}
+
+/// A double-click on the executable: the tray, and the main window as well,
+/// whether this process becomes the tray or one is already running. The
+/// window opens only once the tray's own part is settled, so a failed start
+/// leaves no window without a tray.
+pub fn main_and_window() -> u8 {
+    run(true)
+}
+
+fn run(window: bool) -> u8 {
     let endpoints = match Endpoints::current() {
         Ok(endpoints) => endpoints,
         Err(err) => {
@@ -135,6 +147,9 @@ pub fn main() -> u8 {
         Ok(Some(instance)) => instance,
         Ok(None) => {
             info!("tray: another instance runs in this session; exiting");
+            if window {
+                open_window();
+            }
             eprintln!("kaltstellen tray is already running in this session");
             return exit::OK;
         }
@@ -193,6 +208,10 @@ pub fn main() -> u8 {
             None
         }
     };
+    // The window talks to the pipe: it opens once that is bound.
+    if window {
+        open_window();
+    }
     let names = {
         let mut source = lock(&source);
         source.refresh();
