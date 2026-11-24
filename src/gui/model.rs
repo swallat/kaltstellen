@@ -212,6 +212,7 @@ mod tests {
             session_id: session,
             created: 1,
             private_bytes: bytes,
+            ..ProcessInfo::default()
         }
     }
 

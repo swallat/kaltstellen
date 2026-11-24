@@ -755,6 +755,7 @@ mod tests {
             session_id: 1,
             created: 1,
             private_bytes: 0,
+            ..ProcessInfo::default()
         }
     }
 

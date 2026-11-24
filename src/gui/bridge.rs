@@ -87,6 +87,8 @@ pub trait Host {
     /// profile or, with `entries`, for the update of one (programs with an
     /// entry are left out). Reads only.
     fn snapshot(&self, entries: &[crate::config::App]) -> crate::snapshot::Groups;
+    /// H2: the process list, connections and frozen records now.
+    fn sample(&self) -> crate::load::Sample;
     /// H4: what switching to `profile` would do, changing nothing. Run as
     /// `kaltstellen switch --dry-run` would, with the saved state.
     fn preview(&self, config: &Config, profile: &str) -> Result<crate::engine::Plan, String>;
@@ -231,6 +233,13 @@ pub enum Request {
     AddEntries {
         profile: String,
         entries: Vec<NewEntry>,
+    },
+    /// H2: takes the first of the two samples a measurement needs.
+    MeasureStart,
+    /// H2: takes the second sample and answers the figures of `programs`
+    /// for the time since `measure_start`.
+    Measure {
+        programs: Vec<String>,
     },
     /// H4: what switching to a profile would do.
     Preview {
@@ -377,6 +386,22 @@ fn compare_json(result: &crate::compare::Comparison) -> Value {
             "triggers": pair(&result.meta.triggers),
             "priority": result.meta.priority.map(|(a, b)| json!({"a": a, "b": b})),
         },
+    })
+}
+
+/// A measurement shorter than this says nothing (H2).
+const MIN_MEASURE: std::time::Duration = std::time::Duration::from_millis(100);
+
+fn load_json(exe: &str, load: &crate::load::Load) -> Value {
+    json!({
+        "exe": exe,
+        "frozen": load.frozen,
+        "private_bytes": load.private_bytes,
+        "cpu": load.cpu,
+        "io_per_s": load.io_per_s,
+        "tcp": load.tcp,
+        "udp": load.udp,
+        "heavy": load.heavy,
     })
 }
 
@@ -594,6 +619,8 @@ pub struct Bridge<H: Host> {
     held_back: Option<bool>,
     /// M2: the paths of the files attached to the message being handled.
     dropped: Vec<PathBuf>,
+    /// H2: the first sample of a measurement and when it was taken.
+    measuring: Option<(std::time::Instant, crate::load::Sample)>,
 }
 
 impl<H: Host> Bridge<H> {
@@ -611,6 +638,7 @@ impl<H: Host> Bridge<H> {
             tray_paused: None,
             held_back: None,
             dropped: Vec::new(),
+            measuring: None,
         }
     }
 
@@ -1133,6 +1161,32 @@ impl<H: Host> Bridge<H> {
                     result,
                 )
             }
+            Request::MeasureStart => {
+                self.measuring = Some((std::time::Instant::now(), self.host.sample()));
+                Ok(None)
+            }
+            Request::Measure { programs } => {
+                if programs.len() > 256 {
+                    return Err("too many programs".to_owned());
+                }
+                check_text(&programs.iter().map(String::as_str).collect::<Vec<_>>())?;
+                let Some((started, before)) = self.measuring.take() else {
+                    return Err("measure_start has not been sent".to_owned());
+                };
+                let elapsed = started.elapsed();
+                if elapsed < MIN_MEASURE {
+                    return Err("measured too soon after measure_start".to_owned());
+                }
+                let after = self.host.sample();
+                let rows: Vec<Value> = programs
+                    .iter()
+                    .map(|exe| load_json(exe, &crate::load::measure(&before, &after, elapsed, exe)))
+                    .collect();
+                Ok(Some(json!({
+                    "interval_ms": u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+                    "programs": rows,
+                })))
+            }
             Request::Preview { profile } => {
                 check_text(&[&profile])?;
                 let profile = profile.trim();
@@ -1399,6 +1453,8 @@ mod tests {
         opened: Rc<RefCell<Vec<PathBuf>>>,
         /// M6: the profile `settings.json` offers after sign-in.
         last_profile: Rc<RefCell<Option<String>>>,
+        /// H2: how many samples were taken.
+        samples: Rc<std::cell::Cell<u64>>,
     }
 
     impl Fake {
@@ -1440,6 +1496,24 @@ mod tests {
                 private_bytes: 1 << 20,
                 protection: protection::of("anydesk.exe"),
             }]
+        }
+        fn sample(&self) -> crate::load::Sample {
+            let n = self.samples.get();
+            self.samples.set(n + 1);
+            crate::load::Sample {
+                processes: vec![crate::process::ProcessInfo {
+                    pid: 1,
+                    created: 1,
+                    name: "browser.exe".into(),
+                    // 0.8 s of CPU per sample on 4 processors.
+                    cpu_time: n * 8_000_000,
+                    io_bytes: n * 4096,
+                    private_bytes: 600 << 20,
+                    ..crate::process::ProcessInfo::default()
+                }],
+                cpus: 4,
+                ..crate::load::Sample::default()
+            }
         }
         fn snapshot(&self, entries: &[App]) -> crate::snapshot::Groups {
             use crate::snapshot::{Groups, Row};
@@ -2294,6 +2368,36 @@ mod tests {
             b.document.config().profile("focus").unwrap().apps.len(),
             before + 2
         );
+    }
+
+    #[test]
+    fn measure_answers_the_figures_between_two_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        let early = send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "measure", "programs": ["browser.exe"]}),
+        );
+        assert_eq!(early["ok"], false);
+        send(&mut b, json!({"v": 1, "id": 2, "type": "measure_start"}));
+        // Too soon after the start says nothing.
+        let soon = send(
+            &mut b,
+            json!({"v": 1, "id": 3, "type": "measure", "programs": ["browser.exe"]}),
+        );
+        assert_eq!(soon["ok"], false);
+        send(&mut b, json!({"v": 1, "id": 4, "type": "measure_start"}));
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 5, "type": "measure", "programs": ["browser.exe", "none.exe"]}),
+        );
+        assert_eq!(reply["ok"], true, "{reply}");
+        let rows = reply["data"]["programs"].as_array().unwrap();
+        assert_eq!(rows[0]["exe"], "browser.exe");
+        assert!(rows[0]["cpu"].as_f64().unwrap() > 0.0);
+        assert!(rows[0]["heavy"].as_str().unwrap().contains("memory"));
+        assert_eq!(rows[1]["private_bytes"], 0);
     }
 
     #[test]

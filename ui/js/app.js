@@ -743,7 +743,39 @@ const snapshotChoices = [
   ['none', 'Not in profile'], ['ignore', 'Leave as it is'], ['suspend', 'Freeze'],
   ['stop', 'Stop'], ['start', 'Keep running'],
 ];
-let snap = null; // { mode, profile, data, choices: Map(key -> {action, confirmed}) }
+let snap = null; // { mode, profile, data, choices: Map(key -> {action, confirmed}), load: Map(exe -> load), token }
+
+/** H2: what a program costs, as text. */
+function loadText(load) {
+  if (!load) return 'measuring…';
+  if (load.frozen) return 'frozen';
+  const parts = [];
+  if (load.cpu !== null) parts.push(`${(load.cpu * 100).toFixed(load.cpu < 0.1 ? 1 : 0)} % CPU`);
+  if (load.io_per_s !== null) parts.push(`I/O ${load.io_per_s >= 1048576 ? `${(load.io_per_s / 1048576).toFixed(1)} MB/s` : `${Math.round(load.io_per_s / 1024)} KB/s`}`);
+  if (load.tcp || load.udp) parts.push(`${load.tcp} TCP, ${load.udp} UDP`);
+  return parts.join(' · ') || 'idle';
+}
+
+const loadScore = (load) => (load && !load.frozen ? (load.cpu || 0) * 1e9 + (load.io_per_s || 0) : -1);
+
+/** Measures all listed programs: two samples about 1.5 s apart (no timer,
+ * only when the dialog opens or the owner asks). */
+async function measureSnapshot() {
+  const token = {};
+  snap.token = token;
+  snap.load = new Map();
+  $('snapshot-measuring').textContent = 'Measuring for 1.5 seconds…';
+  renderSnapshot();
+  const programs = [...new Set(snapRows().map((r) => r.exe))];
+  await call('measure_start', {}, { quiet: true });
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  if (snap.token !== token) return;
+  const reply = await call('measure', { programs }, { quiet: true });
+  if (snap.token !== token) return;
+  $('snapshot-measuring').textContent = reply.ok ? '' : `No measurement: ${reply.error}`;
+  if (reply.ok) for (const row of reply.data.programs) snap.load.set(row.exe.toLowerCase(), row);
+  renderSnapshot();
+}
 
 const snapKey = (row) => `${row.exe.toLowerCase()}|${(row.path || '').toLowerCase()}`;
 
@@ -779,6 +811,8 @@ function snapEverything() {
 }
 
 function snapTable(title, rows, note) {
+  if ($('snapshot-heavy').checked) rows = rows.filter((r) => snap.load.get(r.exe.toLowerCase())?.heavy);
+  if ($('snapshot-sort').checked) rows = [...rows].sort((a, b) => loadScore(snap.load.get(b.exe.toLowerCase())) - loadScore(snap.load.get(a.exe.toLowerCase())));
   const wrap = el('section', { class: 'snap-group' }, el('h3', { text: `${title} (${rows.length})` }));
   if (note) wrap.append(el('p', { class: 'hint', text: note }));
   if (rows.length === 0) return wrap;
@@ -806,12 +840,21 @@ function snapTable(title, rows, note) {
           row.path ? el('span', { class: 'path', text: row.path }) : el('span', { class: 'path', text: row.elevated ? 'higher integrity, path not readable' : 'path not known' }),
           row.protection === 'warn' ? el('span', { class: 'protection warn', text: 'warn list' }) : null))),
       el('td', { class: 'num', text: row.private_bytes ? megabytes(row.private_bytes) : '' }),
+      snapLoadCell(row),
       el('td', {}, select, confirmCell)));
   }
   wrap.append(el('div', {}, el('table', { class: 'table' },
-    el('thead', {}, el('tr', {}, el('th', { scope: 'col', text: 'Program' }), el('th', { scope: 'col', class: 'num', text: 'Memory' }), el('th', { scope: 'col', text: 'In the profile' }))),
+    el('thead', {}, el('tr', {}, el('th', { scope: 'col', text: 'Program' }), el('th', { scope: 'col', class: 'num', text: 'Memory' }), el('th', { scope: 'col', text: 'Load' }), el('th', { scope: 'col', text: 'In the profile' }))),
     body)));
   return wrap;
+}
+
+function snapLoadCell(row) {
+  // Programs that do not run have no load to show.
+  if (!snap.data.running.includes(row) && !snap.data.held.includes(row)) return el('td');
+  const load = snap.load.get(row.exe.toLowerCase());
+  return el('td', { class: 'diff-cell' }, loadText(load),
+    load && load.heavy ? el('span', { class: 'diff-tag only_b', text: ` Heavy: ${load.heavy}` }) : null);
 }
 
 function snapChosen() {
@@ -863,17 +906,25 @@ async function loadSnapshot() {
 }
 
 async function openSnapshot(mode) {
-  snap = { mode, profile: mode === 'update' ? current().name : null, data: null, choices: new Map() };
+  snap = { mode, profile: mode === 'update' ? current().name : null, data: null, choices: new Map(), load: new Map(), token: null };
   $('snapshot-title').textContent = mode === 'new' ? 'New profile from the current state' : `Update ${current().name} from the current state`;
   $('snapshot-name-row').hidden = mode !== 'new';
   $('snapshot-name').value = '';
   $('snapshot-background').checked = false;
+  $('snapshot-measuring').textContent = '';
+  $('snapshot-heavy').checked = false;
+  $('snapshot-sort').checked = false;
   if (!(await loadSnapshot())) return;
   openDialog($('snapshot-dialog'));
+  measureSnapshot();
 }
+$('snapshot-dialog').addEventListener('close', () => { if (snap) snap.token = null; });
 
 $('snapshot-update').addEventListener('click', () => openSnapshot('update'));
-$('snapshot-refresh').addEventListener('click', loadSnapshot);
+$('snapshot-refresh').addEventListener('click', async () => { if (await loadSnapshot()) measureSnapshot(); });
+$('snapshot-measure').addEventListener('click', measureSnapshot);
+$('snapshot-heavy').addEventListener('change', renderSnapshot);
+$('snapshot-sort').addEventListener('change', renderSnapshot);
 $('snapshot-background').addEventListener('change', renderSnapshot);
 $('snapshot-clear').addEventListener('click', () => {
   snap.choices.clear();
