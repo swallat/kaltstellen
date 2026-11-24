@@ -253,6 +253,14 @@ mod tests {
         }
     }
 
+    /// The end of the process that started at `created`.
+    fn stop(seq: u64, pid: u32, exe: &str, created: u64, time: u64) -> Event {
+        Event {
+            created,
+            ..event(seq, "stop", pid, exe, time)
+        }
+    }
+
     fn ctx<'a>(decided: &'a HashSet<String>) -> Context<'a> {
         Context {
             decided,
@@ -306,7 +314,7 @@ mod tests {
             fetched(
                 vec![
                     event(1, "start", 10, "tool.exe", 105),
-                    event(2, "stop", 10, "tool.exe", 106),
+                    stop(2, 10, "tool.exe", 105, 106),
                 ],
                 3,
             ),
