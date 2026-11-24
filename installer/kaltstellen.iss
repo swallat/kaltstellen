@@ -235,12 +235,9 @@ begin
     Why := CustomMessage('WindowStillOpen')
   else if FileExists(ExpandConstant('{app}\kaltstellen.exe')) then
     Why := QuitTray(ExpandConstant('{app}\kaltstellen.exe'), Running);
+  { Inno shows the message of the exception (once) and stops. }
   if Why <> '' then
-  begin
-    if not UninstallSilent then
-      MsgBox(Why, mbError, MB_OK);
     RaiseException(Why);
-  end;
 end;
 
 function HasParam(const Name: String): Boolean;
