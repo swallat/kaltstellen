@@ -1186,10 +1186,22 @@ impl<H: Host> Bridge<H> {
                     .running()
                     .iter()
                     .map(|c| {
+                        // H3: the kind by name only; the owner can still pick
+                        // any action, the suggestion is a hint.
+                        let kind = crate::kinds::classify(&c.exe, None, None).kind;
                         json!({
                             "exe": c.exe,
                             "private_bytes": c.private_bytes,
                             "protection": protection_name(&c.exe),
+                            "kind": {
+                                "id": kind.id(),
+                                "plural": kind.plural(),
+                                "label": kind.label(),
+                                "known": kind != crate::kinds::Kind::Unknown,
+                            },
+                            "suggestion": kind.suggestion().map(|(action, reason)| {
+                                json!({"action": action_name(action), "reason": reason})
+                            }),
                         })
                     })
                     .collect();
@@ -2810,6 +2822,9 @@ mod tests {
         assert_eq!(picked["data"]["exe"], "tool.exe");
         let running = send(&mut b, json!({"v": 1, "id": 2, "type": "running"}));
         assert_eq!(running["data"][0]["protection"], "warn");
+        assert!(running["data"][0]["kind"]["id"].is_string());
+        // A warn-list program never gets a Freeze or Stop hint (P6).
+        assert!(running["data"][0]["suggestion"].is_null());
         let list = send(
             &mut b,
             json!({"v": 1, "id": 3, "type": "unassigned", "profile": "focus"}),
