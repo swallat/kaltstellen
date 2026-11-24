@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use crate::config::{Action, App};
+use crate::error::Code;
 use crate::process::{self, Access, Snapshot, Target};
 use crate::protection::{self, Protection};
 use crate::state::State;
@@ -197,7 +198,10 @@ pub fn running_now() -> Vec<Running> {
     let Ok(snapshot) = Snapshot::take() else {
         return Vec::new();
     };
-    let session = snapshot.own_session().unwrap_or(0);
+    // Without its own session nothing is known to belong to the user.
+    let Some(session) = snapshot.own_session() else {
+        return Vec::new();
+    };
     let own = std::env::current_exe()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()));
@@ -234,7 +238,9 @@ pub fn running_now() -> Vec<Running> {
                 false,
             ),
             Ok(None) => continue,
-            Err(_) => (None, true),
+            Err(err) if matches!(err.code, Code::NeedsAdmin | Code::Protected) => (None, true),
+            // Any other failure says nothing about the program: not listed.
+            Err(_) => continue,
         };
         let shown = visible.contains(&p.pid) || icons.contains(&key);
         let row = rows

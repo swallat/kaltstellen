@@ -770,7 +770,9 @@ function snapSetDefaults() {
 function snapEverything() {
   snap.choices.clear();
   const set = (row, action) => snap.choices.set(snapKey(row), { action, confirmed: false });
-  for (const row of snap.data.running) set(row, row.path && !row.elevated ? 'start' : 'ignore');
+  // Only what the list shows: background programs stay out unless shown.
+  const shown = $('snapshot-background').checked;
+  for (const row of snap.data.running) if (shown || !row.background) set(row, row.path && !row.elevated ? 'start' : 'ignore');
   for (const row of snap.data.held) snap.choices.set(snapKey(row), { action: row.held, confirmed: row.protection === 'warn' });
   // A warn-list program is not stopped without its own confirmation (P6).
   for (const row of snap.data.seen) if (row.protection !== 'warn') set(row, 'stop');
