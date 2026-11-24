@@ -179,7 +179,7 @@ differ, this note wins.
   pipe, trust checks, `status`, the `Background helper` entry in `Settings`.
 - M4b: *observe* with the process events and the pull requests, then the
   network counters; H2 and H5 use them.
-- M4c: watch mode (`watch = true`) in the tray.
+- M4c: watch mode (`watch = true`) in the tray (built: key and window, tray re-applies the active profile when a program with an entry started).
 - M4d: *act* on elevated programs with the allow list and the safety
   record.
 - M4e: services (A5).

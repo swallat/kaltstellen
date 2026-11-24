@@ -25,6 +25,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+/// M4c: the shortest time between two applications of a watching profile.
+const WATCH_GAP: Duration = Duration::from_secs(30);
+
 use log::{info, warn};
 
 use crate::autostart;
@@ -272,6 +275,11 @@ fn run(window: bool) -> u8 {
             polling: false,
             starts: starts::StartWatch::default(),
             starts_setting_read: None,
+            notify_new: false,
+            watch_reapplied: None,
+            watch_due: false,
+            watch_streak: 0,
+            was_watching: false,
             images: HashMap::new(),
             notice: None,
             balloons: model::Balloons::default(),
@@ -368,6 +376,20 @@ struct App {
     starts: starts::StartWatch,
     /// H9: when `settings.json` was read for `notify_new` last.
     starts_setting_read: Option<Instant>,
+    /// H9: `notify_new` as read from `settings.json`.
+    notify_new: bool,
+    /// M4c: when the active profile was last applied again because a
+    /// program of it started (`watch`).
+    watch_reapplied: Option<Instant>,
+    /// M4c: a program of the watching profile started and the profile was
+    /// not applied again yet.
+    watch_due: bool,
+    /// M4c: re-applications in a row that each came soon after the last
+    /// (a program that starts again after the profile stopped it); each
+    /// doubles the wait.
+    watch_streak: u32,
+    /// M4c: the active profile watched at the last poll.
+    was_watching: bool,
     /// U4: image paths of processes named like a trigger with a path, by
     /// PID and creation time, so each is opened once (A7). A read that
     /// failed is tried again at the next polls, at most
@@ -975,18 +997,28 @@ impl App {
             .config_dir
             .as_deref()
             .is_some_and(|dir| settings::load(dir).0.notifying_new());
-        if on != self.starts.enabled() {
+        if on != self.notify_new {
             info!(
                 "tray: announcing new programs is {}",
                 if on { "on" } else { "off" }
             );
-            self.starts.set_enabled(on);
+            self.notify_new = on;
         }
+    }
+
+    /// M4c: whether the active profile has `watch = true`.
+    fn active_watches(&self) -> bool {
+        !self.status.is_neutral()
+            && lock(&self.source)
+                .config()
+                .profile(&self.status.active)
+                .is_some_and(|p| p.watch)
     }
 
     /// H9: a profile was applied: only programs that start from now on
     /// count, and what was noted for the profile before is forgotten.
     fn activate_starts(&mut self) {
+        self.watch_due = false;
         self.starts
             .activated(&self.status.active, crate::unassigned::now());
         if !self.status.is_neutral()
@@ -1005,6 +1037,19 @@ impl App {
             return;
         }
         self.refresh_notify_setting(false);
+        // Questions to the helper are needed to announce new programs
+        // (`notify_new`) or to follow a profile with `watch` (M4c).
+        let watching = self.active_watches();
+        if watching != self.was_watching {
+            // `watch` was switched on (or the profile changed): only starts
+            // from now on count, not those since the profile was applied.
+            self.was_watching = watching;
+            self.watch_due = false;
+            if watching {
+                self.activate_starts();
+            }
+        }
+        self.starts.set_enabled(self.notify_new || watching);
         if !self.starts.enabled() {
             return;
         }
@@ -1035,6 +1080,9 @@ impl App {
             }
             self.starts.feed(now, answer);
         }
+        if watching {
+            self.try_reapply();
+        }
         if self.status.is_neutral() || !self.starts.has_pending() {
             self.announce_starts(now, &active);
             return;
@@ -1059,7 +1107,31 @@ impl App {
         // `settled` is every start that stayed running; other features that
         // follow starts (a profile that watches) hook in here.
         let settled = self.starts.settled(now);
-        let found = self.starts.offers(&settled, &ctx);
+        if watching {
+            let acting: std::collections::HashSet<String> = lock(&self.source)
+                .config()
+                .profile(&active)
+                .map(|p| {
+                    p.apps
+                        .iter()
+                        .filter(|a| {
+                            matches!(
+                                a.action,
+                                config::AppAction::Stop { .. } | config::AppAction::Suspend { .. }
+                            )
+                        })
+                        .map(|a| a.exe.to_lowercase())
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.note_watched(&settled, &acting);
+            self.try_reapply();
+        }
+        let found = if self.notify_new {
+            self.starts.offers(&settled, &ctx)
+        } else {
+            Vec::new()
+        };
         if !found.is_empty() {
             match crate::unassigned::note_started(&dir, &active, &found, now) {
                 Ok(fresh) => {
@@ -1076,8 +1148,68 @@ impl App {
         self.announce_starts(now, &active);
     }
 
+    /// M4c: a program that the active profile stops or suspends
+    /// (`watch = true`; `acting` holds those entries) started after the profile was applied: the profile is to be applied
+    /// again ([`try_reapply`](Self::try_reapply)).
+    fn note_watched(
+        &mut self,
+        settled: &[crate::helper::events::Event],
+        acting: &std::collections::HashSet<String>,
+    ) {
+        if let Some(hit) = settled
+            .iter()
+            .find(|e| e.path.is_some() && acting.contains(&e.exe.to_lowercase()))
+        {
+            info!("tray: \"{}\" started while the profile watches", hit.exe);
+            self.watch_due = true;
+        }
+    }
+
+    /// M4c: applies the active profile again when a program of it started,
+    /// which handles the program as in a switch. Not while a switch runs
+    /// or waits (the second enumeration of W6 catches what starts
+    /// meanwhile) and at most once per [`WATCH_GAP`]; it stays due until
+    /// then. It is not a manual switch: automatic switching is not held
+    /// and the offer of the last session stays.
+    fn try_reapply(&mut self) {
+        if !self.watch_due {
+            return;
+        }
+        if self.controller.running().is_some()
+            || self.controller.pending().is_some()
+            || self.controller.is_quitting()
+            || self
+                .watch_reapplied
+                .is_some_and(|t| t.elapsed() < WATCH_GAP * (1 << self.watch_streak))
+        {
+            return;
+        }
+        self.watch_due = false;
+        // A program that keeps coming back after being stopped must not keep
+        // the profile busy: each re-application soon after the last doubles
+        // the wait (up to 16 times the gap).
+        let soon = self
+            .watch_reapplied
+            .is_some_and(|t| t.elapsed() < WATCH_GAP * (2 << self.watch_streak));
+        self.watch_streak = if soon {
+            (self.watch_streak + 1).min(4)
+        } else {
+            0
+        };
+        self.watch_reapplied = Some(Instant::now());
+        let active = self.status.active.clone();
+        info!("tray: applying \"{active}\" again (it watches)");
+        if let Decision::Start(job) = self.controller.request(Job::switch(&active)) {
+            self.status.switching = Some(job.leads_to().to_owned());
+            self.redraw();
+        }
+    }
+
     /// H9: the notification for programs noted meanwhile, if one is due.
     fn announce_starts(&mut self, now: u64, active: &str) {
+        if !self.notify_new {
+            return;
+        }
         if let Some((title, text)) = self.starts.announcement(now, active) {
             info!("tray: notification: {title}: {text}");
             let logged_only = std::env::var(NOTIFY_ENV).is_ok_and(|v| v.trim() == "log");
