@@ -1,11 +1,13 @@
 {
   "_readme": [
-    "Programs the beta test may touch. kaltstellen freezes or stops nothing that is not listed here.",
-    "Copied to beta-test.json by 'beta-test.ps1 setup'; edit that copy, not this file.",
+    "Optional. Without a beta-test.json the script brings its own test programs (scripts/beta-test-programs.cs, built at setup) and you need not choose any.",
+    "Use this file only to test with programs of your own. Copy it to <backup root>\\beta-test.json (default %LOCALAPPDATA%\\kaltstellen-beta-backup) or name it with -ProgramList.",
+    "kaltstellen freezes or stops nothing that is not listed here.",
+    "\"builtin\" in place of an entry (or of a whole list) keeps the script's own programs for it, so you can mix.",
     "Each program: exe = executable name as in Task Manager, Details (required).",
     "  path = full path, lets the script start the program itself (optional).",
-    "  args = arguments for that start (optional); {heartbeat} becomes a file the program writes (test fixtures only).",
-    "  disposable = true: the script may kill what it started of it (test fixtures only; leave it out for real programs).",
+    "  args = arguments for that start (optional); {heartbeat} becomes a file the program writes (test programs only).",
+    "  disposable = true: the script may kill what it started of it (test programs only; leave it out for real programs).",
     "suspend: programs that may be frozen (at least one; begin with programs that are not critical).",
     "stop: programs that may be closed and started again; on_timeout 'keep' (default here) leaves one with unsaved work running.",
     "trigger: \"builtin\" (default) is a renamed copy of ping.exe in the test folder that the script starts and ends; or a program of your own you can start and end at will (exe, path). It switches the profile 'beta-trigger' automatically. Not in suspend or stop.",
@@ -17,11 +19,11 @@
   "suspend": [
     { "exe": "<a program that may be frozen>.exe", "path": "" }
   ],
-  "stop": [],
+  "stop": "builtin",
   "trigger": "builtin",
-  "large": null,
+  "large": "builtin",
   "elevated": null,
-  "tray_program": null,
+  "tray_program": "builtin",
   "hotkey": "Ctrl+Shift+Alt+F9",
   "altgr_hotkey": "Ctrl+Alt+7"
 }

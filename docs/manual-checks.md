@@ -22,7 +22,7 @@ Afterwards remove `%TEMP%\ks-manual` and `HKCU\Software\kaltstellen-manual`.
 3. Right click and left click: the menu opens near the icon and lists the
    profiles, `Neutral` (checked), `Open kaltstellen…`, `Quit`, and no
    settings: no `Start at sign-in`, no `Automatic switching`, no `Updates:`
-   lines (they are in the main window). Clicking elsewhere closes it.
+   lines (they are in the main window, Settings). Clicking elsewhere closes it.
 4. Choose a profile whose programs are not running: the icon turns orange,
    the tooltip names the profile, the profile is checked.
 5. Make a switch fail (a `start` entry whose `path` does not exist yet):
@@ -90,20 +90,29 @@ main session made them; they show the views below in light and dark.
    switches to Neutral first; afterwards the profile is gone.
 10. Unassigned programs: start a program with a tray icon that has no entry;
     `Refresh`: it is listed as `new`; `Dismiss` removes it.
-11. `Start at sign-in` in the header follows `kaltstellen autostart on|off`
-    (use the test Run key from above; focus the window again to refresh).
-    `Automatic switching` next to it is disabled with a hint (hover) while
+11. `Start at sign-in` in Settings, General, follows `kaltstellen autostart
+    on|off` (use the test Run key from above; focus the window again to
+    refresh). `Automatic switching` in the header is disabled with a hint (hover) while
     no profile has triggers; see "Automatic triggers" step 7.
 12. Edit the file in an editor while the window is open, then make a change
     in the window: the status line says the file was changed and reloads it.
 13. Right click in the page: no browser context menu (release build). Ctrl+P,
     F5, Ctrl+F do nothing (release build).
-13a. Updates (sidebar): the installed version is shown; `Check now` shows
-    `Checking…`, then `Up to date` with the time or the newer version (with
-    network off: `Last check failed` and the reason). Changing the mode
-    writes `settings.json` like the tray items; with `KALTSTELLEN_UPDATE`
-    set the selector is disabled. With a newer version known, `Install
-    <version>` opens the console window of the update.
+13a. Settings (foot of the sidebar): General, Defaults, Profiles, Updates,
+    Files and About; the list on the left scrolls to a section without
+    the page jumping, and About (the last one) can be scrolled back up.
+    Defaults: `Stop timeout` 12 and Save write `stop_timeout_s = 12` to
+    `config.toml` with the comments kept; 0 or more than 300 is refused
+    with a reason and writes nothing. Updates: the installed version is
+    shown; `Check now` shows `Checking…`, then `Up to date` with the time
+    or the newer version (with network off: `Last check failed` and the
+    reason). Changing the mode writes `settings.json` like the tray items;
+    with `KALTSTELLEN_UPDATE` set the selector is disabled. With a newer
+    version known, `Install <version>` opens the console window of the
+    update. Files: the three paths; `Open config folder`, `Open log file`
+    and `Open log folder` open Explorer or the editor; `Reload` reads the
+    file again; `Forget last profile` removes `last_profile` from
+    `settings.json`.
 13b. Program icons (M2): next to each program in a profile, in `Add
     program` and in the unassigned list the program's icon appears, sharp
     at 100 %, 150 % and 200 % scaling and after moving the window to a
@@ -304,7 +313,7 @@ path. Until the first release exists, steps 1 to 3 work with a copy:
 copy `target\release\kaltstellen.exe` to a folder of its own and run it
 from there with the test variables above.
 
-1. Main window, `Updates` section, with the tray running: `Mode` reads
+1. Main window, Settings, `Updates` section, with the tray running: `Mode` reads
    `Install automatically` by default; choosing `Check and ask` or `Off`
    shows `Update mode manual.` (or `off`) in the status line,
    `settings.json` gets `"update": "manual"` or `"off"`, and the tray log

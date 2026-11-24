@@ -325,3 +325,103 @@ fn beta_script_runs_in_a_sandbox_and_leaves_nothing_behind() {
     let again = script(&ps, &[&["teardown"][..], &common[..]].concat());
     assert!(again.contains("Nothing to tear down"), "{again}");
 }
+
+/// Without a program list the script brings its own test programs (compiled
+/// from `scripts/beta-test-programs.cs` with the compiler of the .NET
+/// Framework): the self-check, the stop entries (one closes, one refuses and
+/// stays, one is killed), the unassigned tray program and the memory
+/// measurement all run on them, and teardown removes every trace.
+#[test]
+fn beta_script_brings_its_own_test_programs() {
+    let Some(ps) = powershell() else {
+        eprintln!("beta_script: skipped, Windows PowerShell not found");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("root");
+    let _teardown = Teardown {
+        ps: &ps,
+        root: root.clone(),
+    };
+    let exe = kaltstellen_exe();
+    let common = ["-Root", str_of(&root), "-Unattended"];
+    let real_before = real_state(&ps);
+    let names = [
+        "ks-beta-freeze1.exe",
+        "ks-beta-freeze2.exe",
+        "ks-beta-stop.exe",
+        "ks-beta-stubborn.exe",
+        "ks-beta-stubborn-kill.exe",
+        "ks-beta-large.exe",
+        "ks-beta-tray.exe",
+    ];
+    let _kill = names.map(|n| KillProgram(n.into()));
+
+    let mut args = vec!["setup", "-Sandbox", "-Exe", str_of(&exe)];
+    args.extend(common);
+    script(&ps, &args);
+
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(root.join("beta-state.json")).unwrap()).unwrap();
+    let temp_root = PathBuf::from(state["temp_root"].as_str().unwrap());
+    let session = PathBuf::from(state["session_dir"].as_str().unwrap());
+    for name in names {
+        assert!(
+            temp_root.join("test").join(name).exists(),
+            "{name} not built"
+        );
+    }
+    // No beta-test.json was needed or created.
+    assert!(!root.join("beta-test.json").exists());
+
+    script(
+        &ps,
+        &[
+            &["run", "programs,stop,unassigned,t19", "-SettleSeconds", "2"][..],
+            &common[..],
+        ]
+        .concat(),
+    );
+    let results = fs::read_to_string(session.join("results.jsonl")).unwrap();
+    let records: Vec<serde_json::Value> = results
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let outcome = |test: &str, step: &str| {
+        records
+            .iter()
+            .rev()
+            .find(|r| r["test"] == test && r["step"] == step)
+            .and_then(|r| r["outcome"].as_str())
+            .unwrap_or("missing")
+            .to_owned()
+    };
+    for (test, step) in [
+        ("programs", "start"),
+        ("programs", "close"),
+        ("stop", "closes"),
+        ("stop", "restart"),
+        ("unassigned", "listed"),
+        ("t19", "trim-on"),
+        ("t19", "trim-off"),
+    ] {
+        assert_eq!(outcome(test, step), "pass", "{test}/{step}:\n{results}");
+    }
+
+    script(&ps, &[&["teardown"][..], &common[..]].concat());
+    assert!(!temp_root.exists(), "{} left behind", temp_root.display());
+    assert_eq!(
+        processes_below(&ps, &temp_root),
+        "",
+        "processes from the sandbox left running"
+    );
+    for name in names {
+        assert!(pids_of(name).is_empty(), "{name} left running");
+    }
+    assert_eq!(
+        real_state(&ps),
+        real_before,
+        "the real configuration changed"
+    );
+}
