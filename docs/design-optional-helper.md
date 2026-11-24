@@ -1,6 +1,6 @@
 # Design note: the optional background helper (M4; A5, P7, P8, W6, H2, H5)
 
-Status: decided on 2026-11-24 (five decisions at the end); not implemented yet. Requested by the owner on 2026-11-24 **[decided]**: an
+Status: decided on 2026-11-24 (five decisions at the end); M4a built (see "M4a as built"), the rest not implemented yet. Requested by the owner on 2026-11-24 **[decided]**: an
 optional background component with administrator rights that can be
 installed later, while a portable version without administrator rights stays
 possible. The owner chose the widest scope (watching, acting on elevated
@@ -148,7 +148,7 @@ differ, this note wins.
   is. The helper does not rely on a signature (decision 4); once the project has a certificate it may additionally require the signature of the installed publisher.
 - Versioned JSON lines, size-limited, `deny_unknown_fields`; one request at a
   time per client; every request and refusal logged to the event log and
-  `%ProgramData%\kaltstellen\helper.log`.
+  the log `kaltstellen.log` in `%ProgramData%\kaltstellen`.
 
 ## Without the helper (portable)
 
@@ -194,3 +194,74 @@ Each step is useful on its own and ships behind the helper being installed.
 4. **Code signing**: none for now, a certificate comes when the project is
    better known. The helper is built, tested and offered unsigned. The helper never relies on a signature, and the setup says that the file is unsigned.
 5. **Elevated-program allow list**: changed only from an elevated prompt.
+
+## M4a as built (2026-11-24) **[assumed]**
+
+Built: the install and removal of the service, the protected copy, the
+policy file, the pipe with `hello` and `status`, and the command line.
+Nothing observes or acts yet (M4b to M4e); the roles in `helper.toml` can be
+set, and `status` says that they are not all implemented.
+
+- `kaltstellen helper install [--owner-sid SID]`: from an unelevated
+  prompt it starts itself again with a UAC prompt (`runas`) and passes the
+  caller's SID, so the account typed at the prompt does not change who the
+  helper serves. Elevated, it creates `%ProgramFiles%\kaltstellen` and
+  `%ProgramData%\kaltstellen`, gives the data folder an explicit access list
+  (SYSTEM and administrators full, the owner read), writes `helper.toml`
+  (a second install keeps roles and allow lists, only the owner is updated),
+  stops a running service, copies the running executable through a
+  temporary file and registers the service: `LocalSystem`, automatic
+  (delayed), restart after two failures, required privileges reduced to
+  `SeChangeNotifyPrivilege` (M4b adds what the event sessions need). The
+  window of the elevated step stays open until Enter when it failed.
+- `kaltstellen helper uninstall`: stops and deletes the service and
+  removes the files the install made; folders only if empty.
+- `kaltstellen helper status`: service state, protected copy, roles, and
+  what the pipe answers, with a note when the helper is older than this
+  executable. Exit code 0 also when no helper is installed.
+- `kaltstellen helper run` (hidden): the service body. It reads
+  `helper.toml`, creates `\\.\pipe\kaltstellen-helper` with an access list
+  of the owner and SYSTEM, serves up to 8 clients at once with a 5 s limit
+  per conversation, and refuses to start outside the service manager.
+- Protocol: JSON lines of at most 4096 bytes, `{"v":1,"cmd":"hello"}` or
+  `status`; unknown fields, verbs and versions are refused. The client
+  checks that the pipe is served by SYSTEM (the helper's PID is checked
+  against the service manager in a later step).
+- Errors `KS1001` to `KS1005`.
+- Tested: the protocol, the policy, the copy and `status` without a helper
+  run in CI. Installing, starting and stopping the service has no automatic
+  test (a test must never touch a real service); it is checked by hand on
+  the VM (docs/manual-checks.md).
+
+Hardening from the review of M4a (same day):
+
+- The install uses a folder under `%ProgramFiles%` or `%ProgramData%` only if
+  SYSTEM or the administrators own it and it is no link; any user can create
+  a folder in ProgramData first and would keep the right to change its
+  access list. Both folders come from the system (known folders), not from
+  the environment, which an elevated process inherits from its caller; the
+  `KALTSTELLEN_HELPER_*` redirections work in debug builds only (tests).
+- The source of the copy is the running image as the kernel tracks it, opened
+  once against writers, written to a temporary file and moved over the old
+  copy in one step.
+- A standard user cannot read the token of the SYSTEM service, so the client
+  identifies the helper by process id: the pipe server must be the service's
+  process (service state is read with query rights only). The owner's right
+  on the pipe is read and write without creating further instances.
+- The service reports `running` only once the policy is read and the pipe is
+  bound, tries again for about a minute if the pipe name is taken, and is
+  restarted also after an error exit.
+- The owner SID must be one account (`S-1-5-21-…` with a RID of 1000 or
+  more, or an Entra ID account), not a group or a built-in account.
+- The data folder gets its access list before anything else is put in it,
+  and files in it that SYSTEM or the administrators do not own are removed
+  (a user owns what they created whatever its access list says). A
+  `helper.toml` that exists but cannot be read stops the install instead of
+  being replaced.
+- Stopping waits for a starting service; deleting copes with a service that
+  is already marked for deletion; `helper status` also works where the
+  service state cannot be read, and says so.
+- Known and accepted: the source of the copy is the running image and held
+  open from the start of the elevated step, but a file swapped before the UAC
+  prompt is answered cannot be told from the real one (the prompt shows the
+  path only).

@@ -51,3 +51,8 @@ when they apply. Codes are never renumbered or reused. The source of truth is
 | `KS807` | `update.json` (data directory) could not be read or written. |
 | `KS808` | The tray could not be stopped for the update (it does not know the `quit` request, is quitting already, or did not end within 30 s). Nothing was changed. |
 | `KS901` | Logging could not be set up. |
+| `KS1001` | Installing, removing or controlling the background helper service failed (M4). |
+| `KS1002` | The background helper is not reachable: not installed, stopped, or its pipe is not served by the system account. |
+| `KS1003` | Malformed message on the helper's pipe, or another protocol version. |
+| `KS1004` | `helper.toml` could not be read or is invalid. |
+| `KS1005` | The action needs administrator rights and they were not granted (the UAC prompt was declined). |

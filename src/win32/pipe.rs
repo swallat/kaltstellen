@@ -136,10 +136,24 @@ impl Listener {
     /// Creates the pipe `name` (`\\.\pipe\…`) for the current user only.
     /// Fails if a pipe of that name exists already.
     pub fn bind(name: &str) -> Result<Listener> {
-        let sid = current_user_sid()?;
         // Protected DACL, one entry: all access for this user. Nobody else,
         // not even administrators or SYSTEM, is let in.
-        let sddl = wide(&format!("D:P(A;;GA;;;{sid})"));
+        Listener::bind_sddl(name, &format!("D:P(A;;GA;;;{})", current_user_sid()?))
+    }
+
+    /// Creates the helper's pipe `name`: the service runs as SYSTEM and
+    /// serves the owner recorded at install. The access list names the
+    /// owner and SYSTEM (the service itself, to wake its own accept loop at
+    /// stop) and nobody else. `sid` must be a checked SID string.
+    pub fn bind_for(name: &str, sid: &str) -> Result<Listener> {
+        Listener::bind_sddl(
+            name,
+            &format!("D:P(A;;0x{HELPER_ACCESS:x};;;{sid})(A;;GA;;;SY)"),
+        )
+    }
+
+    fn bind_sddl(name: &str, sddl: &str) -> Result<Listener> {
+        let sddl = wide(sddl);
         let mut descriptor = PSECURITY_DESCRIPTOR::default();
         // SAFETY: NUL-terminated input; the output is freed by `Descriptor`.
         unsafe {
@@ -224,10 +238,45 @@ impl Drop for Listener {
     }
 }
 
-/// Connects to the pipe `name`. `Ok(None)` if no such pipe exists. Waits
-/// up to `busy` while all instances are busy. Fails with `TrayUnreachable`
-/// if the server runs as another user.
+/// Whose pipe a client expects.
+#[derive(Clone, Copy)]
+pub enum Peer {
+    /// The tray: a process of the same user.
+    Tray,
+    /// The helper: a process of the local system account.
+    Helper,
+}
+
+impl Peer {
+    fn code(self) -> Code {
+        match self {
+            Peer::Tray => Code::TrayUnreachable,
+            Peer::Helper => Code::HelperUnreachable,
+        }
+    }
+
+    fn what(self) -> &'static str {
+        match self {
+            Peer::Tray => "the tray's pipe",
+            Peer::Helper => "the helper's pipe",
+        }
+    }
+}
+
+/// The access the helper's pipe grants its owner, and what a client asks
+/// for: read and write, but not `FILE_APPEND_DATA`, which on a pipe is the
+/// right to create further instances of it.
+const HELPER_ACCESS: u32 = (FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0) & !0x4;
+
+/// Connects to the tray's pipe `name`. `Ok(None)` if no such pipe exists.
+/// Waits up to `busy` while all instances are busy. Fails with
+/// `TrayUnreachable` if the server runs as another user.
 pub fn connect(name: &str, busy: Duration) -> Result<Option<File>> {
+    connect_peer(name, busy, Peer::Tray)
+}
+
+/// Like [`connect`], for either end; a helper's server must run as SYSTEM.
+pub fn connect_peer(name: &str, busy: Duration, peer: Peer) -> Result<Option<File>> {
     let wide_name = wide(name);
     let deadline = Instant::now() + busy;
     let handle = loop {
@@ -235,7 +284,10 @@ pub fn connect(name: &str, busy: Duration) -> Result<Option<File>> {
         let result = unsafe {
             CreateFileW(
                 PCWSTR(wide_name.as_ptr()),
-                (FILE_GENERIC_READ | FILE_GENERIC_WRITE).0,
+                match peer {
+                    Peer::Tray => (FILE_GENERIC_READ | FILE_GENERIC_WRITE).0,
+                    Peer::Helper => HELPER_ACCESS,
+                },
                 FILE_SHARE_NONE,
                 None,
                 OPEN_EXISTING,
@@ -250,8 +302,8 @@ pub fn connect(name: &str, busy: Duration) -> Result<Option<File>> {
                 let left = deadline.saturating_duration_since(Instant::now());
                 if left.is_zero() {
                     return Err(Error::new(
-                        Code::TrayUnreachable,
-                        "the tray's pipe stays busy",
+                        peer.code(),
+                        format!("{} stays busy", peer.what()),
                     ));
                 }
                 // SAFETY: NUL-terminated name.
@@ -260,20 +312,28 @@ pub fn connect(name: &str, busy: Duration) -> Result<Option<File>> {
             }
             Err(e) => {
                 return Err(Error::new(
-                    Code::TrayUnreachable,
-                    format!("cannot open the tray's pipe: {e}"),
+                    peer.code(),
+                    format!("cannot open {}: {e}", peer.what()),
                 ));
             }
         }
     };
     // SAFETY: the handle is ours; the File closes it on every path below.
     let file = unsafe { File::from_raw_handle(handle.0) };
-    let server_user = server_user(&file)?;
-    if server_user != current_user_sid()? {
-        return Err(Error::new(
-            Code::TrayUnreachable,
-            "the pipe is served by a process of another user; not used",
-        ));
+    match peer {
+        Peer::Tray => {
+            if server_user(&file)? != current_user_sid()? {
+                return Err(Error::new(
+                    peer.code(),
+                    "the pipe is served by a process of another user; not used",
+                ));
+            }
+        }
+        // A standard user cannot open the token of a SYSTEM process, so the
+        // helper's server is identified by its process id instead: the
+        // caller compares `server_pid` with the service's (see
+        // `helper::client`).
+        Peer::Helper => {}
     }
     Ok(Some(file))
 }
@@ -292,6 +352,14 @@ fn server_user(file: &File) -> Result<String> {
         let _ = CloseHandle(process);
         sid
     }
+}
+
+/// The PID of the server at the other end of a client connection.
+pub fn server_pid(file: &File) -> Option<u32> {
+    let mut pid = 0u32;
+    // SAFETY: valid pipe handle and out pointer.
+    unsafe { GetNamedPipeServerProcessId(HANDLE(file.as_raw_handle()), &mut pid) }.ok()?;
+    Some(pid)
 }
 
 /// The PID of the client at the other end of a server connection (T16).

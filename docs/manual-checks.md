@@ -351,3 +351,34 @@ from there with the test variables above.
    when the new tray starts.
 6. Behind a proxy or a TLS-inspecting firewall, if available: the check
    works with the system's proxy settings.
+
+## Optional background helper (M4a, design-optional-helper.md)
+
+On the VM, from a copy of the executable that is **not** in `Program Files`.
+Nothing here is covered by CI because it installs a real service.
+
+1. `kaltstellen helper status` before anything: `service: not installed`,
+   exit code 0.
+2. `kaltstellen helper install` from a normal prompt: a UAC prompt appears,
+   a window reports `the background helper is installed and running`.
+   Declining the prompt gives `KS1005`, nothing installed.
+3. `services.msc`: `kaltstellen background helper`, running, automatic
+   (delayed), log on as Local System. `sc qprivs kaltstellen-helper` lists
+   only `SeChangeNotifyPrivilege`. `sc qfailure kaltstellen-helper` shows the
+   restart actions.
+4. `%ProgramFiles%\kaltstellen\kaltstellen.exe` exists and a normal user
+   cannot change or delete it. `%ProgramData%\kaltstellen`: `helper.toml`
+   and `kaltstellen.log` exist, a normal user can read but not write them
+   (`icacls`).
+5. `kaltstellen helper status` (normal prompt): running, the roles, the pipe
+   answers with the same version.
+6. Another user (a second account, or `runas`): `helper status` does not get
+   an answer from the pipe (access denied is shown, nothing hangs).
+7. Kill the service process in Task Manager: it restarts after about a
+   minute. `sc stop kaltstellen-helper` ends it within seconds; the log says
+   `helper stopping`.
+8. Install again with a newer build: the service is replaced, `helper.toml`
+   keeps its roles. `kaltstellen helper uninstall`: service, protected copy,
+   policy and log are gone, and both folders if nothing else is in them.
+9. The tray, the window and every command work unchanged throughout, with
+   the helper installed, stopped and removed.
