@@ -94,7 +94,7 @@ enum Command {
         /// Capture the window as PNG into this file and exit (review)
         #[arg(long, hide = true)]
         screenshot: Option<PathBuf>,
-        /// View to open before the capture: entry, add, confirm, new
+        /// View to open before the capture: entry, add, confirm, new, settings
         #[arg(long, hide = true)]
         view: Option<String>,
         /// Colour scheme for the capture: light or dark

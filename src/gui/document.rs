@@ -331,6 +331,48 @@ impl Document {
         })
     }
 
+    /// The four keys of `[settings]` (spec M6, owner 2026-11-24): what an
+    /// entry does when it names nothing itself. A key that is not there and
+    /// would get its default stays out of the file; one that is there is
+    /// kept as written when its value does not change. `[settings]` is
+    /// created when it is missing.
+    pub fn set_defaults(&mut self, defaults: &Defaults) -> Result<(), Error> {
+        self.edit(|doc| {
+            let existed = doc.contains_key("settings");
+            let table = doc
+                .entry("settings")
+                .or_insert(Item::Table(Table::new()))
+                .as_table_mut()
+                .ok_or("\"settings\" is not a table")?;
+            let fresh = config::Settings::default();
+            put(
+                table,
+                "default_action",
+                action_name(defaults.default_action),
+                action_name(fresh.default_action),
+            );
+            put(table, "trim", defaults.trim, fresh.trim);
+            put(
+                table,
+                "stop_timeout_s",
+                i64::from(defaults.stop_timeout_s),
+                i64::from(fresh.stop_timeout_s),
+            );
+            put(
+                table,
+                "minimize_before_suspend",
+                defaults.minimize_before_suspend,
+                fresh.minimize_before_suspend,
+            );
+            // A section made only for defaults that change nothing is not
+            // left behind empty.
+            if !existed && table.is_empty() {
+                doc.remove("settings");
+            }
+            Ok(())
+        })
+    }
+
     /// U4: sets the trigger programs and the priority of a profile. An
     /// empty list removes `trigger`, priority `0` (the default) removes
     /// `priority`; unchanged values keep how they are written.
@@ -520,6 +562,22 @@ fn same_value(a: &toml_edit::Value, b: &toml_edit::Value) -> bool {
 
 /// Sets `key` to `new`. An existing key keeps its place and the comments
 /// around it and its value; only the value itself changes.
+/// [`set_keep`] unless the key is absent and `value` is the default.
+fn put<T: PartialEq + Into<toml_edit::Value>>(table: &mut Table, key: &str, value: T, default: T) {
+    if table.contains_key(key) || value != default {
+        set_keep(table, key, value);
+    }
+}
+
+/// The defaults of `[settings]` as the main window sets them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Defaults {
+    pub default_action: Action,
+    pub trim: bool,
+    pub stop_timeout_s: u32,
+    pub minimize_before_suspend: bool,
+}
+
 fn set_keep(table: &mut Table, key: &str, new: impl Into<toml_edit::Value>) {
     let mut new: toml_edit::Value = new.into();
     match table.get_mut(key) {
@@ -1003,6 +1061,63 @@ name = "music"
                 .as_ref()
                 .map(ToString::to_string),
             Some("Ctrl+Shift+Alt+F1".to_owned())
+        );
+    }
+
+    #[test]
+    fn m6_set_defaults_keeps_what_is_written_and_adds_only_what_differs() {
+        let mut d = doc();
+        // The sample has `stop_timeout_s = 5   # short`; nothing else.
+        let same = Defaults {
+            default_action: Action::Suspend,
+            trim: true,
+            stop_timeout_s: 5,
+            minimize_before_suspend: true,
+        };
+        d.set_defaults(&same).unwrap();
+        assert!(d.doc.to_string().contains("stop_timeout_s = 5   # short"));
+        assert!(!d.doc.to_string().contains("trim ="), "default stays out");
+
+        let changed = Defaults {
+            default_action: Action::Stop,
+            trim: false,
+            stop_timeout_s: 12,
+            minimize_before_suspend: false,
+        };
+        d.set_defaults(&changed).unwrap();
+        let text = d.doc.to_string();
+        assert!(text.contains("stop_timeout_s = 12   # short"), "{text}");
+        assert!(text.contains("default_action = \"stop\""), "{text}");
+        assert!(text.contains("trim = false"), "{text}");
+        assert!(text.contains("minimize_before_suspend = false"), "{text}");
+        let settings = &d.config().settings;
+        assert_eq!(settings.default_action, Action::Stop);
+        assert_eq!(settings.stop_timeout_s, 12);
+        assert!(!settings.trim && !settings.minimize_before_suspend);
+        assert!(text.starts_with("# My profiles. Keep this comment."));
+    }
+
+    #[test]
+    fn m6_set_defaults_creates_the_section_and_refuses_start() {
+        let mut d = Document::from_text(Path::new("C:\\cfg\\config.toml"), "").unwrap();
+        let mut defaults = Defaults {
+            default_action: Action::Suspend,
+            trim: true,
+            stop_timeout_s: 8,
+            minimize_before_suspend: true,
+        };
+        d.set_defaults(&defaults).unwrap();
+        assert!(!d.doc.to_string().contains("trim"), "nothing differs");
+        defaults.stop_timeout_s = 20;
+        d.set_defaults(&defaults).unwrap();
+        assert_eq!(d.config().settings.stop_timeout_s, 20);
+        defaults.default_action = Action::Start;
+        let err = d.set_defaults(&defaults).unwrap_err();
+        assert!(err.reason.contains("default_action"), "{err}");
+        assert_eq!(
+            d.config().settings.stop_timeout_s,
+            20,
+            "refused edit leaves it"
         );
     }
 

@@ -18,6 +18,11 @@ const FILES: &[(&str, &[u8], &str)] = &[
         "text/css; charset=utf-8",
     ),
     (
+        "css/settings.css",
+        include_bytes!("../../ui/css/settings.css"),
+        "text/css; charset=utf-8",
+    ),
+    (
         "js/app.js",
         include_bytes!("../../ui/js/app.js"),
         "text/javascript; charset=utf-8",
@@ -54,7 +59,13 @@ mod tests {
     #[test]
     fn every_reference_of_the_page_is_embedded_and_nothing_is_remote() {
         let html = text("index.html");
-        for reference in ["css/tokens.css", "css/app.css", "js/app.js", "img/logo.svg"] {
+        for reference in [
+            "css/tokens.css",
+            "css/app.css",
+            "css/settings.css",
+            "js/app.js",
+            "img/logo.svg",
+        ] {
             assert!(html.contains(reference), "{reference}");
             assert!(get(reference).is_some(), "{reference} not embedded");
         }

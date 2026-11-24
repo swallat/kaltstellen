@@ -25,6 +25,14 @@ const state = {
   active: 'Flight',
   default_action: 'suspend',
   default_trim: true,
+  stop_timeout_s: 8,
+  minimize_before_suspend: true,
+  locations: {
+    settings_file: 'C:\\Users\\you\\AppData\\Roaming\\kaltstellen\\settings.json',
+    data_dir: 'C:\\Users\\you\\AppData\\Local\\kaltstellen',
+    log_file: 'C:\\Users\\you\\AppData\\Local\\kaltstellen\\kaltstellen.log',
+    last_profile: 'Flight',
+  },
   autostart: false,
   automation: { on: true, triggers: true, note: null },
   applying: false,
@@ -58,6 +66,15 @@ const state = {
     { name: 'Quiet evening', hotkey: null, active: false, triggers: [], priority: 0, entries: [] },
   ],
 };
+
+// Review states: ?state=update | locked | notriggers.
+const reviewState = new URLSearchParams(location.search).get('state');
+if (reviewState === 'update') Object.assign(state.update, { available: '1.1.0' });
+if (reviewState === 'locked') state.update.mode_locked = true;
+if (reviewState === 'notriggers') {
+  state.automation.triggers = false;
+  for (const p of state.profiles) p.triggers = [];
+}
 
 const running = [
   { exe: 'browser.exe', private_bytes: 1_340_000_000 },
@@ -272,6 +289,24 @@ function handle(message) {
       if (m.mode !== 'off' && !state.update.checking) check();
       return { ok: true };
     }
+    case 'set_defaults': {
+      if (!['suspend', 'stop', 'ignore'].includes(m.default_action)) return fail(`unknown default action "${m.default_action}"`);
+      if (!Number.isInteger(m.stop_timeout_s) || m.stop_timeout_s < 1 || m.stop_timeout_s > 300) return fail('the time to close a program is 1 to 300 seconds');
+      state.default_action = m.default_action;
+      state.default_trim = !!m.trim;
+      state.stop_timeout_s = m.stop_timeout_s;
+      state.minimize_before_suspend = !!m.minimize_before_suspend;
+      state.status = 'Program defaults changed (they apply from the next switch); saved.';
+      return { ok: true };
+    }
+    case 'open_location':
+      if (!['config_folder', 'log', 'log_folder'].includes(m.target)) return fail(`unknown location "${m.target}"`);
+      state.status = `Mock: would open ${m.target}.`;
+      return { ok: true };
+    case 'forget_last_profile':
+      state.locations.last_profile = null;
+      state.status = 'The offer to apply the last profile after sign-in is cleared.';
+      return { ok: true };
     case 'check_updates':
       if (state.update.checking) return fail('a check is still running');
       state.status = 'Checking for updates…';

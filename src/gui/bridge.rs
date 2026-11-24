@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::document::{Document, EntryEdit, action_name};
+use super::document::{Defaults, Document, EntryEdit, action_name};
 pub use super::icons::Wanted;
 use super::model::{self, AddCheck, Candidate, Failure};
-use crate::config::{App, AppAction, Config, NEUTRAL, OnTimeout};
+use crate::config::{Action, App, AppAction, Config, NEUTRAL, OnTimeout};
 use crate::program_info::View;
 use crate::protection::{self, Protection};
 pub use crate::tray::client::Delivery;
@@ -29,6 +29,8 @@ pub const MAX_MESSAGE: usize = 64 * 1024;
 const MAX_TEXT: usize = 4096;
 /// U4: trigger programs per profile the window may set.
 const MAX_TRIGGERS: usize = 64;
+/// M6: the longest time to close a program the window may set (seconds).
+const MAX_STOP_TIMEOUT_S: u32 = 300;
 
 /// What the bridge needs from the outside world. The real host lives in
 /// `gui::mod`; tests use a fake.
@@ -76,6 +78,27 @@ pub trait Host {
     /// tray, `Err` when the tray did not answer in time (what is shown
     /// stays as it is).
     fn tray_status(&self) -> Result<Option<TrayStatus>, String>;
+    /// M6: the files and the saved profile the `Settings` view names.
+    fn locations(&self) -> Locations;
+    /// M6: forgets the profile that was active when the last session ended
+    /// (the tray's `Apply last profile` offer, S5).
+    fn forget_last_profile(&self) -> Result<(), String>;
+    /// M6: shows a file or folder in Explorer. The bridge passes only
+    /// paths it derived itself, never one from the page.
+    fn open_path(&self, path: &Path) -> Result<(), String>;
+}
+
+/// M6: where the data of kaltstellen lives, for the `Settings` view.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Locations {
+    /// `settings.json` in the configuration directory.
+    pub settings_file: Option<String>,
+    /// The folder of `kaltstellen.log`.
+    pub data_dir: Option<String>,
+    /// `kaltstellen.log`.
+    pub log_file: Option<String>,
+    /// The profile `settings.json` offers after sign-in (S5).
+    pub last_profile: Option<String>,
 }
 
 /// Most programs one `icons` request may name.
@@ -202,6 +225,19 @@ pub enum Request {
     },
     CheckUpdates,
     InstallUpdate,
+    /// M6: the `[settings]` of the configuration file.
+    SetDefaults {
+        default_action: String,
+        trim: bool,
+        stop_timeout_s: u32,
+        minimize_before_suspend: bool,
+    },
+    /// M6: `config_folder`, `log` or `log_folder` in Explorer.
+    OpenLocation {
+        target: String,
+    },
+    /// M6: forget the profile of the last session.
+    ForgetLastProfile,
     Icons {
         programs: Vec<IconProgram>,
         /// Device pixels: the page's size times its DPI scale.
@@ -247,6 +283,10 @@ pub struct StateView {
     pub active: String,
     pub default_action: &'static str,
     pub default_trim: bool,
+    /// M6: the other two keys of `[settings]`.
+    pub stop_timeout_s: u32,
+    pub minimize_before_suspend: bool,
+    pub locations: Locations,
     pub profiles: Vec<ProfileView>,
     pub autostart: Option<bool>,
     /// U4: `Automatic switching`.
@@ -366,6 +406,7 @@ fn is_edit(request: &Request) -> bool {
             | Request::DeleteProfile { .. }
             | Request::SetHotkey { .. }
             | Request::SetTriggers { .. }
+            | Request::SetDefaults { .. }
             | Request::AddEntry { .. }
             | Request::UpdateEntry { .. }
             | Request::RemoveEntry { .. }
@@ -435,6 +476,9 @@ impl<H: Host> Bridge<H> {
             config_file: self.document.path().display().to_string(),
             default_action: action_name(config.settings.default_action),
             default_trim: config.settings.trim,
+            stop_timeout_s: config.settings.stop_timeout_s,
+            minimize_before_suspend: config.settings.minimize_before_suspend,
+            locations: self.host.locations(),
             profiles: config
                 .profiles
                 .iter()
@@ -673,6 +717,58 @@ impl<H: Host> Bridge<H> {
                     n => format!("{n} triggers of \"{profile}\" set, priority {priority}"),
                 };
                 self.saved(what, result)
+            }
+            Request::SetDefaults {
+                default_action,
+                trim,
+                stop_timeout_s,
+                minimize_before_suspend,
+            } => {
+                check_text(&[&default_action])?;
+                let default_action = match default_action.trim() {
+                    "suspend" => Action::Suspend,
+                    "stop" => Action::Stop,
+                    "ignore" => Action::Ignore,
+                    other => return Err(format!("unknown default action \"{other}\"")),
+                };
+                if !(1..=MAX_STOP_TIMEOUT_S).contains(&stop_timeout_s) {
+                    return Err(format!(
+                        "the time to close a program is 1 to {MAX_STOP_TIMEOUT_S} seconds"
+                    ));
+                }
+                let result = self.document.set_defaults(&Defaults {
+                    default_action,
+                    trim,
+                    stop_timeout_s,
+                    minimize_before_suspend,
+                });
+                self.saved(
+                    "Program defaults changed (they apply from the next switch)".to_owned(),
+                    result,
+                )
+            }
+            Request::OpenLocation { target } => {
+                check_text(&[&target])?;
+                let locations = self.host.locations();
+                let (path, what) = match target.as_str() {
+                    "config_folder" => (
+                        self.document.path().parent().map(Path::to_path_buf),
+                        "the configuration folder",
+                    ),
+                    "log" => (locations.log_file.map(PathBuf::from), "the log"),
+                    "log_folder" => (locations.data_dir.map(PathBuf::from), "the log folder"),
+                    other => return Err(format!("unknown location \"{other}\"")),
+                };
+                let path = path.ok_or_else(|| format!("{what} is not known"))?;
+                self.host.open_path(&path)?;
+                self.status = format!("Opened {what}.");
+                Ok(None)
+            }
+            Request::ForgetLastProfile => {
+                self.host.forget_last_profile()?;
+                self.status =
+                    "The offer to apply the last profile after sign-in is cleared.".to_owned();
+                Ok(None)
             }
             Request::CheckProgram { exe } => {
                 check_text(&[&exe])?;
@@ -1082,6 +1178,10 @@ mod tests {
         /// older tray that does not know the command, 3 the tray takes it but
         /// cannot save it, 4 the tray does not answer in time.
         delivery: Rc<std::cell::Cell<u8>>,
+        /// M6: what `open_path` was asked to show.
+        opened: Rc<RefCell<Vec<PathBuf>>>,
+        /// M6: the profile `settings.json` offers after sign-in.
+        last_profile: Rc<RefCell<Option<String>>>,
     }
 
     impl Fake {
@@ -1206,6 +1306,22 @@ mod tests {
                     None => None,
                 })
                 .collect()
+        }
+        fn locations(&self) -> Locations {
+            Locations {
+                settings_file: Some("C:\\cfg\\settings.json".into()),
+                data_dir: Some("C:\\data".into()),
+                log_file: Some("C:\\data\\kaltstellen.log".into()),
+                last_profile: self.last_profile.borrow().clone(),
+            }
+        }
+        fn forget_last_profile(&self) -> Result<(), String> {
+            *self.last_profile.borrow_mut() = None;
+            Ok(())
+        }
+        fn open_path(&self, path: &Path) -> Result<(), String> {
+            self.opened.borrow_mut().push(path.to_path_buf());
+            Ok(())
         }
         fn tray_status(&self) -> Result<Option<TrayStatus>, String> {
             if self.tray_silent.get() {
@@ -1545,6 +1661,84 @@ mod tests {
         assert_eq!(profile["entries"][0]["action"], "suspend");
         assert_eq!(profile["entries"][0]["trim"], true);
         assert_eq!(reply["state"]["default_action"], "suspend");
+    }
+
+    #[test]
+    fn m6_defaults_are_set_validated_and_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        let reply = send(&mut b, json!({"v": 1, "id": 1, "type": "get_state"}));
+        assert_eq!(reply["state"]["stop_timeout_s"], 8);
+        assert_eq!(reply["state"]["minimize_before_suspend"], true);
+        let set = |action: &str, timeout: u64| {
+            json!({"v": 1, "id": 2, "type": "set_defaults", "default_action": action,
+                   "trim": false, "stop_timeout_s": timeout, "minimize_before_suspend": false})
+        };
+        let reply = send(&mut b, set("stop", 15));
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(reply["state"]["default_action"], "stop");
+        assert_eq!(reply["state"]["default_trim"], false);
+        assert_eq!(reply["state"]["stop_timeout_s"], 15);
+        assert_eq!(reply["state"]["minimize_before_suspend"], false);
+        let saved = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(
+            saved.contains("# keep me") && saved.contains("stop_timeout_s = 15"),
+            "{saved}"
+        );
+        // Refused: start, anything unknown, a time outside 1 to 300.
+        for bad in [
+            set("start", 8),
+            set("freeze", 8),
+            set("stop", 0),
+            set("stop", 301),
+        ] {
+            assert_eq!(send(&mut b, bad)["ok"], false);
+        }
+        assert_eq!(b.document().config().settings.stop_timeout_s, 15);
+    }
+
+    #[test]
+    fn m6_the_page_opens_only_places_the_host_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, fake) = bridge(&dir);
+        for target in ["config_folder", "log", "log_folder"] {
+            let reply = send(
+                &mut b,
+                json!({"v": 1, "id": 1, "type": "open_location", "target": target}),
+            );
+            assert_eq!(reply["ok"], true, "{target}");
+        }
+        assert_eq!(
+            *fake.opened.borrow(),
+            vec![
+                dir.path().to_path_buf(),
+                PathBuf::from("C:\\data\\kaltstellen.log"),
+                PathBuf::from("C:\\data"),
+            ]
+        );
+        for target in ["C:\\Windows\\System32\\cmd.exe", "", "../x"] {
+            let reply = send(
+                &mut b,
+                json!({"v": 1, "id": 2, "type": "open_location", "target": target}),
+            );
+            assert_eq!(reply["ok"], false, "{target}");
+        }
+        assert_eq!(fake.opened.borrow().len(), 3);
+    }
+
+    #[test]
+    fn m6_forgetting_the_last_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, fake) = bridge(&dir);
+        *fake.last_profile.borrow_mut() = Some("focus".into());
+        let reply = send(&mut b, json!({"v": 1, "id": 1, "type": "get_state"}));
+        assert_eq!(reply["state"]["locations"]["last_profile"], "focus");
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "forget_last_profile"}),
+        );
+        assert_eq!(reply["ok"], true);
+        assert!(reply["state"]["locations"]["last_profile"].is_null());
     }
 
     #[test]
