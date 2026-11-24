@@ -223,10 +223,8 @@ pub fn uninstall() -> Result<bool> {
     }
     let mut left_over = Vec::new();
     for file in &files {
-        match fs::remove_file(file) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => left_over.push(format!("{}: {e}", file.display())),
+        if let Err(e) = remove_file_waiting(file) {
+            left_over.push(format!("{}: {e}", file.display()));
         }
     }
     // Only empty folders go; anything else in them is not ours.
@@ -244,6 +242,21 @@ pub fn uninstall() -> Result<bool> {
     }
     info!("helper removed");
     Ok(removed)
+}
+
+/// Removes `path`; a file that is not there is fine. The service process
+/// can still hold its executable for a moment after the service reports
+/// stopped, so a file in use is tried again for up to 15 s.
+fn remove_file_waiting(path: &Path) -> std::io::Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        match fs::remove_file(path) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if std::time::Instant::now() >= deadline => return Err(e),
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(250)),
+        }
+    }
 }
 
 /// What `kaltstellen helper status` reports.
@@ -372,6 +385,18 @@ mod tests {
         // The same file is left alone.
         copy_exe(open_source(&target).unwrap(), &target, &target).unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"new version");
+    }
+
+    #[test]
+    fn a_missing_file_is_removed_without_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let started = std::time::Instant::now();
+        remove_file_waiting(&dir.path().join("none.exe")).unwrap();
+        let file = dir.path().join("there.exe");
+        fs::write(&file, b"x").unwrap();
+        remove_file_waiting(&file).unwrap();
+        assert!(!file.exists());
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]
