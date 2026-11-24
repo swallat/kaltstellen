@@ -1085,7 +1085,9 @@ name = "music"
         };
         d.set_defaults(&same).unwrap();
         assert!(d.doc.to_string().contains("stop_timeout_s = 5   # short"));
-        assert!(!d.doc.to_string().contains("trim ="), "default stays out");
+        let text = d.doc.to_string();
+        let settings = text.split("[[profile]]").next().unwrap();
+        assert!(!settings.contains("trim"), "default stays out: {settings}");
 
         let changed = Defaults {
             default_action: Action::Stop,
@@ -1095,10 +1097,14 @@ name = "music"
         };
         d.set_defaults(&changed).unwrap();
         let text = d.doc.to_string();
-        assert!(text.contains("stop_timeout_s = 12   # short"), "{text}");
-        assert!(text.contains("default_action = \"stop\""), "{text}");
-        assert!(text.contains("trim = false"), "{text}");
-        assert!(text.contains("minimize_before_suspend = false"), "{text}");
+        let settings = text.split("[[profile]]").next().unwrap();
+        assert!(settings.contains("stop_timeout_s = 12   # short"), "{text}");
+        assert!(settings.contains("default_action = \"stop\""), "{text}");
+        assert!(settings.contains("trim = false"), "{text}");
+        assert!(
+            settings.contains("minimize_before_suspend = false"),
+            "{text}"
+        );
         let settings = &d.config().settings;
         assert_eq!(settings.default_action, Action::Stop);
         assert_eq!(settings.stop_timeout_s, 12);
