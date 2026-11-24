@@ -34,6 +34,7 @@ pub mod error;
 pub mod exit;
 pub mod gui;
 pub mod hotkey;
+pub mod kinds;
 pub mod load;
 pub mod logging;
 pub mod paths;

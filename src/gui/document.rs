@@ -549,6 +549,10 @@ pub struct NewEntry {
     pub action: Action,
     #[serde(default)]
     pub confirmed: bool,
+    /// `keep` protects a program with an open dialog or unsaved work (A2);
+    /// only written for `stop`.
+    #[serde(default)]
+    pub on_timeout: Option<config::OnTimeout>,
 }
 
 fn push_entries(profile: &mut Table, entries: &[NewEntry]) -> Result<(), String> {
@@ -560,6 +564,9 @@ fn push_entries(profile: &mut Table, entries: &[NewEntry]) -> Result<(), String>
             entry.insert("path", value(path));
         }
         entry.insert("action", value(action_name(new.action)));
+        if new.action == Action::Stop && new.on_timeout == Some(config::OnTimeout::Keep) {
+            entry.insert("on_timeout", value("keep"));
+        }
         if new.confirmed && matches!(new.action, Action::Stop | Action::Suspend) {
             entry.insert("confirmed", value(true));
         }

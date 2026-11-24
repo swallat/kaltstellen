@@ -266,7 +266,11 @@ function handle(message) {
       const has = (exe) => profile2 && profile2.entries.some((e) => e.exe.toLowerCase() === exe.toLowerCase());
       const row = (exe, extra = {}) => ({
         exe, path: `C:\\Apps\\${exe}`, private_bytes: 0, protection: protectionOf(exe),
-        elevated: false, background: false, held: null, first_seen: null, ...extra,
+        elevated: false, background: false, held: null, first_seen: null,
+        kind: { label: 'browser', known: exe === 'browser.exe', source: 'name' },
+        suggestion: exe === 'browser.exe' || exe === 'mail.exe' ? { action: 'suspend', reason: 'state and sign-in stay, nothing is lost; notifications wait' } : null,
+        windows: { count: exe === 'browser.exe' ? 3 : 1, dialog: exe === 'mail.exe', unsaved: exe === 'browser.exe', hung: false },
+        ...extra,
       });
       const rows = running.filter((r) => r.protection !== 'hard' && r.exe !== 'chat.exe')
         .map((r) => row(r.exe, { private_bytes: r.private_bytes, background: r.exe === 'notes.exe' }));

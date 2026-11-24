@@ -255,3 +255,6 @@ label.inline { display: inline-flex; align-items: center; gap: var(--space-1); f
 #snapshot-groups { max-height: 55vh; }
 #snapshot-name-row { display: grid; gap: var(--space-1); }
 .snap-group th:last-child, .snap-group td:last-child { text-align: left; }
+select.suggested { outline: 2px dashed var(--color-accent); outline-offset: 1px; }
+.snap-group .names .hint { display: block; }
+.snap-group .names .diff-tag { margin: 2px var(--space-1) 0 0; }

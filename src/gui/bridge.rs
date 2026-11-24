@@ -418,6 +418,26 @@ fn groups_json(groups: &crate::snapshot::Groups) -> Value {
                     "background": r.background,
                     "held": r.held.map(action_name),
                     "first_seen": r.first_seen,
+                    "kind": {
+                        "label": r.kind.label(),
+                        "known": r.kind != crate::kinds::Kind::Unknown,
+                        "source": match r.source {
+                            crate::kinds::Source::Name => "name",
+                            crate::kinds::Source::Description => "description",
+                            crate::kinds::Source::Folder => "folder",
+                            crate::kinds::Source::Protection => "protection",
+                            crate::kinds::Source::None => "none",
+                        },
+                    },
+                    "suggestion": r.kind.suggestion().map(|(action, reason)| {
+                        json!({"action": action_name(action), "reason": reason})
+                    }),
+                    "windows": {
+                        "count": r.windows.windows,
+                        "dialog": r.windows.dialog,
+                        "unsaved": r.windows.unsaved,
+                        "hung": r.windows.hung,
+                    },
                 })
             })
             .collect()
@@ -1529,6 +1549,13 @@ mod tests {
                 background: false,
                 held,
                 first_seen: None,
+                kind: crate::kinds::classify(exe, None, None).kind,
+                source: crate::kinds::classify(exe, None, None).source,
+                windows: crate::process::WindowInfo {
+                    windows: 2,
+                    unsaved: exe == "browser.exe",
+                    ..crate::process::WindowInfo::default()
+                },
             };
             let mut groups = Groups {
                 running: vec![row("browser.exe", None), row("anydesk.exe", None)],
@@ -2304,6 +2331,13 @@ mod tests {
         assert_eq!(reply["ok"], true);
         assert_eq!(reply["data"]["running"][0]["exe"], "browser.exe");
         assert_eq!(reply["data"]["running"][1]["protection"], "warn");
+        let browser = &reply["data"]["running"][0];
+        assert_eq!(browser["kind"]["label"], "browser");
+        assert_eq!(browser["suggestion"]["action"], "suspend");
+        assert_eq!(browser["windows"]["count"], 2);
+        assert_eq!(browser["windows"]["unsaved"], true);
+        // The warn list gets no suggestion.
+        assert!(reply["data"]["running"][1]["suggestion"].is_null());
         assert_eq!(reply["data"]["held"][0]["held"], "suspend");
         let update = send(
             &mut b,
@@ -2364,9 +2398,17 @@ mod tests {
         let reply = send(
             &mut b,
             json!({"v": 1, "id": 1, "type": "add_entries", "profile": "focus",
-                "entries": [{"exe": "new1.exe", "action": "stop"}, {"exe": "new2.exe", "action": "ignore"}]}),
+                "entries": [{"exe": "new1.exe", "action": "stop", "on_timeout": "keep"}, {"exe": "new2.exe", "action": "ignore"}]}),
         );
         assert_eq!(reply["ok"], true, "{reply}");
+        let added = &b.document.config().profile("focus").unwrap().apps[before];
+        assert!(matches!(
+            added.action,
+            AppAction::Stop {
+                on_timeout: OnTimeout::Keep,
+                ..
+            }
+        ));
         assert_eq!(
             b.document.config().profile("focus").unwrap().apps.len(),
             before + 2
