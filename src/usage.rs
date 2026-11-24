@@ -212,18 +212,38 @@ impl Usage {
         usage.activations.push(Activation { at, results });
         let extra = usage.activations.len().saturating_sub(KEEP);
         usage.activations.drain(..extra);
-        // At most MAX_PROGRAMS names: the oldest activations lose theirs
-        // first.
-        let names = |u: &ProfileUsage| -> BTreeSet<String> {
-            u.activations
+        // At most MAX_PROGRAMS names: names that only ever `stayed` go
+        // first, then the ones seen least (oldest on a tie).
+        loop {
+            let mut score: BTreeMap<&String, (usize, usize)> = BTreeMap::new();
+            for (i, activation) in usage.activations.iter().enumerate() {
+                for (name, result) in &activation.results {
+                    let entry = score.entry(name).or_default();
+                    if *result != Finding::Stayed {
+                        entry.0 += 1;
+                    }
+                    entry.1 = i;
+                }
+            }
+            if score.len() <= MAX_PROGRAMS {
+                break;
+            }
+            let Some(worst) = score
                 .iter()
-                .flat_map(|a| a.results.keys().cloned())
-                .collect()
-        };
-        while names(usage).len() > MAX_PROGRAMS && usage.activations.len() > 1 {
-            usage.activations.remove(0);
+                .min_by_key(|(_, v)| **v)
+                .map(|(k, _)| (*k).clone())
+            else {
+                break;
+            };
+            for activation in &mut usage.activations {
+                activation.results.remove(&worst);
+            }
         }
-        let known = names(usage);
+        let known: BTreeSet<&String> = usage
+            .activations
+            .iter()
+            .flat_map(|a| a.results.keys())
+            .collect();
         usage.paths.retain(|k, _| known.contains(k));
     }
 
@@ -356,13 +376,30 @@ fn log_problem(result: Result<()>) {
     }
 }
 
+/// `Suggestions from use` is on: the default, off when the settings say so
+/// or cannot be read (an owner who switched it off is not recorded again
+/// by a damaged file).
+pub fn enabled() -> bool {
+    crate::paths::config_dir().is_none_or(|dir| {
+        let (settings, problem) = crate::settings::load(&dir);
+        problem.is_none() && settings.learning()
+    })
+}
+
+/// Whether `target` is a profile a switch can go to.
+pub fn known_target(config: &Config, target: &str) -> bool {
+    target.trim().eq_ignore_ascii_case(NEUTRAL) || config.profile(target).is_some()
+}
+
 /// Before a switch or a recover: B of the activation that is waiting. Does
 /// nothing when learning is off, when no A is waiting, when it belongs to
 /// another profile than the active one, or to an earlier boot.
 pub fn before(dir: &Path, learning: bool, config: &Config, state: &State) {
     let (mut usage, problem) = load(dir);
     if let Some(problem) = problem {
+        // KS305: reported, and the unreadable file is left as it is.
         log::warn!("{problem}");
+        return;
     }
     let Some(pending) = usage.pending.take() else {
         return;
@@ -396,13 +433,17 @@ pub fn before(dir: &Path, learning: bool, config: &Config, state: &State) {
 
 /// After a switch that ended on `state.active_profile`: A of the next
 /// activation. `neutral` has no entries and learns nothing.
-pub fn after(dir: &Path, learning: bool, state: &State) {
+///
+/// `before_stopped` are the programs recorded as stopped before the switch;
+/// only the ones it stopped itself count for `came back`.
+pub fn after(dir: &Path, learning: bool, state: &State, before_stopped: &[String]) {
     if !learning {
         return;
     }
     let (mut usage, problem) = load(dir);
     if let Some(problem) = problem {
         log::warn!("{problem}");
+        return;
     }
     usage.pending = None;
     if !state.active_profile.eq_ignore_ascii_case(NEUTRAL)
@@ -427,10 +468,18 @@ pub fn after(dir: &Path, learning: bool, state: &State) {
                     created: s.created,
                 })
                 .collect(),
-            stopped: state.stopped.iter().map(|s| s.exe.to_lowercase()).collect(),
+            stopped: stopped_names(state)
+                .into_iter()
+                .filter(|exe| !before_stopped.contains(exe))
+                .collect(),
         });
     }
     log_problem(save(dir, &usage));
+}
+
+/// The programs recorded as stopped, lower case.
+pub fn stopped_names(state: &State) -> Vec<String> {
+    state.stopped.iter().map(|s| s.exe.to_lowercase()).collect()
 }
 
 /// Drops the waiting A (sign-out, quit): that activation has no B.
@@ -632,6 +681,24 @@ mod tests {
             .flat_map(|a| a.results.keys())
             .collect();
         assert!(total.len() <= MAX_PROGRAMS);
+    }
+
+    #[test]
+    fn one_big_activation_is_capped_and_stayed_names_go_first() {
+        let mut usage = Usage::default();
+        let mut r = BTreeMap::new();
+        r.insert("keep.exe".to_owned(), Finding::Gone);
+        for n in 0..300 {
+            r.insert(format!("s{n:03}.exe"), Finding::Stayed);
+        }
+        usage.record("focus", r, &BTreeMap::new(), 1);
+        let names: BTreeSet<_> = usage.profiles["focus"].activations[0]
+            .results
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(names.len(), MAX_PROGRAMS);
+        assert!(names.contains("keep.exe"));
     }
 
     #[test]

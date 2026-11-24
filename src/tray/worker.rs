@@ -179,11 +179,6 @@ impl Drop for Controller {
     }
 }
 
-/// H5: `Suggestions from use` is on (the default).
-fn learning_on() -> bool {
-    crate::paths::config_dir().is_none_or(|dir| crate::settings::load(&dir).0.learning())
-}
-
 /// The real runner: the switch engine on the state file. Each job takes the
 /// state lock (L1) and reads the state afresh.
 pub struct EngineRunner {
@@ -240,8 +235,18 @@ impl Runner for EngineRunner {
                     source.config().clone()
                 };
                 let options = Options { force: *force };
-                let learning = crate::paths::data_dir().filter(|_| learning_on());
-                if let Some(data) = &learning {
+                let data = crate::paths::data_dir();
+                let learning = data.clone().filter(|_| crate::usage::enabled());
+                if learning.is_none()
+                    && let Some(data) = &data
+                {
+                    // Off: nothing is recorded and no old A is kept.
+                    crate::usage::drop_pending(data);
+                }
+                let stopped = crate::usage::stopped_names(&state);
+                if let Some(data) = &learning
+                    && crate::usage::known_target(&config, target)
+                {
                     crate::usage::before(data, true, &config, &state);
                 }
                 let result = engine::switch_guarded(
@@ -259,7 +264,7 @@ impl Runner for EngineRunner {
                         .iter()
                         .all(|e| e.code != crate::error::Code::Interrupted)
                 {
-                    crate::usage::after(data, true, &state);
+                    crate::usage::after(data, true, &state, &stopped);
                 }
                 result
             }

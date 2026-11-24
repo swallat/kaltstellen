@@ -470,9 +470,17 @@ fn switch(target: &str, force: bool, wait: bool) -> u8 {
     let interrupted = || interrupts.as_ref().is_some_and(Interrupts::requested);
     let mut persist = |s: &State| store.save(s);
     // H5: B of the last activation before, A of this one after.
-    let learning = paths::data_dir()
-        .filter(|_| paths::config_dir().is_none_or(|dir| crate::settings::load(&dir).0.learning()));
-    if let Some(data) = &learning {
+    let data = paths::data_dir();
+    let learning = data.clone().filter(|_| crate::usage::enabled());
+    if learning.is_none()
+        && let Some(data) = &data
+    {
+        crate::usage::drop_pending(data);
+    }
+    let stopped = crate::usage::stopped_names(&state);
+    if let Some(data) = &learning
+        && crate::usage::known_target(&config, target)
+    {
         crate::usage::before(data, true, &config, &state);
     }
     let mut applied = false;
@@ -513,7 +521,7 @@ fn switch(target: &str, force: bool, wait: bool) -> u8 {
         }
     };
     if let (Some(data), true) = (&learning, applied) {
-        crate::usage::after(data, true, &state);
+        crate::usage::after(data, true, &state, &stopped);
     }
     if let Some(interrupts) = &interrupts {
         interrupts.finished();
