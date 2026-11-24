@@ -29,8 +29,9 @@
   #define OutputName "kaltstellen-" + Version + "-windows-" + Arch + "-setup"
 #endif
 
-; ExtractTemporaryFile wants the name of the source file.
-#define ExeName ExtractFileName(Exe)
+; ExtractTemporaryFile wants the name the file has in [Files] (DestName),
+; not the name of the source file.
+#define ExeName "kaltstellen.exe"
 
 #if Arch == "x86_64"
   #define Architectures "x64compatible"
