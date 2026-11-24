@@ -301,6 +301,11 @@ pub enum Request {
     SetAutomation {
         on: bool,
     },
+    /// M4c: `watch` of a profile.
+    SetWatch {
+        profile: String,
+        on: bool,
+    },
     SetUpdateMode {
         mode: String,
     },
@@ -365,6 +370,8 @@ pub struct ProfileView {
     /// U4: trigger programs as written (name or full path).
     pub triggers: Vec<String>,
     pub priority: i32,
+    /// M4c: handle later starts of this profile's programs at once.
+    pub watch: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -751,6 +758,7 @@ impl<H: Host> Bridge<H> {
                         .collect(),
                     triggers: p.triggers.iter().map(|t| t.text()).collect(),
                     priority: p.priority,
+                    watch: p.watch,
                 })
                 .collect(),
             active,
@@ -966,6 +974,16 @@ impl<H: Host> Bridge<H> {
                     0 => format!("Triggers of \"{profile}\" removed"),
                     1 => format!("1 trigger of \"{profile}\" set, priority {priority}"),
                     n => format!("{n} triggers of \"{profile}\" set, priority {priority}"),
+                };
+                self.saved(what, result)
+            }
+            Request::SetWatch { profile, on } => {
+                check_text(&[&profile])?;
+                let result = self.document.set_watch(&profile, on);
+                let what = if on {
+                    format!("\"{profile}\" now handles its programs that start later")
+                } else {
+                    format!("\"{profile}\" no longer handles programs that start later")
                 };
                 self.saved(what, result)
             }
@@ -3101,5 +3119,38 @@ mod tests {
             json!({"v": 1, "id": 4, "type": "helper_install", "owner": "S-1-5-18"}),
         );
         assert_eq!(extra["ok"], false, "the page cannot name an owner");
+    }
+    #[test]
+    fn m4c_watch_is_set_through_the_bridge() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _fake) = bridge(&dir);
+        let on = send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "set_watch", "profile": "focus", "on": true}),
+        );
+        assert_eq!(on["ok"], true, "{on}");
+        let state = send(&mut b, json!({"v": 1, "id": 2, "type": "get_state"}));
+        let focus = state["state"]["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "focus")
+            .unwrap();
+        assert_eq!(focus["watch"], true);
+        let off = send(
+            &mut b,
+            json!({"v": 1, "id": 3, "type": "set_watch", "profile": "focus", "on": false}),
+        );
+        assert_eq!(off["ok"], true);
+        let missing = send(
+            &mut b,
+            json!({"v": 1, "id": 4, "type": "set_watch", "profile": "nope", "on": true}),
+        );
+        assert_eq!(missing["ok"], false);
+        let bad = send(
+            &mut b,
+            json!({"v": 1, "id": 5, "type": "set_watch", "profile": "focus", "on": "yes"}),
+        );
+        assert_eq!(bad["ok"], false);
     }
 }

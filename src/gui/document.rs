@@ -434,6 +434,19 @@ impl Document {
         })
     }
 
+    /// M4c: sets `watch` of a profile; `false` (the default) removes the key.
+    pub fn set_watch(&mut self, profile: &str, on: bool) -> Result<(), Error> {
+        self.edit(|doc| {
+            let table = profile_mut(doc, profile)?;
+            if on {
+                set_keep(table, "watch", true);
+            } else {
+                table.remove("watch");
+            }
+            Ok(())
+        })
+    }
+
     /// Replaces the options of an entry with `edit` (M3, C6). Keys not
     /// touched by the edit keep their comments; options the action does not
     /// take are removed. `trim` is written only when it differs from
@@ -945,6 +958,22 @@ hotkey = "Ctrl+Shift+Alt+F1"
         );
         d.set_hotkey("music", None).unwrap();
         assert_eq!(d.config().profiles[1].hotkey, None);
+    }
+
+    #[test]
+    fn m4c_watch_is_set_and_removed_and_keeps_the_file_otherwise() {
+        let mut d = Document::from_text(
+            Path::new("c.toml"),
+            "# keep\n[[profile]]\nname = \"focus\" # note\n",
+        )
+        .unwrap();
+        d.set_watch("focus", true).unwrap();
+        assert!(d.config().profiles[0].watch);
+        assert!(d.text().contains("# keep") && d.text().contains("# note"));
+        d.set_watch("focus", false).unwrap();
+        assert!(!d.config().profiles[0].watch);
+        assert!(!d.text().contains("watch"));
+        assert!(d.set_watch("missing", true).is_err());
     }
 
     #[test]

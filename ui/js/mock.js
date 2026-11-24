@@ -165,6 +165,12 @@ function handle(message) {
       state.status = hotkey ? `Hotkey of "${profile.name}" set to ${hotkey}; saved.` : `Hotkey of "${profile.name}" removed; saved.`;
       return { ok: true };
     }
+    case 'set_watch': {
+      if (!profile) return fail('no such profile');
+      profile.watch = !!m.on;
+      state.status = m.on ? `"${profile.name}" now handles its programs that start later; saved.` : `"${profile.name}" no longer handles programs that start later; saved.`;
+      return { ok: true };
+    }
     case 'set_triggers': {
       if (!profile) return fail('no such profile');
       const triggers = (m.triggers || []).map((t) => String(t).trim()).filter(Boolean);
