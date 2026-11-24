@@ -2279,12 +2279,14 @@ function Test-Programs {
             $answer = $null
             if ($p.role -ne 'tray_program') {
                 # The window appears a moment after the process (slower on ARM64).
-                $answer = -1
+                # A box: the condition runs in a scope of its own.
+                $box = @{ answer = -1 }
                 $null = Wait-Until 20 {
                     $w = Get-MainWindows $p | Select-Object -First 1
-                    if ($w) { $answer = [KsBetaV3.Native]::Ping($w.Handle, 2000) }
-                    $answer -ge 0
+                    if ($w) { $box.answer = [KsBetaV3.Native]::Ping($w.Handle, 2000) }
+                    $box.answer -ge 0
                 } 300
+                $answer = $box.answer
             }
             $m[$p.exe] = "beat $(if ($moved) { 'rises' } else { 'does not move' })$(if ($null -ne $answer) { ", window answers in $answer ms" })"
             if (-not $moved -or ($null -ne $answer -and $answer -lt 0)) { $ok = $false }
