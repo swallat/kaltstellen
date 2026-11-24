@@ -540,8 +540,14 @@ function renderSettings() {
 function showSettings(section = null) {
   view = 'settings';
   render();
-  if (section) $(section).scrollIntoView({ block: 'start' });
-  else $('detail').scrollTo(0, 0);
+  // Scroll the content area only. scrollIntoView would also scroll the
+  // window itself (the body is clipped, but still scrollable by script),
+  // which pushed the header out of sight with nothing to scroll back.
+  const detail = $('detail');
+  if (section) {
+    const gap = $(section).getBoundingClientRect().top - detail.getBoundingClientRect().top;
+    detail.scrollTo({ top: detail.scrollTop + gap - 16 });
+  } else detail.scrollTo({ top: 0 });
   for (const button of document.querySelectorAll('.settings-nav button')) {
     button.setAttribute('aria-current', String(button.dataset.section === (section || 'general')));
   }
