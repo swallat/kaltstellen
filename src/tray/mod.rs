@@ -514,6 +514,11 @@ impl App {
             window::set_recheck(None);
             return;
         }
+        if !self.triggers_configured() && self.automation.idle() {
+            // Only the start watch needs the timer: no snapshot.
+            self.arm_poll();
+            return;
+        }
         let Ok(snapshot) = Snapshot::take() else {
             return;
         };
@@ -939,18 +944,22 @@ impl App {
         let off = self.controller.is_quitting() || self.session_ending;
         // H9: the poll also asks the helper for started programs.
         self.refresh_notify_setting(false);
-        let wanted = !off && ((configured && !self.automation.paused()) || self.starts.enabled());
+        // The timer also serves the start watch while a profile other than
+        // neutral is active (switching `notify_new` on in the window is
+        // noticed by the poll); in neutral nothing is watched.
+        let starts = !self.status.is_neutral();
+        let wanted = !off && ((configured && !self.automation.paused()) || starts);
         if !wanted && self.polling {
             window::set_poll(None);
             self.polling = false;
-            info!("tray: poll stopped");
+            info!("tray: trigger poll stopped");
         } else if wanted && !self.polling {
             let interval = trigger_poll();
             // A timer that could not be set is tried again at the next
             // call (menu, end of a switch).
             if window::set_poll(Some(interval)) {
                 self.polling = true;
-                info!("tray: poll every {} ms", interval.as_millis());
+                info!("tray: trigger poll every {} ms", interval.as_millis());
             }
         }
         self.status.automation = configured.then(|| self.automation.view(&self.will_be_active()));
@@ -1079,6 +1088,10 @@ impl App {
             let logged_only = std::env::var(NOTIFY_ENV).is_ok_and(|v| v.trim() == "log");
             if !logged_only && !window::balloon(&title, &text) {
                 warn!("tray: the notification could not be shown");
+            } else if let Some(notice) = &mut self.notice {
+                // The new balloon replaces the one of "Back to": a click
+                // on it does nothing (the menu item still works).
+                notice.shown = false;
             }
         }
     }
@@ -1165,7 +1178,7 @@ impl App {
             info!("tray: trigger asks for \"{target}\" ({reason})");
             self.submit(Job::automatic(&target, &previous, &reason), None);
         }
-        if seen.is_empty() && self.polling && !self.starts.enabled() {
+        if seen.is_empty() && self.polling && self.status.is_neutral() {
             // No profile has triggers any more: what ran has ended above.
             window::set_poll(None);
             self.polling = false;

@@ -11,24 +11,33 @@ use crate::win32::pipe::{self, Peer};
 /// How long a conversation may take before it is cut off.
 const DEADLINE: Duration = Duration::from_secs(3);
 
+/// The shorter limit of the tray's periodic question: it is asked on the
+/// window thread, which must not stall.
+const QUICK_DEADLINE: Duration = Duration::from_millis(1000);
+
 /// Sends `command` to the helper. `Ok(None)` if no helper pipe exists (not
 /// installed or not running); an error if something answers that is not the
 /// helper (wrong account, wrong protocol).
 pub fn ask(command: Command) -> Result<Option<Reply>> {
-    ask_after(command, None)
+    ask_with(command, None, None, DEADLINE)
 }
 
 /// [`ask`] with the `after` of an `events` request.
 pub fn ask_after(command: Command, after: Option<u64>) -> Result<Option<Reply>> {
-    ask_full(command, after, None)
+    ask_with(command, after, None, QUICK_DEADLINE)
 }
 
 /// [`ask`] for `network` with the window in seconds.
 pub fn ask_network(seconds: Option<u32>) -> Result<Option<Reply>> {
-    ask_full(Command::Network, None, seconds)
+    ask_with(Command::Network, None, seconds, DEADLINE)
 }
 
-fn ask_full(command: Command, after: Option<u64>, seconds: Option<u32>) -> Result<Option<Reply>> {
+fn ask_with(
+    command: Command,
+    after: Option<u64>,
+    seconds: Option<u32>,
+    deadline: Duration,
+) -> Result<Option<Reply>> {
     let Some(mut conn) = pipe::connect_peer(PIPE_NAME, Duration::from_secs(1), Peer::Helper)?
     else {
         return Ok(None);
@@ -48,7 +57,7 @@ fn ask_full(command: Command, after: Option<u64>, seconds: Option<u32>) -> Resul
         after,
         seconds,
     };
-    let reply = pipe::with_deadline(DEADLINE, || -> Result<Option<String>> {
+    let reply = pipe::with_deadline(deadline, || -> Result<Option<String>> {
         protocol::write_line(&mut conn, &request)?;
         protocol::read_line(&mut BufReader::new(&conn), protocol::MAX_REPLY)
     })?

@@ -144,12 +144,13 @@ impl StartWatch {
                     }
                 }
                 "stop" => {
-                    // Same process: the same pid and creation time.
-                    if self
-                        .pending
-                        .get(&event.pid)
-                        .is_some_and(|p| p.created == event.created)
-                    {
+                    // Same process: the same pid and creation time. One that
+                    // lived long enough stays: a late answer (the helper was
+                    // not reachable for a while) brings start and stop
+                    // together.
+                    if self.pending.get(&event.pid).is_some_and(|p| {
+                        p.created == event.created && event.time < p.time + MIN_LIFE
+                    }) {
                         self.pending.remove(&event.pid);
                     }
                 }
@@ -333,6 +334,23 @@ mod tests {
             ),
         );
         assert_eq!(w.confirmed(150, &ctx(&none)).len(), 1);
+    }
+
+    #[test]
+    fn h9_a_late_answer_with_start_and_stop_keeps_a_long_lived_process() {
+        let mut w = watch();
+        let none = HashSet::new();
+        w.feed(
+            200,
+            fetched(
+                vec![
+                    event(1, "start", 11, "tool.exe", 105),
+                    stop(2, 11, "tool.exe", 105, 125),
+                ],
+                3,
+            ),
+        );
+        assert_eq!(w.confirmed(200, &ctx(&none)).len(), 1);
     }
 
     #[test]
