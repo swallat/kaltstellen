@@ -354,6 +354,8 @@ from there with the test variables above.
 
 ## Optional background helper (M4a, design-optional-helper.md)
 
+`scripts/helper-vm-check.ps1 -Exe <copy of kaltstellen.exe> -OnThisMachine` runs the automatable parts of this section and of the next two in one go from a normal prompt (two UAC prompts, install and uninstall) and prints a PASS/FAIL table. What it leaves to a person is listed in its header: another user account, killing the service process, the declined prompt, the tray and window, and watch mode.
+
 On the VM, from a copy of the executable that is **not** in `Program Files`.
 Nothing here is covered by CI because it installs a real service.
 
