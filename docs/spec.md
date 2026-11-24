@@ -449,7 +449,7 @@ priority = 10                 # optional, default 0, higher wins
 - M1: config, `switch <profile>`, start/stop/suspend with process trees, state file (P1-P4, A1-A4, A6, A7, W1-W6, C1-C6, S6, S8, S9, E2).
 - M2: tray app, single instance, resume on quit and sign-out, crash recovery, minimise before suspend (U1, L1, L2, S3, S5, S4).
 - M3: main window with program assignment and per-program action; hotkeys (M1-M5, U3, E1).
-- M4: optional background helper with the roles observe, act and services (A5, P7, P8), in steps M4a to M4e of [design-optional-helper.md](design-optional-helper.md); not before code signing.
+- M4: optional background helper with the roles observe, act and services (A5, P7, P8), in steps M4a to M4e of [design-optional-helper.md](design-optional-helper.md); without code signing (the owner has no certificate for now, 2026-11-24).
 - Automatic triggers (U4): trigger programs per profile, opt-in, a priority per profile, a manual choice always wins **[decided]** (owner, 2026-11-23); decided details in [design-automatic-triggers.md](design-automatic-triggers.md). Planned after version 1; built on the owner's request on 2026-11-23, before the release, so both are tested together (L12, C9).
 - Profile assistance (H1 to H6, section 8): a profile from the current state, load hints, kinds and suggestions, preview, suggestions from use, compare. Requested by the owner on 2026-11-24; spec and mock first, code after the owner has seen the mock. No new configuration keys. **[assumed]** (details)
 

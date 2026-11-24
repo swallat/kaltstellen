@@ -1,11 +1,11 @@
 # Design note: the optional background helper (M4; A5, P7, P8, W6, H2, H5)
 
-Status: proposal. Requested by the owner on 2026-11-24 **[decided]**: an
+Status: decided on 2026-11-24 (see the end), partly implemented as the milestones say. Requested by the owner on 2026-11-24 **[decided]**: an
 optional background component with administrator rights that can be
 installed later, while a portable version without administrator rights stays
 possible. The owner chose the widest scope (watching, acting on elevated
 programs, Windows services). Everything below the request is **[assumed]**
-until the owner has reviewed it. Nothing is implemented.
+until the owner has reviewed it. Implementation follows the milestones below.
 
 This note extends [design-elevated-helper.md](design-elevated-helper.md)
 (services only, request driven). Its pipe trust model, allow list and
@@ -182,18 +182,14 @@ differ, this note wins.
 
 Each step is useful on its own and ships behind the helper being installed.
 
-## Open questions for the owner
+## Decisions of the owner (2026-11-24)
 
-1. **Account**: `LocalSystem` with privileges removed (recommended; opening
-   elevated processes and kernel sessions need them) or a virtual account
-   with granted rights (safer on paper, hard to make work for kernel sessions
-   and elevated processes).
-2. **Default start**: automatic (delayed), so no start is missed, or on
-   demand (only when the tray asks, misses starts before that).
-3. **`watch` per profile**: opt-in key per profile (proposed) or one switch
-   for all.
-4. **Code signing** (deferred by the owner): the helper should not ship before
-   there is a certificate (R7, R15). Until then it can be built and tested on
-   the VM only.
-5. **Elevated-program allow list**: maintained from an elevated prompt only
-   (proposed) or also from the window with a UAC prompt at that moment.
+1. **Account**: `LocalSystem` with privileges removed.
+2. **Start**: automatic (delayed).
+3. **`watch`**: opt-in key per profile.
+4. **Code signing**: none for now, a certificate comes when the project is
+   better known. The helper is built, tested and offered unsigned. Where the
+   text above says it waits for a certificate (R7, R15, milestones), that no
+   longer holds: the helper never relies on a signature, and the setup says
+   that the file is unsigned.
+5. **Elevated-program allow list**: changed only from an elevated prompt.

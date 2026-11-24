@@ -329,23 +329,31 @@ files) and, later, the real window.
 12. **H8 choose by kind**: sets rows once, no remembered rule, no kind
     overrides in version 1.
 
-## Open: optional background helper (owner request 2026-11-24)
+## Decided: optional background helper (owner, 2026-11-24)
 
 Requested by the owner: an optional background component with administrator
 rights, installable later, with a portable version without administrator
 rights staying possible; the widest scope (watching, acting on elevated
-programs, Windows services) **[decided]**. Everything else is in
-[design-optional-helper.md](design-optional-helper.md) and **[assumed]**:
+programs, Windows services) **[decided]**. This replaces the earlier decisions
+"no background watcher" and "services and elevation later" for the optional
+helper only; the tray and the portable use are unchanged (W6, Q1).
+Details are in [design-optional-helper.md](design-optional-helper.md).
+
+Decided by the owner on 2026-11-24:
 
 1. Service account `LocalSystem` with privileges removed.
 2. Automatic (delayed) start, so no process start is missed.
-3. New optional profile key `watch` (opt-in per profile).
-4. The service runs a protected copy in `%ProgramFiles%`; it is updated by
-   `kaltstellen helper install`, not by the user-level updater.
-5. Clients are authenticated by owner and session only, not by path.
-6. Elevated programs only from an administrator-maintained allow list;
-   `stop` of an elevated program is `terminate` after the timeout.
-7. Not before code signing (deferred by the owner).
+3. `watch` is an opt-in key per profile (default off).
+4. **No code-signing certificate for now**; one comes when the project is
+   better known. The helper therefore ships unsigned. It cannot check the
+   publisher of its clients (R7), SmartScreen and antivirus products may warn
+   (R15). Safety rests on the protected copy, the allow lists and the checks.
+5. The allow list of elevated programs is changed only from an elevated
+   prompt (`kaltstellen helper allow ...`), not from the window.
+
+**[assumed]** until reviewed: the protected copy in `%ProgramFiles%` updated by
+`kaltstellen helper install`, clients authenticated by owner and session (not
+by path), `stop` of an elevated program is `terminate` after the timeout.
 
 ## Decided by the owner on 2026-11-24
 
