@@ -260,6 +260,49 @@ function handle(message) {
       });
       return { ok: true, data };
     }
+    case 'snapshot': {
+      const profile2 = m.mode === 'update' ? find(m.profile) : null;
+      if (m.mode === 'update' && !profile2) return fail(`no profile named "${m.profile}"`);
+      const has = (exe) => profile2 && profile2.entries.some((e) => e.exe.toLowerCase() === exe.toLowerCase());
+      const row = (exe, extra = {}) => ({
+        exe, path: `C:\\Apps\\${exe}`, private_bytes: 0, protection: protectionOf(exe),
+        elevated: false, background: false, held: null, first_seen: null, ...extra,
+      });
+      const rows = running.filter((r) => r.protection !== 'hard' && r.exe !== 'chat.exe')
+        .map((r) => row(r.exe, { private_bytes: r.private_bytes, background: r.exe === 'notes.exe' }));
+      const existing = rows.filter((r) => has(r.exe)).length;
+      return { ok: true, data: {
+        running: rows.filter((r) => !has(r.exe)),
+        held: [row('chat.exe', { held: 'suspend' })].filter((r) => !has(r.exe)),
+        seen: [row('old-tool.exe', { first_seen: 1700000000 }), row('anydesk-old.exe', { first_seen: 1690000000 })],
+        existing,
+      } };
+    }
+    case 'create_profile_from': {
+      const name = String(m.name || '').trim();
+      if (!name) return fail('KS205: a profile needs a name');
+      if (find(name) || name.toLowerCase() === 'neutral') return fail(`KS205: profile name "${name}" is used already`);
+      for (const e of m.entries) {
+        const prot = protectionOf(e.exe);
+        if (prot === 'hard') return fail(`${e.exe} is a protected system program and is never touched`);
+        if (prot === 'warn' && !e.confirmed && (e.action === 'stop' || e.action === 'suspend')) return fail(`${e.exe} is on the warn list and needs confirmation`);
+        if (e.action === 'start' && !e.path) return fail('KS205: an entry with action = "start" needs a path');
+      }
+      state.profiles.push({ name, hotkey: null, active: false, triggers: [], priority: 0,
+        entries: m.entries.map((e) => entry(e.exe, e.action, { path: e.path || null, confirmed: !!e.confirmed })) });
+      state.status = `Profile "${name}" created with ${m.entries.length} entries; saved.`;
+      return { ok: true };
+    }
+    case 'add_entries': {
+      if (!profile) return fail('no such profile');
+      for (const e of m.entries) {
+        if (protectionOf(e.exe) === 'hard') return fail(`${e.exe} is a protected system program and is never touched`);
+        if (e.action === 'start' && !e.path) return fail('KS205: an entry with action = "start" needs a path');
+      }
+      for (const e of m.entries) profile.entries.push(entry(e.exe, e.action, { path: e.path || null, confirmed: !!e.confirmed }));
+      state.status = `${m.entries.length} entries added to "${profile.name}"; saved.`;
+      return { ok: true };
+    }
     case 'preview': {
       const p = state.profiles.find((q) => q.name.toLowerCase() === String(m.profile).toLowerCase());
       if (!p) return fail(`no profile named "${m.profile}"`);

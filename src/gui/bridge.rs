@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::document::{Defaults, Document, EntryEdit, action_name};
+use super::document::{Defaults, Document, EntryEdit, NewEntry, action_name};
 pub use super::icons::Wanted;
 use super::model::{self, AddCheck, Candidate, Failure};
 use crate::config::{Action, App, AppAction, Config, NEUTRAL, OnTimeout};
@@ -83,6 +83,10 @@ pub trait Host {
     /// M6: forgets the profile that was active when the last session ended
     /// (the tray's `Apply last profile` offer, S5).
     fn forget_last_profile(&self) -> Result<(), String>;
+    /// H1: the programs of the current state in three groups, for a new
+    /// profile or, with `entries`, for the update of one (programs with an
+    /// entry are left out). Reads only.
+    fn snapshot(&self, entries: &[crate::config::App]) -> crate::snapshot::Groups;
     /// H4: what switching to `profile` would do, changing nothing. Run as
     /// `kaltstellen switch --dry-run` would, with the saved state.
     fn preview(&self, config: &Config, profile: &str) -> Result<crate::engine::Plan, String>;
@@ -210,6 +214,23 @@ pub enum Request {
     Compare {
         a: String,
         b: String,
+    },
+    /// H1: the three groups of the current state.
+    Snapshot {
+        /// `new` or `update`.
+        mode: String,
+        #[serde(default)]
+        profile: Option<String>,
+    },
+    /// H1: a new profile with these entries, all or none.
+    CreateProfileFrom {
+        name: String,
+        entries: Vec<NewEntry>,
+    },
+    /// H1: entries for programs a profile has none for, all or none.
+    AddEntries {
+        profile: String,
+        entries: Vec<NewEntry>,
     },
     /// H4: what switching to a profile would do.
     Preview {
@@ -359,6 +380,31 @@ fn compare_json(result: &crate::compare::Comparison) -> Value {
     })
 }
 
+fn groups_json(groups: &crate::snapshot::Groups) -> Value {
+    let rows = |rows: &[crate::snapshot::Row]| -> Vec<Value> {
+        rows.iter()
+            .map(|r| {
+                json!({
+                    "exe": r.exe,
+                    "path": r.path,
+                    "private_bytes": r.private_bytes,
+                    "protection": protection_name(&r.exe),
+                    "elevated": r.elevated,
+                    "background": r.background,
+                    "held": r.held.map(action_name),
+                    "first_seen": r.first_seen,
+                })
+            })
+            .collect()
+    };
+    json!({
+        "running": rows(&groups.running),
+        "held": rows(&groups.held),
+        "seen": rows(&groups.seen),
+        "existing": groups.existing,
+    })
+}
+
 fn preview_json(plan: &crate::engine::Plan) -> Value {
     use crate::engine::Outcome;
     let items: Vec<Value> = plan
@@ -479,6 +525,8 @@ fn is_edit(request: &Request) -> bool {
     matches!(
         request,
         Request::CreateProfile { .. }
+            | Request::CreateProfileFrom { .. }
+            | Request::AddEntries { .. }
             | Request::CopyProfile { .. }
             | Request::RenameProfile { .. }
             | Request::DeleteProfile { .. }
@@ -489,6 +537,29 @@ fn is_edit(request: &Request) -> bool {
             | Request::UpdateEntry { .. }
             | Request::RemoveEntry { .. }
     )
+}
+
+/// H1: the same checks as `add_entry` for every entry, then the
+/// configuration rules in the document (C1 to C8).
+fn check_new_entries(entries: &[NewEntry]) -> Result<(), String> {
+    if entries.len() > 256 {
+        return Err("too many entries".to_owned());
+    }
+    for entry in entries {
+        check_text(&[&entry.exe, entry.path.as_deref().unwrap_or("")])?;
+        check_path(entry.path.as_deref())?;
+        let exe = entry.exe.trim();
+        match model::check_add(exe) {
+            AddCheck::Refused(reason) => return Err(reason),
+            AddCheck::Confirm(_)
+                if !entry.confirmed && matches!(entry.action, Action::Stop | Action::Suspend) =>
+            {
+                return Err(format!("{exe} is on the warn list and needs confirmation"));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn check_path(path: Option<&str>) -> Result<(), String> {
@@ -1023,6 +1094,45 @@ impl<H: Host> Bridge<H> {
                 let (first, second) = (find(&a)?, find(&b)?);
                 Ok(Some(compare_json(&crate::compare::compare(first, second))))
             }
+            Request::Snapshot { mode, profile } => {
+                let entries = match mode.as_str() {
+                    "new" => Vec::new(),
+                    "update" => {
+                        let name = profile.unwrap_or_default();
+                        check_text(&[&name])?;
+                        self.document
+                            .config()
+                            .profile(&name)
+                            .ok_or_else(|| format!("no profile named \"{}\"", name.trim()))?
+                            .apps
+                            .clone()
+                    }
+                    other => return Err(format!("unknown mode \"{other}\"")),
+                };
+                Ok(Some(groups_json(&self.host.snapshot(&entries))))
+            }
+            Request::CreateProfileFrom { name, entries } => {
+                check_text(&[&name])?;
+                check_new_entries(&entries)?;
+                let result = self.document.add_profile_with(&name, &entries);
+                self.saved(
+                    format!(
+                        "Profile \"{}\" created with {} entries",
+                        name.trim(),
+                        entries.len()
+                    ),
+                    result,
+                )
+            }
+            Request::AddEntries { profile, entries } => {
+                check_text(&[&profile])?;
+                check_new_entries(&entries)?;
+                let result = self.document.add_entries(&profile, &entries);
+                self.saved(
+                    format!("{} entries added to \"{profile}\"", entries.len()),
+                    result,
+                )
+            }
             Request::Preview { profile } => {
                 check_text(&[&profile])?;
                 let profile = profile.trim();
@@ -1330,6 +1440,31 @@ mod tests {
                 private_bytes: 1 << 20,
                 protection: protection::of("anydesk.exe"),
             }]
+        }
+        fn snapshot(&self, entries: &[App]) -> crate::snapshot::Groups {
+            use crate::snapshot::{Groups, Row};
+            let row = |exe: &str, held: Option<Action>| Row {
+                exe: exe.to_owned(),
+                path: Some(format!("C:\\apps\\{exe}")),
+                private_bytes: 1 << 20,
+                protection: protection::of(exe),
+                elevated: false,
+                background: false,
+                held,
+                first_seen: None,
+            };
+            let mut groups = Groups {
+                running: vec![row("browser.exe", None), row("anydesk.exe", None)],
+                held: vec![row("chat.exe", Some(Action::Suspend))],
+                seen: Vec::new(),
+                existing: 0,
+            };
+            let before = groups.running.len();
+            groups
+                .running
+                .retain(|r| !entries.iter().any(|a| a.exe.eq_ignore_ascii_case(&r.exe)));
+            groups.existing = before - groups.running.len();
+            groups
         }
         fn preview(&self, _config: &Config, profile: &str) -> Result<crate::engine::Plan, String> {
             use crate::engine::{Outcome, Plan, PlanItem};
@@ -2079,6 +2214,86 @@ mod tests {
             json!({"v": 1, "id": 4, "type": "compare", "a": "focus", "b": "nope"}),
         );
         assert_eq!(unknown["ok"], false);
+    }
+
+    #[test]
+    fn snapshot_lists_the_groups_and_leaves_out_what_has_an_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "snapshot", "mode": "new"}),
+        );
+        assert_eq!(reply["ok"], true);
+        assert_eq!(reply["data"]["running"][0]["exe"], "browser.exe");
+        assert_eq!(reply["data"]["running"][1]["protection"], "warn");
+        assert_eq!(reply["data"]["held"][0]["held"], "suspend");
+        let update = send(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "snapshot", "mode": "update", "profile": "focus"}),
+        );
+        assert_eq!(update["data"]["existing"], 1);
+        assert_eq!(update["data"]["running"].as_array().unwrap().len(), 1);
+        let bad = send(
+            &mut b,
+            json!({"v": 1, "id": 3, "type": "snapshot", "mode": "x"}),
+        );
+        assert_eq!(bad["ok"], false);
+    }
+
+    #[test]
+    fn create_profile_from_writes_all_entries_or_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "create_profile_from", "name": "evening",
+            "entries": [
+                {"exe": "browser.exe", "action": "suspend"},
+                {"exe": "tool.exe", "path": "C:\\tools\\tool.exe", "action": "start"},
+                {"exe": "chat.exe", "action": "ignore"}
+            ]}),
+        );
+        assert_eq!(reply["ok"], true, "{reply}");
+        let profile = b.document.config().profile("evening").unwrap();
+        assert_eq!(profile.apps.len(), 3);
+        // A warn-list program needs its confirmation for freeze and stop.
+        let refused = send(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "create_profile_from", "name": "remote",
+                "entries": [{"exe": "browser.exe", "action": "suspend"}, {"exe": "anydesk.exe", "action": "stop"}]}),
+        );
+        assert_eq!(refused["ok"], false);
+        assert!(b.document.config().profile("remote").is_none());
+        // Hard-protected programs are refused; `start` without path breaks C6.
+        for entry in [
+            json!({"exe": "csrss.exe", "action": "suspend"}),
+            json!({"exe": "tool.exe", "action": "start"}),
+        ] {
+            let reply = send(
+                &mut b,
+                json!({"v": 1, "id": 3, "type": "create_profile_from", "name": "x", "entries": [entry]}),
+            );
+            assert_eq!(reply["ok"], false);
+        }
+        assert!(b.document.config().profile("x").is_none());
+    }
+
+    #[test]
+    fn add_entries_extends_a_profile_in_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        let before = b.document.config().profile("focus").unwrap().apps.len();
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "add_entries", "profile": "focus",
+                "entries": [{"exe": "new1.exe", "action": "stop"}, {"exe": "new2.exe", "action": "ignore"}]}),
+        );
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(
+            b.document.config().profile("focus").unwrap().apps.len(),
+            before + 2
+        );
     }
 
     #[test]

@@ -737,6 +737,180 @@ $('compare-identical').addEventListener('click', () => {
   renderCompare();
 });
 
+// Profile from the current state (H1) --------------------------------------
+
+const snapshotChoices = [
+  ['none', 'Not in profile'], ['ignore', 'Leave as it is'], ['suspend', 'Freeze'],
+  ['stop', 'Stop'], ['start', 'Keep running'],
+];
+let snap = null; // { mode, profile, data, choices: Map(key -> {action, confirmed}) }
+
+const snapKey = (row) => `${row.exe.toLowerCase()}|${(row.path || '').toLowerCase()}`;
+
+/** What the owner can pick for a row: a program without a known path (an
+ * elevated one, P7) can only be left as it is; `Keep running` needs a path. */
+function snapOptions(row) {
+  return snapshotChoices.filter(([value]) => {
+    if (row.elevated) return value === 'none' || value === 'ignore';
+    if (value === 'start') return !!row.path;
+    return true;
+  });
+}
+
+function snapRows() {
+  return [...snap.data.running, ...snap.data.held, ...snap.data.seen];
+}
+
+function snapSetDefaults() {
+  for (const row of snap.data.held) {
+    if (!snap.choices.has(snapKey(row))) snap.choices.set(snapKey(row), { action: row.held, confirmed: row.protection === 'warn' });
+  }
+}
+
+function snapEverything() {
+  snap.choices.clear();
+  const set = (row, action) => snap.choices.set(snapKey(row), { action, confirmed: false });
+  // Only what the list shows: background programs stay out unless shown.
+  const shown = $('snapshot-background').checked;
+  for (const row of snap.data.running) if (shown || !row.background) set(row, row.path && !row.elevated ? 'start' : 'ignore');
+  for (const row of snap.data.held) snap.choices.set(snapKey(row), { action: row.held, confirmed: row.protection === 'warn' });
+  // A warn-list program is not stopped without its own confirmation (P6).
+  for (const row of snap.data.seen) if (row.protection !== 'warn') set(row, 'stop');
+}
+
+function snapTable(title, rows, note) {
+  const wrap = el('section', { class: 'snap-group' }, el('h3', { text: `${title} (${rows.length})` }));
+  if (note) wrap.append(el('p', { class: 'hint', text: note }));
+  if (rows.length === 0) return wrap;
+  const body = el('tbody');
+  for (const row of rows) {
+    const key = snapKey(row);
+    const choice = snap.choices.get(key) || { action: 'none', confirmed: false };
+    const select = el('select', { 'aria-label': `Action for ${row.exe}` },
+      ...snapOptions(row).map(([value, label]) => el('option', { value, text: label })));
+    select.value = snapOptions(row).some(([v]) => v === choice.action) ? choice.action : 'none';
+    const confirm = el('input', { type: 'checkbox', 'aria-label': `I confirm for ${row.exe}` });
+    confirm.checked = choice.confirmed;
+    const confirmCell = el('label', { class: 'inline' }, confirm, ' I confirm');
+    const sync = () => {
+      snap.choices.set(key, { action: select.value, confirmed: confirm.checked });
+      confirmCell.hidden = !(row.protection === 'warn' && (select.value === 'suspend' || select.value === 'stop'));
+      snapUpdateOk();
+    };
+    select.addEventListener('change', sync);
+    confirm.addEventListener('change', sync);
+    confirmCell.hidden = !(row.protection === 'warn' && (select.value === 'suspend' || select.value === 'stop'));
+    body.append(el('tr', {},
+      el('td', {}, el('div', { class: 'program' }, programIcon(row.exe, null),
+        el('span', { class: 'names' }, el('span', { class: 'exe', text: row.exe }),
+          row.path ? el('span', { class: 'path', text: row.path }) : el('span', { class: 'path', text: row.elevated ? 'higher integrity, path not readable' : 'path not known' }),
+          row.protection === 'warn' ? el('span', { class: 'protection warn', text: 'warn list' }) : null))),
+      el('td', { class: 'num', text: row.private_bytes ? megabytes(row.private_bytes) : '' }),
+      el('td', {}, select, confirmCell)));
+  }
+  wrap.append(el('div', {}, el('table', { class: 'table' },
+    el('thead', {}, el('tr', {}, el('th', { scope: 'col', text: 'Program' }), el('th', { scope: 'col', class: 'num', text: 'Memory' }), el('th', { scope: 'col', text: 'In the profile' }))),
+    body)));
+  return wrap;
+}
+
+function snapChosen() {
+  const rows = snapRows();
+  const chosen = rows.filter((r) => (snap.choices.get(snapKey(r)) || { action: 'none' }).action !== 'none');
+  const names = new Map();
+  for (const r of chosen) names.set(r.exe.toLowerCase(), (names.get(r.exe.toLowerCase()) || 0) + 1);
+  return chosen.map((row) => {
+    const choice = snap.choices.get(snapKey(row));
+    // The same name from different folders needs the path to tell them
+    // apart (C2); `start` always needs it (C6).
+    const withPath = choice.action === 'start' || names.get(row.exe.toLowerCase()) > 1;
+    return { exe: row.exe, path: withPath && row.path ? row.path : null, action: choice.action, confirmed: choice.confirmed, warn: row.protection === 'warn' };
+  });
+}
+
+function snapUpdateOk() {
+  const count = snapChosen().length;
+  $('snapshot-ok').textContent = snap.mode === 'new' ? `Create profile (${count})` : `Add ${count} ${count === 1 ? 'entry' : 'entries'}`;
+  $('snapshot-ok').disabled = count === 0 && snap.mode === 'update';
+}
+
+function renderSnapshot() {
+  const showBackground = $('snapshot-background').checked;
+  const running = snap.data.running.filter((r) => showBackground || !r.background);
+  const hidden = snap.data.running.length - running.length;
+  $('snapshot-groups').replaceChildren(
+    snapTable('Running now', running, hidden > 0 ? `${hidden} background ${hidden === 1 ? 'program is' : 'programs are'} hidden.` : ''),
+    snapTable('Held by kaltstellen', snap.data.held, snap.data.held.length ? 'Programs kaltstellen froze or stopped and that nobody has resumed.' : ''),
+    snapTable('Not running, seen earlier', snap.data.seen, ''));
+  loadIcons($('snapshot-groups'));
+  const existing = $('snapshot-existing');
+  existing.hidden = !(snap.mode === 'update' && snap.data.existing > 0);
+  existing.textContent = `${snap.data.existing} ${snap.data.existing === 1 ? 'program already has an entry' : 'programs already have an entry'} in this profile and ${snap.data.existing === 1 ? 'is' : 'are'} not listed. Use Compare to change entries.`;
+  snapUpdateOk();
+}
+
+async function loadSnapshot() {
+  $('snapshot-error').textContent = '';
+  const reply = await call('snapshot', { mode: snap.mode, profile: snap.profile }, { quiet: true });
+  if (!reply.ok) {
+    $('snapshot-error').textContent = reply.error;
+    return false;
+  }
+  snap.data = reply.data;
+  snapSetDefaults();
+  renderSnapshot();
+  return true;
+}
+
+async function openSnapshot(mode) {
+  snap = { mode, profile: mode === 'update' ? current().name : null, data: null, choices: new Map() };
+  $('snapshot-title').textContent = mode === 'new' ? 'New profile from the current state' : `Update ${current().name} from the current state`;
+  $('snapshot-name-row').hidden = mode !== 'new';
+  $('snapshot-name').value = '';
+  $('snapshot-background').checked = false;
+  if (!(await loadSnapshot())) return;
+  openDialog($('snapshot-dialog'));
+}
+
+$('snapshot-update').addEventListener('click', () => openSnapshot('update'));
+$('snapshot-refresh').addEventListener('click', loadSnapshot);
+$('snapshot-background').addEventListener('change', renderSnapshot);
+$('snapshot-clear').addEventListener('click', () => {
+  snap.choices.clear();
+  renderSnapshot();
+});
+$('snapshot-everything').addEventListener('click', () => {
+  snapEverything();
+  renderSnapshot();
+});
+$('snapshot-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const entries = snapChosen();
+  const unconfirmed = entries.find((e) => e.warn && (e.action === 'stop' || e.action === 'suspend') && !e.confirmed);
+  if (unconfirmed) {
+    $('snapshot-error').textContent = `${unconfirmed.exe} is on the warn list: tick "I confirm" or choose another action.`;
+    return;
+  }
+  const payload = entries.map(({ exe, path, action, confirmed }) => ({ exe, path, action, confirmed }));
+  let reply;
+  if (snap.mode === 'new') {
+    const name = $('snapshot-name').value.trim();
+    if (!name) {
+      $('snapshot-error').textContent = 'The profile needs a name.';
+      return;
+    }
+    reply = await call('create_profile_from', { name, entries: payload });
+    if (reply.ok) {
+      $('snapshot-dialog').close();
+      await select(name);
+    }
+  } else {
+    reply = await call('add_entries', { profile: snap.profile, entries: payload });
+    if (reply.ok) $('snapshot-dialog').close();
+  }
+  if (!reply.ok) $('snapshot-error').textContent = reply.error;
+});
+
 // Preview a switch (H4) -----------------------------------------------------
 
 let previewed = null;
@@ -1038,11 +1212,19 @@ async function dismiss(exe) {
 
 // Profile commands ----------------------------------------------------------
 
-$('new-profile').addEventListener('click', () => nameDialog('New profile', '', async (name) => {
-  const reply = await call('create_profile', { name });
-  if (reply.ok) await select(name.trim());
-  return reply;
-}));
+$('new-profile').addEventListener('click', () => openDialog($('new-dialog')));
+$('new-empty').addEventListener('click', () => {
+  $('new-dialog').close();
+  nameDialog('New profile', '', async (name) => {
+    const reply = await call('create_profile', { name });
+    if (reply.ok) await select(name.trim());
+    return reply;
+  });
+});
+$('new-snapshot').addEventListener('click', () => {
+  $('new-dialog').close();
+  openSnapshot('new');
+});
 
 $('rename').addEventListener('click', () => {
   const from = current().name;
@@ -1233,6 +1415,7 @@ async function openView(name) {
   if (name === 'settings') showSettings();
   if (name === 'compare' && profile) await openCompare();
   if (name === 'preview' && profile) await openPreview();
+  if (name === 'snapshot' && profile) await openSnapshot('new');
   if (name === 'new') nameDialog('New profile', 'Evening', async () => ({ ok: false, error: 'KS205: profile name "Evening" is used already' }));
 }
 

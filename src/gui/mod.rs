@@ -290,6 +290,20 @@ impl Host for RealHost {
         views
     }
 
+    fn snapshot(&self, entries: &[crate::config::App]) -> crate::snapshot::Groups {
+        let state = Store::new(&self.data).peek().unwrap_or_default();
+        let (seen, problem) = crate::unassigned::load(&self.data);
+        if let Some(problem) = problem {
+            warn!("{problem}");
+        }
+        crate::snapshot::assemble(
+            &crate::snapshot::running_now(),
+            &crate::snapshot::held_of(&state),
+            &seen,
+            entries,
+        )
+    }
+
     fn preview(&self, config: &Config, profile: &str) -> Result<crate::engine::Plan, String> {
         let state = Store::new(&self.data).peek().unwrap_or_default();
         crate::engine::preview(
