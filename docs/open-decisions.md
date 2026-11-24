@@ -237,7 +237,7 @@ actions only", section 12):
 26. **No release yet vs. a repository that is gone** (UP1 "Source"; the
     owner decided on 2026-11-24 that "no release yet" is "nothing newer"):
     a 404 for `releases/latest` is followed by `GET /releases?per_page=1`.
-    An answer (maybe `[]`) means "none yet"; a failure keeps the check
+    A release list (a JSON array, maybe `[]`) means "none yet"; any other answer is `KS802`; a failure keeps the check
     failed (`KS801`), so a mistyped `KALTSTELLEN_UPDATE_URL` or a deleted
     repository does not look like "up to date" forever. That is a second
     request, only while no stable release exists. `update --force` without

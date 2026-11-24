@@ -177,8 +177,19 @@ pub fn latest(fetch: &dyn Fetch, source: &Source, current: &str) -> Result<Optio
         Err(err) if !pre && err.status == Some(404) => {
             let list = format!("{}/releases?per_page=1", source.base);
             return match fetch.get(&list, "application/vnd.github+json", METADATA_LIMIT) {
-                Ok(_) => Ok(None),
-                Err(_) => Err(Error::new(Code::UpdateCheck, err)),
+                // Only a real list: a mirror that answers anything with 200
+                // is not "none yet".
+                Ok(body) if serde_json::from_slice::<Vec<serde_json::Value>>(&body).is_ok() => {
+                    Ok(None)
+                }
+                Ok(_) => Err(Error::new(
+                    Code::UpdateRelease,
+                    format!("{err}, and {list} is not a release list"),
+                )),
+                // Gone: the 404 says it. Anything else (rate limit, network)
+                // is the reason the check failed.
+                Err(probe) if probe.status == Some(404) => Err(Error::new(Code::UpdateCheck, err)),
+                Err(probe) => Err(Error::new(Code::UpdateCheck, probe)),
             };
         }
         Err(err) => return Err(Error::new(Code::UpdateCheck, err)),
@@ -548,9 +559,22 @@ mod tests {
         assert_eq!(latest(&only_beta, &source(), "1.0.0").unwrap(), None);
         // A repository that is gone (or a wrong mirror): 404 for both.
         let gone = Fake(HashMap::new());
+        let err = latest(&gone, &source(), "1.0.0").unwrap_err();
+        assert_eq!(err.code, Code::UpdateCheck);
+        assert!(err.reason.contains("releases/latest: HTTP 404"), "{err}");
+        // The probe fails otherwise: its reason is the one reported.
+        let probe_down = Fake(HashMap::from([(
+            PROBE.to_owned(),
+            Err("unreachable".to_owned()),
+        )]));
+        let err = latest(&probe_down, &source(), "1.0.0").unwrap_err();
+        assert_eq!(err.code, Code::UpdateCheck);
+        assert!(err.reason.contains("unreachable"), "{err}");
+        // A server that answers anything with 200 is not "none yet".
+        let anything = Fake(HashMap::from([(PROBE.to_owned(), Ok(b"<html>".to_vec()))]));
         assert_eq!(
-            latest(&gone, &source(), "1.0.0").unwrap_err().code,
-            Code::UpdateCheck
+            latest(&anything, &source(), "1.0.0").unwrap_err().code,
+            Code::UpdateRelease
         );
         // A 404 for the list is not "none yet": the list exists, empty.
         let no_list = Fake(HashMap::new());
