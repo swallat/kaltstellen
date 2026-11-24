@@ -71,6 +71,10 @@ jobs:
       - name: The setup builds, installs, upgrades and uninstalls (Q2)
         shell: pwsh
         run: |
-          $setup = ./scripts/installer.ps1 -Exe target/release/kaltstellen.exe `
+          # Under another name, as a release file is: the setup must not
+          # depend on the source name.
+          $exe = "$env:RUNNER_TEMP/kaltstellen-ci-build.exe"
+          Copy-Item target/release/kaltstellen.exe $exe
+          $setup = ./scripts/installer.ps1 -Exe $exe `
             -OutputDir "$env:RUNNER_TEMP/setup" -ToolsDir "$env:RUNNER_TEMP/tools"
           ./scripts/installer-test.ps1 -Setup $setup

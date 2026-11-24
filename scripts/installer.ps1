@@ -81,7 +81,7 @@ function Get-PinnedIscc([string]$Dir) {
     # Portable: no uninstall entry, no Start menu, nothing in the registry.
     $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @(
         '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER',
-        '/PORTABLE=1', '/NOICONS', "/DIR=$home_")
+        '/PORTABLE=1', '/NOICONS', "/DIR=`"$home_`"")
     if ($p.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $iscc)) {
         throw "installing Inno Setup $InnoVersion failed (exit code $($p.ExitCode))"
     }
@@ -89,9 +89,14 @@ function Get-PinnedIscc([string]$Dir) {
 }
 
 $Exe = (Resolve-Path -LiteralPath $Exe).Path
-if (-not $Arch) {
-    $Arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
-}
+# The machine field of the PE header, not this shell (which may be emulated).
+$bytes = [IO.File]::ReadAllBytes($Exe)
+$pe = [BitConverter]::ToInt32($bytes, 0x3C)
+$machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+$exeArch = switch ($machine) { 0x8664 { 'x86_64' } 0xAA64 { 'aarch64' } default { $null } }
+if (-not $exeArch) { throw ("{0} is not an x86_64 or aarch64 executable (machine 0x{1:X4})" -f $Exe, $machine) }
+if (-not $Arch) { $Arch = $exeArch }
+if ($Arch -ne $exeArch) { throw "-Arch $Arch, but $Exe is $exeArch" }
 if (-not $Version) {
     # All of the output: a pipeline that stops early leaves no exit code.
     $lines = @(& $Exe --version)
