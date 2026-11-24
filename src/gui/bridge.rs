@@ -305,11 +305,11 @@ pub enum Request {
     CheckUpdates,
     InstallUpdate,
     /// M4: the state of the optional background helper.
-    HelperStatus,
+    HelperStatus {},
     /// M4: install or update the helper (console window and a UAC prompt).
-    HelperInstall,
+    HelperInstall {},
     /// M4: remove the helper (console window and a UAC prompt).
-    HelperUninstall,
+    HelperUninstall {},
     /// M6: the `[settings]` of the configuration file.
     SetDefaults {
         default_action: String,
@@ -1424,7 +1424,7 @@ impl<H: Host> Bridge<H> {
                 self.status = format!("Installing {version} in a separate window…");
                 Ok(None)
             }
-            Request::HelperStatus => {
+            Request::HelperStatus {} => {
                 // One read at a time; the answer is the `helper_status` event.
                 if !self.helper_checking {
                     self.helper_checking = true;
@@ -1432,12 +1432,12 @@ impl<H: Host> Bridge<H> {
                 }
                 Ok(None)
             }
-            Request::HelperInstall => {
+            Request::HelperInstall {} => {
                 self.host.open_helper(true)?;
                 self.status = "Installing the background helper in a separate window…".to_owned();
                 Ok(None)
             }
-            Request::HelperUninstall => {
+            Request::HelperUninstall {} => {
                 self.host.open_helper(false)?;
                 self.status = "Removing the background helper in a separate window…".to_owned();
                 Ok(None)
