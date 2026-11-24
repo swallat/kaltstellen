@@ -788,6 +788,34 @@ async function runMeasurement() {
   renderSnapshot();
 }
 
+const snapActionLabel = { ignore: 'Leave as it is', suspend: 'Freeze', stop: 'Stop', start: 'Keep running' };
+
+/** H3: warnings from the open windows, as short texts. */
+function snapWarnings(row) {
+  const w = row.windows || { count: 0 };
+  const list = [];
+  if (w.count > 0) list.push(`${w.count} ${w.count === 1 ? 'window' : 'windows'} open`);
+  if (w.dialog) list.push('Dialog open');
+  if (w.unsaved) list.push('May have unsaved changes');
+  if (w.hung) list.push('Not responding');
+  return list;
+}
+
+/** With Stop, open windows or unsaved work make the entry keep the
+ * program if it does not close (A2); the entry dialog can change it. */
+function snapKeeps(row, action) {
+  const w = row.windows || { count: 0 };
+  return action === 'stop' && (w.count > 0 || w.dialog || w.unsaved);
+}
+
+/** Whether the list shows the row now: background programs and rows the
+ * `Heavy only` filter hides are not touched by quick fills. */
+function snapShown(row) {
+  if (snap.data.running.includes(row) && row.background && !$('snapshot-background').checked) return false;
+  if ($('snapshot-heavy').checked && !snap.load.get(row.exe.toLowerCase())?.heavy) return false;
+  return true;
+}
+
 const snapKey = (row) => `${row.exe.toLowerCase()}|${(row.path || '').toLowerCase()}`;
 
 /** What the owner can pick for a row: a program without a known path (an
@@ -831,7 +859,7 @@ function snapTable(title, rows, note) {
   for (const row of rows) {
     const key = snapKey(row);
     const choice = snap.choices.get(key) || { action: 'none', confirmed: false };
-    const select = el('select', { 'aria-label': `Action for ${row.exe}` },
+    const select = el('select', { 'aria-label': `Action for ${row.exe}`, class: row.suggestion ? 'suggested' : null },
       ...snapOptions(row).map(([value, label]) => el('option', { value, text: label })));
     select.value = snapOptions(row).some(([v]) => v === choice.action) ? choice.action : 'none';
     const confirm = el('input', { type: 'checkbox', 'aria-label': `I confirm for ${row.exe}` });
@@ -849,7 +877,10 @@ function snapTable(title, rows, note) {
       el('td', {}, el('div', { class: 'program' }, programIcon(row.exe, null),
         el('span', { class: 'names' }, el('span', { class: 'exe', text: row.exe }),
           row.path ? el('span', { class: 'path', text: row.path }) : el('span', { class: 'path', text: row.elevated ? 'higher integrity, path not readable' : 'path not known' }),
-          row.protection === 'warn' ? el('span', { class: 'protection warn', text: 'warn list' }) : null))),
+          row.protection === 'warn' ? el('span', { class: 'protection warn', text: 'warn list' }) : null,
+          row.kind && row.kind.known ? el('span', { class: 'hint', text: `probably ${row.kind.label}` }) : null,
+          row.suggestion ? el('span', { class: 'hint', text: `Suggested: ${snapActionLabel[row.suggestion.action]} (${row.suggestion.reason})` }) : null,
+          ...snapWarnings(row).map((text) => el('span', { class: 'diff-tag only_a', text }))))),
       el('td', { class: 'num', text: row.private_bytes ? megabytes(row.private_bytes) : '' }),
       snapLoadCell(row),
       el('td', {}, select, confirmCell)));
@@ -878,7 +909,10 @@ function snapChosen() {
     // The same name from different folders needs the path to tell them
     // apart (C2); `start` always needs it (C6).
     const withPath = choice.action === 'start' || names.get(row.exe.toLowerCase()) > 1;
-    return { exe: row.exe, path: withPath && row.path ? row.path : null, action: choice.action, confirmed: choice.confirmed, warn: row.protection === 'warn' };
+    return {
+      exe: row.exe, path: withPath && row.path ? row.path : null, action: choice.action, confirmed: choice.confirmed,
+      on_timeout: snapKeeps(row, choice.action) ? 'keep' : null, warn: row.protection === 'warn',
+    };
   });
 }
 
@@ -937,6 +971,19 @@ $('snapshot-measure').addEventListener('click', measureSnapshot);
 $('snapshot-heavy').addEventListener('change', renderSnapshot);
 $('snapshot-sort').addEventListener('change', renderSnapshot);
 $('snapshot-background').addEventListener('change', renderSnapshot);
+$('snapshot-suggestions').addEventListener('click', () => {
+  // Only rows that have a suggestion and no choice yet; a suggestion is
+  // a pre-selected choice, never an entry the owner did not see.
+  for (const row of snapRows()) {
+    if (!row.suggestion || row.protection !== 'none' || !snapShown(row)) continue;
+    const key = snapKey(row);
+    const now = snap.choices.get(key);
+    if (now && now.action !== 'none') continue;
+    if (!snapOptions(row).some(([v]) => v === row.suggestion.action)) continue;
+    snap.choices.set(key, { action: row.suggestion.action, confirmed: false });
+  }
+  renderSnapshot();
+});
 $('snapshot-clear').addEventListener('click', () => {
   snap.choices.clear();
   renderSnapshot();
@@ -953,7 +1000,7 @@ $('snapshot-form').addEventListener('submit', async (event) => {
     $('snapshot-error').textContent = `${unconfirmed.exe} is on the warn list: tick "I confirm" or choose another action.`;
     return;
   }
-  const payload = entries.map(({ exe, path, action, confirmed }) => ({ exe, path, action, confirmed }));
+  const payload = entries.map(({ exe, path, action, confirmed, on_timeout }) => ({ exe, path, action, confirmed, on_timeout }));
   let reply;
   if (snap.mode === 'new') {
     const name = $('snapshot-name').value.trim();

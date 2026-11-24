@@ -25,9 +25,11 @@ use windows::Win32::System::Threading::{
     PROCESS_SUSPEND_RESUME, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, ProcessProtectionLevelInfo,
     QueryFullProcessImageNameW, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowThreadProcessId, IsIconic, IsWindowVisible, PostMessageW, SW_MINIMIZE,
-    ShowWindowAsync, WM_CLOSE,
+    EnumWindows, GWL_EXSTYLE, GetClassNameW, GetWindowLongPtrW, GetWindowTextW,
+    GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindowVisible, PostMessageW,
+    SW_MINIMIZE, ShowWindowAsync, WM_CLOSE, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, PCWSTR, PWSTR};
 
@@ -668,6 +670,89 @@ pub fn pids_with_visible_windows() -> HashSet<u32> {
     search.found
 }
 
+/// What the visible top-level windows of one process say (H3). Read from
+/// window handles only; no process is opened and titles are looked at, not
+/// kept.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WindowInfo {
+    /// Visible top-level windows that are not tool windows.
+    pub windows: u32,
+    /// A visible window is disabled (a modal dialog is open on it) or is of
+    /// the dialog class.
+    pub dialog: bool,
+    /// A title begins or ends with `*` or `●`: a guess, absence proves
+    /// nothing.
+    pub unsaved: bool,
+    /// `IsHungAppWindow` for one of the windows.
+    pub hung: bool,
+}
+
+/// The window class Windows gives message boxes and dialog boxes.
+pub fn is_dialog_class(class: &str) -> bool {
+    class == "#32770"
+}
+
+/// H3: a title that marks changes not saved yet.
+pub fn title_may_be_unsaved(title: &str) -> bool {
+    let title = title.trim();
+    ["*", "\u{25CF}"]
+        .iter()
+        .any(|mark| title.starts_with(mark) || title.ends_with(mark))
+}
+
+/// One pass over all top-level windows: what each process's visible windows
+/// say, by PID.
+pub fn window_infos() -> std::collections::HashMap<u32, WindowInfo> {
+    struct Search {
+        found: std::collections::HashMap<u32, WindowInfo>,
+    }
+    unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> BOOL {
+        // SAFETY: `param` is the pointer to the `Search` below, which
+        // outlives the EnumWindows call.
+        let search = unsafe { &mut *(param.0 as *mut Search) };
+        // SAFETY: a stale handle makes these calls fail harmlessly.
+        if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            return true.into();
+        }
+        let mut pid = 0u32;
+        // SAFETY: `pid` is a valid out pointer.
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        // SAFETY: as above.
+        let tool = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32 & WS_EX_TOOLWINDOW.0 != 0;
+        let mut class = [0u16; 64];
+        // SAFETY: the buffer is writable for its length.
+        let class_len = unsafe { GetClassNameW(hwnd, &mut class) }.max(0) as usize;
+        let class = String::from_utf16_lossy(&class[..class_len.min(class.len())]);
+        let mut title = [0u16; 256];
+        // SAFETY: the buffer is writable for its length.
+        let title_len = unsafe { GetWindowTextW(hwnd, &mut title) }.max(0) as usize;
+        let title = String::from_utf16_lossy(&title[..title_len.min(title.len())]);
+        let info = search.found.entry(pid).or_default();
+        if !tool {
+            info.windows += 1;
+        }
+        // SAFETY: as above.
+        if !unsafe { IsWindowEnabled(hwnd) }.as_bool() || is_dialog_class(&class) {
+            info.dialog = true;
+        }
+        if title_may_be_unsaved(&title) {
+            info.unsaved = true;
+        }
+        // SAFETY: as above.
+        if unsafe { IsHungAppWindow(hwnd) }.as_bool() {
+            info.hung = true;
+        }
+        true.into()
+    }
+    let mut search = Search {
+        found: std::collections::HashMap::new(),
+    };
+    // SAFETY: the callback only uses `search`, which lives until the call
+    // returns.
+    let _ = unsafe { EnumWindows(Some(visit), LPARAM(&raw mut search as isize)) };
+    search.found
+}
+
 pub fn visible_window_count(pids: &[u32]) -> usize {
     windows_of(pids)
         .into_iter()
@@ -1068,5 +1153,25 @@ mod tests {
     #[test]
     fn available_memory_is_reported() {
         assert!(available_memory().unwrap() > 0);
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::{is_dialog_class, title_may_be_unsaved};
+
+    #[test]
+    fn h3_unsaved_marks_in_titles() {
+        assert!(title_may_be_unsaved("*notes.txt - Editor"));
+        assert!(title_may_be_unsaved("report.docx ●"));
+        assert!(title_may_be_unsaved("  draft *  "));
+        assert!(!title_may_be_unsaved("notes.txt - Editor"));
+        assert!(!title_may_be_unsaved("2 * 3 = 6 - Calculator"));
+    }
+
+    #[test]
+    fn h3_dialog_class() {
+        assert!(is_dialog_class("#32770"));
+        assert!(!is_dialog_class("Chrome_WidgetWin_1"));
     }
 }

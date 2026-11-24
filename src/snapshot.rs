@@ -13,7 +13,8 @@ use std::collections::{BTreeMap, HashSet};
 
 use crate::config::{Action, App};
 use crate::error::Code;
-use crate::process::{self, Access, Snapshot, Target};
+use crate::kinds::{self, Kind, Source};
+use crate::process::{self, Access, Snapshot, Target, WindowInfo};
 use crate::protection::{self, Protection};
 use crate::state::State;
 use crate::unassigned::{NOTIFY_ICONS_KEY, Seen};
@@ -31,6 +32,8 @@ pub struct Running {
     pub private_bytes: u64,
     /// No visible window and no notification-area icon (the scope of N2).
     pub background: bool,
+    /// What its visible windows say (H3).
+    pub windows: WindowInfo,
 }
 
 /// A program the state file records as frozen or stopped (S6).
@@ -54,6 +57,11 @@ pub struct Row {
     pub held: Option<Action>,
     /// Group 3: seconds since 1970 when it was first seen.
     pub first_seen: Option<u64>,
+    /// H3: the likely kind, a guess, and where it came from.
+    pub kind: Kind,
+    pub source: Source,
+    /// H3: what its windows say (running programs).
+    pub windows: WindowInfo,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -63,6 +71,11 @@ pub struct Groups {
     pub seen: Vec<Row>,
     /// Update mode: programs left out because the profile has an entry.
     pub existing: usize,
+}
+
+fn guess_of(exe: &str, path: Option<&str>) -> (Kind, Source) {
+    let guess = kinds::classify(exe, path, None);
+    (guess.kind, guess.source)
 }
 
 /// The state's records as held programs, one per name: frozen wins over
@@ -132,6 +145,9 @@ pub fn assemble(running: &[Running], held: &[Held], seen: &Seen, entries: &[App]
             background: program.background,
             held: None,
             first_seen: None,
+            kind: guess_of(&program.exe, program.path.as_deref()).0,
+            source: guess_of(&program.exe, program.path.as_deref()).1,
+            windows: program.windows,
         });
     }
     groups.running.sort_by(|a, b| {
@@ -154,6 +170,9 @@ pub fn assemble(running: &[Running], held: &[Held], seen: &Seen, entries: &[App]
             background: false,
             held: Some(program.action),
             first_seen: None,
+            kind: guess_of(&program.exe, program.path.as_deref()).0,
+            source: guess_of(&program.exe, program.path.as_deref()).1,
+            windows: WindowInfo::default(),
         });
     }
     groups.held.sort_by_key(|r| r.exe.to_lowercase());
@@ -185,6 +204,9 @@ pub fn assemble(running: &[Running], held: &[Held], seen: &Seen, entries: &[App]
             background: false,
             held: None,
             first_seen: Some(program.first_seen),
+            kind: guess_of(&program.exe, program.path.as_deref()).0,
+            source: guess_of(&program.exe, program.path.as_deref()).1,
+            windows: WindowInfo::default(),
         });
     }
     groups
@@ -216,6 +238,7 @@ pub fn running_now() -> Vec<Running> {
         .map(|o| o.exe.to_lowercase())
         .collect();
     let visible = process::pids_with_visible_windows();
+    let windows = process::window_infos();
     // (name, folder-path) -> row; a program that cannot be opened has no
     // path and is one row per name.
     let mut rows: BTreeMap<(String, Option<String>), Running> = BTreeMap::new();
@@ -251,7 +274,14 @@ pub fn running_now() -> Vec<Running> {
                 elevated,
                 private_bytes: 0,
                 background: true,
+                windows: WindowInfo::default(),
             });
+        if let Some(info) = windows.get(&p.pid) {
+            row.windows.windows += info.windows;
+            row.windows.dialog |= info.dialog;
+            row.windows.unsaved |= info.unsaved;
+            row.windows.hung |= info.hung;
+        }
         row.private_bytes += p.private_bytes;
         row.background &= !shown;
     }
@@ -272,6 +302,7 @@ mod tests {
             elevated: false,
             private_bytes: bytes,
             background,
+            windows: WindowInfo::default(),
         }
     }
 
