@@ -399,6 +399,41 @@ impl Host for RealHost {
         crate::unassigned::dismiss(&self.data, profile, exe).map_err(|e| e.to_string())
     }
 
+    fn learning(&self) -> bool {
+        crate::usage::enabled()
+    }
+
+    fn set_learning(&self, on: bool) -> Result<(), String> {
+        let dir = paths::config_dir().ok_or("the configuration folder is not known")?;
+        crate::settings::edit(&dir, |s| s.learn = Some(on)).map_err(|e| e.to_string())
+    }
+
+    fn suggestions(&self, config: &Config, profile: &str) -> Vec<crate::usage::Suggestion> {
+        let (usage, problem) = crate::usage::load(&self.data);
+        if let Some(problem) = problem {
+            warn!("{problem}");
+        }
+        config
+            .profile(profile)
+            .map(|p| usage.suggestions(&p.name, &p.apps))
+            .unwrap_or_default()
+    }
+
+    fn suggestion_done(&self, profile: &str, exe: &str, never: bool) -> Result<(), String> {
+        crate::usage::edit(&self.data, |usage| {
+            if never {
+                usage.never(profile, exe);
+            } else {
+                usage.reset(profile, exe);
+            }
+        })
+        .map_err(|e| e.to_string())
+    }
+
+    fn forget_learned(&self) -> Result<(), String> {
+        crate::usage::forget(&self.data).map_err(|e| e.to_string())
+    }
+
     fn autostart(&self) -> Option<bool> {
         let exe = std::env::current_exe().ok()?;
         crate::autostart::state(&crate::autostart::Location::current(), &exe)

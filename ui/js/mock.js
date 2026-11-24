@@ -35,6 +35,7 @@ const state = {
   },
   autostart: false,
   automation: { on: true, triggers: true, note: null },
+  learn: true,
   applying: false,
   status: 'Mock backend: nothing is saved.',
   update: {
@@ -85,6 +86,7 @@ const running = [
   { exe: 'notes.exe', private_bytes: 35_500_000 },
 ].map((p) => ({ ...p, protection: protectionOf(p.exe) }));
 
+const neverSuggested = new Set();
 const unassigned = {
   'Flight': [
     { exe: 'game-launcher.exe', path: 'C:\\Games\\Launcher\\game-launcher.exe', new: true },
@@ -408,6 +410,25 @@ function handle(message) {
       return { ok: true };
     case 'reload_config':
       state.status = 'Configuration read again.';
+      return { ok: true };
+    case 'suggestions': {
+      const entries = profile ? profile.entries : [];
+      const known = entries.findIndex((e) => e.exe === 'chat.exe');
+      const list = [];
+      if (!state.learn || neverSuggested.has('chat.exe')) return { ok: true, data: list };
+      list.push({ exe: 'chat.exe', path: null, action: 'stop', reason: 'In 4 of the last 5 activations chat.exe was gone when you switched back (it ended or you closed it).', seen: 4, of: 5, entry: known >= 0 ? known : null });
+      return { ok: true, data: list };
+    }
+    case 'suggestion_done':
+      if (m.never) neverSuggested.add(m.exe);
+      return { ok: true };
+    case 'set_learn':
+      state.learn = !!m.on;
+      state.status = state.learn ? 'Suggestions from use are on.' : 'Suggestions from use are off; nothing is recorded.';
+      return { ok: true };
+    case 'forget_learned':
+      neverSuggested.clear();
+      state.status = 'What was learned from use is deleted.';
       return { ok: true };
     case 'forget_last_profile':
       state.locations.last_profile = null;

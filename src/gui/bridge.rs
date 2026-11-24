@@ -39,6 +39,15 @@ pub trait Host {
     fn running(&self) -> Vec<Candidate>;
     fn unassigned(&self, config: &Config, profile: &str) -> Vec<Unassigned>;
     fn dismiss(&self, profile: &str, exe: &str) -> Result<(), String>;
+    /// H5: `Suggestions from use` is on.
+    fn learning(&self) -> bool;
+    fn set_learning(&self, on: bool) -> Result<(), String>;
+    /// H5: the suggestions for `profile`.
+    fn suggestions(&self, config: &Config, profile: &str) -> Vec<crate::usage::Suggestion>;
+    /// H5: `Add entry` (counters reset) or `Never for this program`.
+    fn suggestion_done(&self, profile: &str, exe: &str, never: bool) -> Result<(), String>;
+    /// H5: `Forget what was learned`.
+    fn forget_learned(&self) -> Result<(), String>;
     /// `None` when the Run key cannot be read.
     fn autostart(&self) -> Option<bool>;
     fn set_autostart(&self, on: bool) -> Result<(), String>;
@@ -252,6 +261,23 @@ pub enum Request {
         profile: String,
         exe: String,
     },
+    /// H5: the suggestions from use for a profile.
+    Suggestions {
+        profile: String,
+    },
+    /// H5: `Add entry` resets the counters of the program, `never` keeps it
+    /// from being suggested again.
+    SuggestionDone {
+        profile: String,
+        exe: String,
+        never: bool,
+    },
+    /// H5: `Suggestions from use` on or off.
+    SetLearn {
+        on: bool,
+    },
+    /// H5: delete what was learned.
+    ForgetLearned,
     Apply {
         profile: String,
     },
@@ -336,6 +362,8 @@ pub struct StateView {
     pub autostart: Option<bool>,
     /// U4: `Automatic switching`.
     pub automation: AutomationView,
+    /// H5: `Suggestions from use`.
+    pub learn: bool,
     pub applying: bool,
     pub status: String,
     pub update: UpdateInfo,
@@ -712,6 +740,7 @@ impl<H: Host> Bridge<H> {
                 }),
                 triggers: config.profiles.iter().any(|p| !p.triggers.is_empty()),
             },
+            learn: self.host.learning(),
             applying: self.applying,
             status: self.status.clone(),
             update: UpdateInfo {
@@ -1231,6 +1260,61 @@ impl<H: Host> Bridge<H> {
                     .collect();
                 Ok(Some(Value::Array(list)))
             }
+            Request::Suggestions { profile } => {
+                check_text(&[&profile])?;
+                if !self.host.learning() {
+                    return Ok(Some(Value::Array(Vec::new())));
+                }
+                let config = self.document.config();
+                let apps = config.profile(&profile).map(|p| p.apps.as_slice());
+                let list: Vec<Value> = self
+                    .host
+                    .suggestions(config, &profile)
+                    .iter()
+                    .map(|s| {
+                        let entry = apps.and_then(|apps| {
+                            apps.iter().position(|a| a.exe.eq_ignore_ascii_case(&s.exe))
+                        });
+                        json!({
+                            "exe": s.exe,
+                            "path": s.path,
+                            "action": s.action_name(),
+                            "reason": s.reason,
+                            "seen": s.seen,
+                            "of": s.of,
+                            "entry": entry,
+                        })
+                    })
+                    .collect();
+                Ok(Some(Value::Array(list)))
+            }
+            Request::SuggestionDone {
+                profile,
+                exe,
+                never,
+            } => {
+                check_text(&[&profile, &exe])?;
+                if exe.trim().is_empty() || self.document.config().profile(&profile).is_none() {
+                    return Err("unknown profile or program".to_owned());
+                }
+                self.host.suggestion_done(&profile, &exe, never)?;
+                Ok(None)
+            }
+            Request::SetLearn { on } => {
+                self.host.set_learning(on)?;
+                self.status = if on {
+                    "Suggestions from use are on."
+                } else {
+                    "Suggestions from use are off; nothing is recorded."
+                }
+                .to_owned();
+                Ok(None)
+            }
+            Request::ForgetLearned => {
+                self.host.forget_learned()?;
+                self.status = "What was learned from use is deleted.".to_owned();
+                Ok(None)
+            }
             Request::Dismiss { profile, exe } => {
                 check_text(&[&profile, &exe])?;
                 self.host.dismiss(&profile, &exe)?;
@@ -1478,6 +1562,10 @@ mod tests {
         last_profile: Rc<RefCell<Option<String>>>,
         /// H2: how many samples were taken.
         samples: Rc<std::cell::Cell<u64>>,
+        /// H5: `Suggestions from use`.
+        learn: Rc<std::cell::Cell<bool>>,
+        /// H5: `suggestion_done` and `forget_learned` calls.
+        done: Rc<RefCell<Vec<String>>>,
     }
 
     impl Fake {
@@ -1638,6 +1726,33 @@ mod tests {
         }
         fn triggers_paused(&self) -> bool {
             self.saved_paused.get()
+        }
+        fn learning(&self) -> bool {
+            self.learn.get()
+        }
+        fn set_learning(&self, on: bool) -> Result<(), String> {
+            self.learn.set(on);
+            Ok(())
+        }
+        fn suggestions(&self, _: &Config, _: &str) -> Vec<crate::usage::Suggestion> {
+            vec![crate::usage::Suggestion {
+                exe: "chat.exe".into(),
+                path: None,
+                proposal: crate::usage::Proposal::Stop,
+                seen: 3,
+                of: 4,
+                reason: "In 3 of the last 4 activations chat.exe was gone.".into(),
+            }]
+        }
+        fn suggestion_done(&self, profile: &str, exe: &str, never: bool) -> Result<(), String> {
+            self.done
+                .borrow_mut()
+                .push(format!("{profile}/{exe}/{never}"));
+            Ok(())
+        }
+        fn forget_learned(&self) -> Result<(), String> {
+            self.done.borrow_mut().push("forget".into());
+            Ok(())
         }
         fn set_automation(&self, paused: bool) -> Result<Delivery, String> {
             // The tray writes the file itself, the others here: the file
@@ -2025,6 +2140,49 @@ mod tests {
 
     fn send(b: &mut Bridge<Fake>, message: Value) -> Value {
         serde_json::from_str(&b.handle(&message.to_string())).unwrap()
+    }
+
+    #[test]
+    fn suggestions_are_listed_and_settled_and_learning_switches() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, fake) = bridge(&dir);
+        let off = send(
+            &mut b,
+            json!({"v": 1, "id": 9, "type": "suggestions", "profile": "focus"}),
+        );
+        assert_eq!(off["data"].as_array().unwrap().len(), 0, "learning is off");
+        fake.learn.set(true);
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "suggestions", "profile": "focus"}),
+        );
+        assert_eq!(reply["ok"], true);
+        let first = &reply["data"][0];
+        assert_eq!(first["exe"], "chat.exe");
+        assert_eq!(first["action"], "stop");
+        assert_eq!(first["seen"], 3);
+        assert!(first["entry"].is_null(), "chat.exe has no entry yet");
+        send(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "suggestion_done", "profile": "focus", "exe": "chat.exe", "never": true}),
+        );
+        send(&mut b, json!({"v": 1, "id": 3, "type": "forget_learned"}));
+        assert_eq!(
+            fake.done.borrow().as_slice(),
+            ["focus/chat.exe/true", "forget"]
+        );
+        send(
+            &mut b,
+            json!({"v": 1, "id": 4, "type": "set_learn", "on": true}),
+        );
+        let state = send(&mut b, json!({"v": 1, "id": 5, "type": "get_state"}));
+        assert_eq!(state["state"]["learn"], true);
+        send(
+            &mut b,
+            json!({"v": 1, "id": 6, "type": "set_learn", "on": false}),
+        );
+        let state = send(&mut b, json!({"v": 1, "id": 7, "type": "get_state"}));
+        assert_eq!(state["state"]["learn"], false);
     }
 
     #[test]
