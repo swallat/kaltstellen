@@ -1004,6 +1004,44 @@ function snapEverything() {
   for (const row of snap.data.seen) if (row.protection !== 'warn' && snapShown(row)) set(row, 'stop');
 }
 
+/** H8: the kind of a row; a program of a kind nobody could name is `unknown`. */
+const snapKindId = (row) => (row.kind && row.kind.known ? row.kind.id : 'unknown');
+
+/** H8: one line per kind found among the rows the list shows, with one
+ * choice for all of them. Nothing is remembered as a rule: it only sets the
+ * rows once, like the bulk bar. Warn-list programs are not changed for
+ * Freeze or Stop (they need their own confirmation, P6). */
+function snapRenderKinds() {
+  const panel = $('snapshot-kinds');
+  if (panel.hidden) return;
+  const rows = new Map(snapRows().map((r) => [snapKey(r), r]));
+  const kinds = new Map();
+  for (const key of snap.order) {
+    const row = rows.get(key);
+    if (!row) continue;
+    const id = snapKindId(row);
+    if (!kinds.has(id)) kinds.set(id, { id, plural: row.kind && row.kind.plural ? row.kind.plural : 'programs', rows: [] });
+    kinds.get(id).rows.push(row);
+  }
+  const lines = [...kinds.values()].sort((a, b) => (a.id === 'unknown') - (b.id === 'unknown') || a.plural.localeCompare(b.plural));
+  panel.replaceChildren(
+    el('p', { class: 'hint', text: 'One choice for every program of a kind that the list shows. It sets the rows once; nothing is remembered, and you can change each row afterwards.' }),
+    ...lines.map((kind) => el('div', { class: 'kind-line' },
+      el('span', { class: 'kind-name' }, el('strong', { text: `All ${kind.plural} (${kind.rows.length})` }),
+        el('span', { class: 'hint', text: kind.rows.map((r) => r.exe).join(', ') })),
+      el('span', { class: 'seg', role: 'group', 'aria-label': `Choice for all ${kind.plural}` },
+        ...snapshotChoices.map(([value, label]) => el('button', {
+          type: 'button', 'data-a': value, 'aria-label': `${label}, all ${kind.plural}`, text: snapShort[value],
+          onclick: () => {
+            const keys = kind.rows
+              .filter((r) => !(r.protection === 'warn' && (value === 'suspend' || value === 'stop')))
+              .map(snapKey);
+            snapSet(keys, value, null);
+          },
+        }))))));
+  if (lines.length === 0) panel.append(el('p', { class: 'hint', text: 'No programs are shown.' }));
+}
+
 const snapShort = { none: 'Not', ignore: 'As is', suspend: 'Freeze', stop: 'Stop', start: 'Run' };
 const snapKeyNumber = (value) => snapshotChoices.findIndex(([v]) => v === value) + 1;
 
@@ -1048,6 +1086,7 @@ function snapBulkBar() {
 function snapTable(title, rows, note) {
   if ($('snapshot-heavy').checked) rows = rows.filter((r) => snap.load.get(r.exe.toLowerCase())?.heavy);
   if ($('snapshot-tray').checked) rows = rows.filter((r) => r.tray);
+  if ($('snapshot-sortkind').checked) rows = [...rows].sort((a, b) => (snapKindId(a) === 'unknown') - (snapKindId(b) === 'unknown') || snapKindId(a).localeCompare(snapKindId(b)));
   if ($('snapshot-sort').checked) rows = [...rows].sort((a, b) => loadScore(snap.load.get(b.exe.toLowerCase())) - loadScore(snap.load.get(a.exe.toLowerCase())));
   const wrap = el('section', { class: 'snap-group' }, el('h3', { text: `${title} (${rows.length})` }));
   if (note) wrap.append(el('p', { class: 'hint', text: note }));
@@ -1148,6 +1187,7 @@ function renderSnapshot(focusKey, action) {
     snapTable('Not running, seen earlier', snap.data.seen, ''));
   loadIcons($('snapshot-groups'));
   snapBulkBar();
+  snapRenderKinds();
   box.scrollTop = top;
   if (focusKey) {
     const node = [...$('snapshot-groups').querySelectorAll('tr[data-key]')].find((r) => r.dataset.key === focusKey);
@@ -1184,6 +1224,9 @@ async function openSnapshot(mode, template) {
   $('snapshot-heavy').checked = false;
   $('snapshot-tray').checked = false;
   $('snapshot-sort').checked = false;
+  $('snapshot-sortkind').checked = false;
+  $('snapshot-kinds').hidden = true;
+  $('snapshot-kinds-toggle').setAttribute('aria-expanded', 'false');
   if (!(await loadSnapshot())) return;
   if (template) {
     const count = snapApplyTemplate(template);
@@ -1234,6 +1277,13 @@ $('snapshot-measure').addEventListener('click', measureSnapshot);
 $('snapshot-heavy').addEventListener('change', renderSnapshot);
 $('snapshot-tray').addEventListener('change', renderSnapshot);
 $('snapshot-sort').addEventListener('change', renderSnapshot);
+$('snapshot-sortkind').addEventListener('change', () => renderSnapshot());
+$('snapshot-kinds-toggle').addEventListener('click', () => {
+  const panel = $('snapshot-kinds');
+  panel.hidden = !panel.hidden;
+  $('snapshot-kinds-toggle').setAttribute('aria-expanded', String(!panel.hidden));
+  renderSnapshot();
+});
 $('snapshot-background').addEventListener('change', renderSnapshot);
 $('snapshot-suggestions').addEventListener('click', () => {
   // Only rows that have a suggestion and no choice yet; a suggestion is

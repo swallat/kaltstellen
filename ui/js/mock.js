@@ -263,13 +263,19 @@ function handle(message) {
       return { ok: true, data };
     }
     case 'snapshot': {
+      const mockKind = (exe) => ({
+        'browser.exe': { id: 'browser', plural: 'browsers', label: 'a browser', known: true, source: 'name' },
+        'mail.exe': { id: 'mail', plural: 'mail programs', label: 'a mail program', known: true, source: 'name' },
+        'sync.exe': { id: 'cloud_sync', plural: 'cloud sync programs', label: 'a cloud sync program', known: true, source: 'name' },
+        'chat.exe': { id: 'chat', plural: 'chat programs', label: 'a chat program', known: true, source: 'name' },
+      }[exe] || { id: 'unknown', plural: 'programs of unknown kind', label: 'a program', known: false, source: 'none' });
       const profile2 = m.mode === 'update' ? find(m.profile) : null;
       if (m.mode === 'update' && !profile2) return fail(`no profile named "${m.profile}"`);
       const has = (exe) => profile2 && profile2.entries.some((e) => e.exe.toLowerCase() === exe.toLowerCase());
       const row = (exe, extra = {}) => ({
         exe, path: `C:\\Apps\\${exe}`, private_bytes: 0, protection: protectionOf(exe),
         elevated: false, background: false, held: null, first_seen: null,
-        kind: { id: exe === 'browser.exe' ? 'browser' : 'unknown', label: 'a browser', known: exe === 'browser.exe', source: 'name' },
+        kind: mockKind(exe),
         suggestion: exe === 'browser.exe' || exe === 'mail.exe' ? { action: 'suspend', reason: 'state and sign-in stay, nothing is lost; notifications wait' } : null,
         windows: { count: exe === 'browser.exe' ? 3 : 1, dialog: exe === 'mail.exe', unsaved: exe === 'browser.exe', hung: false },
         ...extra,
