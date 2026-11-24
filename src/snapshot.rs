@@ -112,6 +112,8 @@ pub fn held_of(state: &State) -> Vec<Held> {
 /// updated (none when a profile is made): programs with an entry are left
 /// out and counted.
 pub fn assemble(running: &[Running], held: &[Held], seen: &Seen, entries: &[App]) -> Groups {
+    let merged = merge_unreadable(running);
+    let running = merged.as_slice();
     let decided: HashSet<String> = entries.iter().map(|a| a.exe.to_lowercase()).collect();
     let mut groups = Groups::default();
     let mut counted: HashSet<String> = HashSet::new();
@@ -210,6 +212,38 @@ pub fn assemble(running: &[Running], held: &[Held], seen: &Seen, entries: &[App]
         });
     }
     groups
+}
+
+/// A process whose image path cannot be read (an elevated service) and a
+/// process of the same name with a path are one program for an entry: C2
+/// refuses two entries of a name when one has no path, so the unreadable
+/// one is folded into the one with a path (memory and windows added). Rows
+/// of one name that all have paths stay apart (several unreadable ones are
+/// one row already).
+fn merge_unreadable(running: &[Running]) -> Vec<Running> {
+    let mut out: Vec<Running> = running
+        .iter()
+        .filter(|r| r.path.is_some())
+        .cloned()
+        .collect();
+    for row in running.iter().filter(|r| r.path.is_none()) {
+        let target = out
+            .iter_mut()
+            .filter(|o| o.exe.eq_ignore_ascii_case(&row.exe))
+            .max_by_key(|o| o.private_bytes);
+        match target {
+            Some(target) => {
+                target.private_bytes += row.private_bytes;
+                target.background &= row.background;
+                target.windows.windows += row.windows.windows;
+                target.windows.dialog |= row.windows.dialog;
+                target.windows.unsaved |= row.windows.unsaved;
+                target.windows.hung |= row.windows.hung;
+            }
+            None => out.push(row.clone()),
+        }
+    }
+    out
 }
 
 /// Reads the programs of this session that run now: one per name and image
@@ -318,6 +352,30 @@ mod tests {
                 .collect(),
             ..Seen::default()
         }
+    }
+
+    #[test]
+    fn h1_an_unreadable_process_joins_the_one_of_its_name_that_has_a_path() {
+        let mut service = running("parsecd.exe", 7, true);
+        service.path = None;
+        service.elevated = true;
+        let groups = assemble(
+            &[service.clone(), running("parsecd.exe", 30, false), service],
+            &[],
+            &Seen::default(),
+            &[],
+        );
+        // One row, so the profile gets one entry (C2), memory added.
+        assert_eq!(groups.running.len(), 1);
+        assert!(groups.running[0].path.is_some());
+        assert_eq!(groups.running[0].private_bytes, 44);
+        assert!(!groups.running[0].background);
+        // Without a program that has a path the unreadable one stays.
+        let mut alone = running("nvcontainer.exe", 5, true);
+        alone.path = None;
+        let groups = assemble(&[alone], &[], &Seen::default(), &[]);
+        assert_eq!(groups.running.len(), 1);
+        assert!(groups.running[0].path.is_none());
     }
 
     #[test]
