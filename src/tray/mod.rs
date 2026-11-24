@@ -12,6 +12,7 @@ pub mod model;
 pub mod protocol;
 pub mod server;
 pub mod source;
+pub mod starts;
 pub mod triggers;
 pub mod update;
 pub mod worker;
@@ -269,6 +270,8 @@ fn run(window: bool) -> u8 {
             session_ending: false,
             automation: triggers::Automation::new(trigger_debounce(), triggers_paused),
             polling: false,
+            starts: starts::StartWatch::default(),
+            starts_setting_read: None,
             images: HashMap::new(),
             notice: None,
             balloons: model::Balloons::default(),
@@ -360,6 +363,11 @@ struct App {
     automation: triggers::Automation,
     /// U4: the poll timer runs.
     polling: bool,
+    /// H9: programs that start while a profile is active, from the
+    /// helper's process events.
+    starts: starts::StartWatch,
+    /// H9: when `settings.json` was read for `notify_new` last.
+    starts_setting_read: Option<Instant>,
     /// U4: image paths of processes named like a trigger with a path, by
     /// PID and creation time, so each is opened once (A7). A read that
     /// failed is tried again at the next polls, at most
@@ -566,6 +574,7 @@ impl App {
 
     /// N1: after a profile was applied, the snapshot of unassigned programs.
     fn refresh_unassigned(&mut self) {
+        self.activate_starts();
         self.status.unassigned = match paths::data_dir() {
             Some(dir) if !self.status.is_neutral() => {
                 let config = lock(&self.source).config().clone();
@@ -927,22 +936,148 @@ impl App {
     /// poll ends them first and then stops itself. Updates the menu's view.
     fn arm_poll(&mut self) {
         let configured = self.triggers_configured();
-        let blocked =
-            self.automation.paused() || self.controller.is_quitting() || self.session_ending;
-        if blocked && self.polling {
+        let off = self.controller.is_quitting() || self.session_ending;
+        // H9: the poll also asks the helper for started programs.
+        self.refresh_notify_setting(false);
+        let wanted = !off && ((configured && !self.automation.paused()) || self.starts.enabled());
+        if !wanted && self.polling {
             window::set_poll(None);
             self.polling = false;
-            info!("tray: trigger poll stopped");
-        } else if !blocked && configured && !self.polling {
+            info!("tray: poll stopped");
+        } else if wanted && !self.polling {
             let interval = trigger_poll();
             // A timer that could not be set is tried again at the next
             // call (menu, end of a switch).
             if window::set_poll(Some(interval)) {
                 self.polling = true;
-                info!("tray: trigger poll every {} ms", interval.as_millis());
+                info!("tray: poll every {} ms", interval.as_millis());
             }
         }
         self.status.automation = configured.then(|| self.automation.view(&self.will_be_active()));
+    }
+
+    /// H9: `notify_new` of `settings.json`, read again at most every 20 s
+    /// unless `force`. A change made in the main window reaches the poll
+    /// the next time it asks.
+    fn refresh_notify_setting(&mut self, force: bool) {
+        let due = self
+            .starts_setting_read
+            .is_none_or(|t| force || t.elapsed() >= Duration::from_secs(20));
+        if !due {
+            return;
+        }
+        self.starts_setting_read = Some(Instant::now());
+        let on = self
+            .config_dir
+            .as_deref()
+            .is_some_and(|dir| settings::load(dir).0.notifying_new());
+        if on != self.starts.enabled() {
+            info!(
+                "tray: announcing new programs is {}",
+                if on { "on" } else { "off" }
+            );
+            self.starts.set_enabled(on);
+        }
+    }
+
+    /// H9: a profile was applied: only programs that start from now on
+    /// count, and what was noted for the profile before is forgotten.
+    fn activate_starts(&mut self) {
+        self.starts
+            .activated(&self.status.active, crate::unassigned::now());
+        if !self.status.is_neutral()
+            && let Some(dir) = paths::data_dir()
+            && let Err(err) = crate::unassigned::clear_started(&dir, &self.status.active)
+        {
+            warn!("tray: {err}");
+        }
+    }
+
+    /// H9: asks the helper which programs started, notes those the active
+    /// profile has no entry for and announces them. Without the helper (or
+    /// its `observe` role) the answer is empty and the next question waits.
+    fn poll_starts(&mut self) {
+        if self.controller.is_quitting() || self.session_ending {
+            return;
+        }
+        self.refresh_notify_setting(false);
+        if !self.starts.enabled() {
+            return;
+        }
+        let active = self.status.active.clone();
+        let watched = self.starts.profile().to_owned();
+        let now = crate::unassigned::now();
+        if watched != active.trim().to_lowercase()
+            && !(watched.is_empty() && self.status.is_neutral())
+        {
+            // Applied by a path that did not announce it (recovery).
+            self.activate_starts();
+        }
+        if let Some(after) = self.starts.due(now) {
+            let answer =
+                crate::helper::client::ask_after(crate::helper::protocol::Command::Events, after)
+                    .map_err(|err| err.to_string())
+                    .map(|reply| {
+                        reply.and_then(|reply| {
+                            Some(starts::Fetched {
+                                events: reply.events?,
+                                next: reply.next?,
+                            })
+                        })
+                    });
+            if let Err(err) = &answer {
+                // Once per backoff step is enough.
+                info!("tray: process events: {err}");
+            }
+            self.starts.feed(now, answer);
+        }
+        if self.status.is_neutral() || !self.starts.has_pending() {
+            self.announce_starts(now, &active);
+            return;
+        }
+        let Some(dir) = paths::data_dir() else {
+            return;
+        };
+        let decided: std::collections::HashSet<String> = lock(&self.source)
+            .config()
+            .profile(&active)
+            .map(|p| p.apps.iter().map(|a| a.exe.to_lowercase()).collect())
+            .unwrap_or_default();
+        let dismissed = crate::unassigned::load(&dir)
+            .0
+            .dismissed
+            .get(&active.trim().to_lowercase())
+            .cloned();
+        let ctx = starts::Context {
+            decided: &decided,
+            dismissed: dismissed.as_ref(),
+        };
+        let found = self.starts.confirmed(now, &ctx);
+        if !found.is_empty() {
+            match crate::unassigned::note_started(&dir, &active, &found, now) {
+                Ok(fresh) => {
+                    for (exe, _) in &found {
+                        if !fresh.iter().any(|f| f.eq_ignore_ascii_case(exe)) {
+                            self.starts.forget(exe);
+                        }
+                    }
+                    info!("tray: started without an entry in \"{active}\": {fresh:?}");
+                }
+                Err(err) => warn!("tray: {err}"),
+            }
+        }
+        self.announce_starts(now, &active);
+    }
+
+    /// H9: the notification for programs noted meanwhile, if one is due.
+    fn announce_starts(&mut self, now: u64, active: &str) {
+        if let Some((title, text)) = self.starts.announcement(now, active) {
+            info!("tray: notification: {title}: {text}");
+            let logged_only = std::env::var(NOTIFY_ENV).is_ok_and(|v| v.trim() == "log");
+            if !logged_only && !window::balloon(&title, &text) {
+                warn!("tray: the notification could not be shown");
+            }
+        }
     }
 
     /// U4: one poll of the handle-free snapshot. Processes are opened only
@@ -1027,7 +1162,7 @@ impl App {
             info!("tray: trigger asks for \"{target}\" ({reason})");
             self.submit(Job::automatic(&target, &previous, &reason), None);
         }
-        if seen.is_empty() && self.polling {
+        if seen.is_empty() && self.polling && !self.starts.enabled() {
             // No profile has triggers any more: what ran has ended above.
             window::set_poll(None);
             self.polling = false;
@@ -1555,6 +1690,7 @@ impl window::Handler for App {
 
     fn poll(&mut self) {
         self.poll_triggers();
+        self.poll_starts();
     }
 
     fn balloon_clicked(&mut self) {
