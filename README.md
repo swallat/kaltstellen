@@ -1,7 +1,7 @@
 <h1 align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="branding/wortmarke/logo-wortmarke-dunkel.svg">
-    <img src="branding/wortmarke/logo-wortmarke-hell.svg" alt="kaltstellen" height="72">
+    <source media="(prefers-color-scheme: dark)" srcset="branding/logo/lockup-horizontal-dunkel.svg">
+    <img src="branding/logo/lockup-horizontal-hell.svg" alt="kaltstellen" height="72">
   </picture>
 </h1>
 
@@ -205,9 +205,9 @@ runs, the command line goes through it. One tile, three states:
 
 | | State | Meaning |
 | :-: | --- | --- |
-| <img src="branding/tray/png/kaltstellen-neutral-32.png" width="32" height="32" alt="Cold ice cube with two pause bars"> | Neutral | No profile active, nothing on ice |
-| <img src="branding/tray/png/kaltstellen-aktiv-32.png" width="32" height="32" alt="Ice cube with a warm right side"> | Profile active | Apps outside the profile are frozen or closed |
-| <img src="branding/tray/png/kaltstellen-fehler-32.png" width="32" height="32" alt="Red cube with an exclamation mark"> | Error | Something could not be frozen, resumed or started |
+| <img src="branding/tray/png/kaltstellen-neutral-32.png" width="32" height="32" alt="Grey window with mint icicles"> | Neutral | No profile active, nothing on ice |
+| <img src="branding/tray/png/kaltstellen-aktiv-32.png" width="32" height="32" alt="Violet window with mint icicles"> | Profile active | Apps outside the profile are frozen or closed |
+| <img src="branding/tray/png/kaltstellen-fehler-32.png" width="32" height="32" alt="Orange window with a warning triangle"> | Error | Something could not be frozen, resumed or started |
 
 ### Automatic triggers
 
@@ -224,8 +224,7 @@ run, the higher priority wins. `Automatic switching` in the main window (or
 running tray, and is remembered across restarts. A trigger must not be frozen or
 closed by its own profile; `check-config` refuses that.
 
-Logo, wordmark, colours and icons live in [branding/](branding/), together
-with the scripts that generate them. The notes there are in German.
+Logo, wordmark, colours and icons live in [branding/](branding/).
 
 ## Updates
 

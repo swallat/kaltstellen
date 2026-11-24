@@ -12,7 +12,7 @@ there is no build step, no framework and no network access.
 | `css/settings.css` | The Settings view (M6): section list, rows, switches. |
 | `js/app.js` | The view: renders the state, sends intents. |
 | `js/bridge.js` | Messages to the Rust side (`docs/gui-bridge.md`). |
-| `img/logo.svg` | The ice cube logo of the header (`branding/logos/09-eiswuerfel-warm-avatar.svg`, colours for the dark top bar). |
+| `img/logo.svg` | The window-and-icicles logo of the header (`branding/logo/symbol-dunkel.svg`, colours for the dark top bar). |
 | `js/mock.js` | Mock backend with sample data for a normal browser. Not embedded. |
 
 ## Design without building Rust
