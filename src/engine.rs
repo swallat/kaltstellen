@@ -397,11 +397,20 @@ impl Run<'_> {
         text: impl Into<String>,
         processes: &[ProcessInfo],
     ) {
+        let text = text.into();
+        // The second pass of W6 runs into the same refusal again.
+        if outcome == Outcome::Problem
+            && self.plan.iter().any(|i| {
+                i.step == step && i.program == program && i.outcome == outcome && i.text == text
+            })
+        {
+            return;
+        }
         self.plan.push(PlanItem {
             step,
             program: program.to_owned(),
             outcome,
-            text: text.into(),
+            text,
             processes: processes.len(),
             private_bytes: processes.iter().map(|p| p.private_bytes).sum(),
         });
@@ -409,17 +418,27 @@ impl Run<'_> {
 
     /// H4: opens `processes` with `access` as the real step would and
     /// closes them again; a refusal (P7) is collected like in the real step.
-    /// Returns the processes that can be acted on.
-    fn probe(&mut self, processes: &[ProcessInfo], access: Access, step: Step) -> Vec<ProcessInfo> {
+    /// Returns the processes that can be acted on and how many were refused;
+    /// one that has ended meanwhile is neither (the real step skips it).
+    fn probe(
+        &mut self,
+        processes: &[ProcessInfo],
+        access: Access,
+        step: Step,
+    ) -> (Vec<ProcessInfo>, usize) {
         let mut usable = Vec::new();
+        let mut refused = 0;
         for info in processes {
             match Target::open(info, access) {
                 Ok(Some(_)) => usable.push(info.clone()),
                 Ok(None) => {}
-                Err(err) => self.report.failed(err.step(step)),
+                Err(err) => {
+                    refused += 1;
+                    self.report.failed(err.step(step));
+                }
             }
         }
-        usable
+        (usable, refused)
     }
 
     /// S10: after a reboot no recorded process exists any more, and a PID
@@ -497,15 +516,15 @@ impl Run<'_> {
                 let Some(info) = snapshot.find(record.pid, record.created).cloned() else {
                     continue;
                 };
-                let usable = self.probe(std::slice::from_ref(&info), Access::Suspend, Step::Resume);
+                let (usable, refused) =
+                    self.probe(std::slice::from_ref(&info), Access::Suspend, Step::Resume);
                 if usable.is_empty() {
-                    self.planned(
-                        Step::Resume,
-                        &record.exe,
-                        Outcome::Problem,
-                        "cannot be resumed",
-                        &[],
-                    );
+                    let (outcome, text) = if refused > 0 {
+                        (Outcome::Problem, "cannot be resumed")
+                    } else {
+                        (Outcome::NoChange, "not running any more")
+                    };
+                    self.planned(Step::Resume, &record.exe, outcome, text, &[]);
                 } else {
                     self.planned(
                         Step::Resume,
@@ -572,15 +591,14 @@ impl Run<'_> {
                 continue;
             }
             if self.dry {
-                let usable = self.probe(&processes, Access::Stop, Step::Stop);
+                let (usable, refused) = self.probe(&processes, Access::Stop, Step::Stop);
                 if usable.is_empty() {
-                    self.planned(
-                        Step::Stop,
-                        &app.exe,
-                        Outcome::Problem,
-                        "cannot be stopped",
-                        &processes,
-                    );
+                    let (outcome, text) = if refused > 0 {
+                        (Outcome::Problem, "cannot be stopped")
+                    } else {
+                        (Outcome::NoChange, "not running")
+                    };
+                    self.planned(Step::Stop, &app.exe, outcome, text, &[]);
                 } else {
                     let after = match on_timeout {
                         crate::config::OnTimeout::Kill => "ended if it does not close",
@@ -678,15 +696,14 @@ impl Run<'_> {
     /// H4: what [`Run::freeze`] would do. The processes are recorded in the
     /// copy of the state, so the second pass sees them as frozen (W5).
     fn freeze_dry(&mut self, app: &App, processes: &[ProcessInfo]) {
-        let usable = self.probe(processes, Access::Suspend, Step::Suspend);
+        let (usable, refused) = self.probe(processes, Access::Suspend, Step::Suspend);
         if usable.is_empty() {
-            self.planned(
-                Step::Suspend,
-                &app.exe,
-                Outcome::Problem,
-                "cannot be frozen",
-                processes,
-            );
+            let (outcome, text) = if refused > 0 {
+                (Outcome::Problem, "cannot be frozen")
+            } else {
+                (Outcome::NoChange, "not running")
+            };
+            self.planned(Step::Suspend, &app.exe, outcome, text, &[]);
             return;
         }
         for info in &usable {
