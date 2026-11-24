@@ -96,9 +96,12 @@ fn script(ps: &Path, args: &[&str]) -> String {
 
 /// The real Run value with its kind ("String|..." or "ExpandString|..."),
 /// empty when there is none; read through PowerShell, which names the kind.
+/// A missing Run key is the same as a key without the value: on a fresh
+/// machine something else (WebView2 of a GUI test running alongside, say)
+/// may create the key while this test runs.
 fn run_value(ps: &Path) -> String {
     let read = format!(
-        "$k = Get-Item 'HKCU:\\{RUN_KEY}'; if ($null -ne $k.GetValue('{VALUE}')) {{ \"$($k.GetValueKind('{VALUE}'))|$($k.GetValue('{VALUE}', '', 'DoNotExpandEnvironmentNames'))\" }}"
+        "$k = Get-Item -LiteralPath 'HKCU:\\{RUN_KEY}' -ErrorAction SilentlyContinue; if ($k -and $null -ne $k.GetValue('{VALUE}')) {{ \"$($k.GetValueKind('{VALUE}'))|$($k.GetValue('{VALUE}', '', 'DoNotExpandEnvironmentNames'))\" }}"
     );
     let mut c = command(ps);
     c.args(["-NoProfile", "-NonInteractive", "-Command", &read]);
