@@ -537,16 +537,27 @@ function renderSettings() {
   $('about-version').textContent = `kaltstellen ${state.update.version}`;
 }
 
+/** Space above a section after choosing it (CSS pixels, as `--space-4`). */
+const SECTION_GAP = 16;
+
+// The window itself never scrolls; only the sidebar and the content area do.
+// Script can still scroll a hidden viewport (focus(), scrollIntoView), and
+// nothing would scroll it back, so put it back at once.
+addEventListener('scroll', () => {
+  const root = document.scrollingElement;
+  if (root && (root.scrollTop || root.scrollLeft)) root.scrollTo(0, 0);
+});
+
 function showSettings(section = null) {
   view = 'settings';
   render();
   // Scroll the content area only. scrollIntoView would also scroll the
-  // window itself (the body is clipped, but still scrollable by script),
+  // window itself (the body is hidden, but still scrollable by script),
   // which pushed the header out of sight with nothing to scroll back.
   const detail = $('detail');
   if (section) {
     const gap = $(section).getBoundingClientRect().top - detail.getBoundingClientRect().top;
-    detail.scrollTo({ top: detail.scrollTop + gap - 16 });
+    detail.scrollTo({ top: detail.scrollTop + gap - SECTION_GAP });
   } else detail.scrollTo({ top: 0 });
   for (const button of document.querySelectorAll('.settings-nav button')) {
     button.setAttribute('aria-current', String(button.dataset.section === (section || 'general')));
