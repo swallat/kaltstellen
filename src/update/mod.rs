@@ -46,18 +46,66 @@ pub const BINARY_LIMIT: usize = 64 << 20;
 /// Per step of a request (name resolution, connect, send, each receive).
 pub const TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Why a [`Fetch`] failed: the HTTP status of an answer other than `200`,
+/// or none when there was no answer (network, refused URL, too large).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchError {
+    pub status: Option<u32>,
+    pub message: String,
+}
+
+impl FetchError {
+    /// No answer at all, or one that could not be read.
+    pub fn failed(message: impl Into<String>) -> FetchError {
+        FetchError {
+            status: None,
+            message: message.into(),
+        }
+    }
+
+    /// An answer with `status` (not `200`) for `url`.
+    pub fn status(url: &str, status: u32) -> FetchError {
+        FetchError {
+            status: Some(status),
+            message: format!("{url}: HTTP {status}"),
+        }
+    }
+}
+
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl From<FetchError> for String {
+    fn from(err: FetchError) -> String {
+        err.message
+    }
+}
+
 /// Fetches a URL. The real one is [`WinHttp`]; tests serve local data.
 pub trait Fetch {
     /// The body of a `200` answer, at most `limit` bytes.
-    fn get(&self, url: &str, accept: &str, limit: usize) -> std::result::Result<Vec<u8>, String>;
+    fn get(
+        &self,
+        url: &str,
+        accept: &str,
+        limit: usize,
+    ) -> std::result::Result<Vec<u8>, FetchError>;
 }
 
 /// HTTPS through WinHTTP; refuses URLs that [`url::Url`] refuses.
 pub struct WinHttp;
 
 impl Fetch for WinHttp {
-    fn get(&self, url: &str, accept: &str, limit: usize) -> std::result::Result<Vec<u8>, String> {
-        let parsed = url::Url::parse(url)?;
+    fn get(
+        &self,
+        url: &str,
+        accept: &str,
+        limit: usize,
+    ) -> std::result::Result<Vec<u8>, FetchError> {
+        let parsed = url::Url::parse(url).map_err(FetchError::failed)?;
         let target = crate::win32::http::Target {
             secure: parsed.secure,
             host: &parsed.host,
@@ -66,11 +114,11 @@ impl Fetch for WinHttp {
         };
         let agent = format!("kaltstellen/{CURRENT}");
         let response = crate::win32::http::get(&target, &agent, accept, limit, TIMEOUT)
-            .map_err(|e| format!("{url}: {e}"))?;
+            .map_err(|e| FetchError::failed(format!("{url}: {e}")))?;
         if response.status == 200 {
             Ok(response.body)
         } else {
-            Err(format!("{url}: HTTP {}", response.status))
+            Err(FetchError::status(url, response.status))
         }
     }
 }
@@ -101,8 +149,11 @@ impl Source {
 }
 
 /// The newest release for a program of version `current`: `latest`, or
-/// for a running pre-release the highest of the recent releases.
-pub fn latest(fetch: &dyn Fetch, source: &Source, current: &str) -> Result<Release> {
+/// for a running pre-release the highest of the recent releases. `None`
+/// when none is published yet (GitHub answers `latest` with 404 while there
+/// is no stable release; the list may be empty): nothing newer, not an
+/// error.
+pub fn latest(fetch: &dyn Fetch, source: &Source, current: &str) -> Result<Option<Release>> {
     // A development build (`1.2.1-dev.5+hash`, see build.rs) is a pre-release
     // by its version, but it follows the stable channel like the release it
     // grew from.
@@ -117,28 +168,57 @@ pub fn latest(fetch: &dyn Fetch, source: &Source, current: &str) -> Result<Relea
     } else {
         format!("{}/releases/latest", source.base)
     };
-    let json = fetch
-        .get(&url, "application/vnd.github+json", METADATA_LIMIT)
-        .map_err(|e| Error::new(Code::UpdateCheck, e))?;
+    let json = match fetch.get(&url, "application/vnd.github+json", METADATA_LIMIT) {
+        Ok(json) => json,
+        // A 404 for `latest` means "no stable release yet", but a repository
+        // that is gone (or a wrong mirror) answers the same. The list tells
+        // them apart: it exists, maybe empty, only for a repository that
+        // exists. A 404 for the list stays an error.
+        Err(err) if !pre && err.status == Some(404) => {
+            let list = format!("{}/releases?per_page=1", source.base);
+            return match fetch.get(&list, "application/vnd.github+json", METADATA_LIMIT) {
+                // Only a real list: a mirror that answers anything with 200
+                // is not "none yet".
+                Ok(body) if serde_json::from_slice::<Vec<serde_json::Value>>(&body).is_ok() => {
+                    Ok(None)
+                }
+                Ok(_) => Err(Error::new(
+                    Code::UpdateRelease,
+                    format!("{err}, and {list} is not a release list"),
+                )),
+                // Gone: the 404 says it. Anything else (rate limit, network)
+                // is the reason the check failed.
+                Err(probe) if probe.status == Some(404) => Err(Error::new(Code::UpdateCheck, err)),
+                Err(probe) => Err(Error::new(Code::UpdateCheck, probe)),
+            };
+        }
+        Err(err) => return Err(Error::new(Code::UpdateCheck, err)),
+    };
     if pre {
         release::parse_list(&json)
     } else {
-        release::parse_latest(&json)
+        release::parse_latest(&json).map(Some)
     }
     .map_err(|e| Error::new(Code::UpdateRelease, e))
 }
 
 /// Checks and writes the result to `update.json` in `data_dir` (also a
-/// failure, so the tray tries again only a day later).
-pub fn check(fetch: &dyn Fetch, source: &Source, data_dir: Option<&Path>) -> Result<Release> {
+/// failure, so the tray tries again only a day later). `None`: no release
+/// is published yet.
+pub fn check(
+    fetch: &dyn Fetch,
+    source: &Source,
+    data_dir: Option<&Path>,
+) -> Result<Option<Release>> {
     let result = latest(fetch, source, CURRENT);
     if let Some(dir) = data_dir {
         let (mut rec, _) = record::load(dir);
         rec.last_check = Some(record::now());
         match &result {
             Ok(release) => {
-                rec.latest = Some(release.version.clone());
-                rec.page = Some(release.page.clone());
+                // None published (any more): nothing to offer.
+                rec.latest = release.as_ref().map(|r| r.version.clone());
+                rec.page = release.as_ref().map(|r| r.page.clone());
                 rec.error = None;
             }
             Err(err) => rec.error = Some(err.to_string()),
@@ -310,17 +390,37 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    /// Serves fixed answers by URL.
+    /// Serves fixed answers by URL; an `Err` is a failure without an answer
+    /// (network), a URL not listed is answered with 404.
     pub(crate) struct Fake(pub HashMap<String, std::result::Result<Vec<u8>, String>>);
 
     impl Fetch for Fake {
-        fn get(&self, url: &str, _: &str, limit: usize) -> std::result::Result<Vec<u8>, String> {
+        fn get(
+            &self,
+            url: &str,
+            _: &str,
+            limit: usize,
+        ) -> std::result::Result<Vec<u8>, FetchError> {
             match self.0.get(url) {
-                Some(Ok(body)) if body.len() > limit => Err("too large".into()),
-                Some(answer) => answer.clone(),
-                None => Err(format!("{url}: HTTP 404")),
+                Some(Ok(body)) if body.len() > limit => Err(FetchError::failed("too large")),
+                Some(Ok(body)) => Ok(body.clone()),
+                Some(Err(why)) => Err(FetchError::failed(why.clone())),
+                None => Err(FetchError::status(url, 404)),
             }
         }
+    }
+
+    const LATEST: &str = "http://127.0.0.1:1/repos/o/r/releases/latest";
+    const LIST: &str = "http://127.0.0.1:1/repos/o/r/releases?per_page=30";
+    /// Asked after a 404 for [`LATEST`]: does the repository exist?
+    const PROBE: &str = "http://127.0.0.1:1/repos/o/r/releases?per_page=1";
+
+    /// Both addresses fail without an answer, as with no network.
+    fn offline() -> Fake {
+        Fake(HashMap::from([
+            (LATEST.to_owned(), Err("unreachable".to_owned())),
+            (LIST.to_owned(), Err("unreachable".to_owned())),
+        ]))
     }
 
     fn source() -> Source {
@@ -374,18 +474,25 @@ mod tests {
         let get = |path: &str, limit| WinHttp.get(&format!("{base}{path}"), "*/*", limit);
         assert_eq!(get("/a", 100).unwrap(), b"hello");
         assert_eq!(get("/big", 1 << 20).unwrap().len(), 300_000);
-        assert!(get("/big", 1000).unwrap_err().contains("larger than"));
+        assert!(
+            get("/big", 1000)
+                .unwrap_err()
+                .message
+                .contains("larger than")
+        );
         // GitHub answers downloads with a redirect.
         assert_eq!(get("/moved", 100).unwrap(), b"hello");
-        assert!(get("/gone", 100).unwrap_err().ends_with("HTTP 410"));
-        assert!(get("/nothing", 100).unwrap_err().ends_with("HTTP 404"));
+        let gone = get("/gone", 100).unwrap_err();
+        assert!(gone.message.ends_with("HTTP 410"));
+        assert_eq!(gone.status, Some(410));
+        let nothing = get("/nothing", 100).unwrap_err();
+        assert!(nothing.message.ends_with("HTTP 404"));
+        assert_eq!(nothing.status, Some(404));
+        assert_eq!(get("/big", 1000).unwrap_err().status, None);
         // Refused before any connection: plain http to another host.
-        assert!(
-            WinHttp
-                .get("http://example.org/", "*/*", 10)
-                .unwrap_err()
-                .contains("loopback")
-        );
+        let refused = WinHttp.get("http://example.org/", "*/*", 10).unwrap_err();
+        assert!(refused.message.contains("loopback"));
+        assert_eq!(refused.status, None);
     }
 
     #[test]
@@ -414,16 +521,15 @@ mod tests {
                 Ok(br#"[{"tag_name":"v1.0.0"},{"tag_name":"v1.1.0-beta.1"}]"#.to_vec()),
             ),
         ]));
-        assert_eq!(latest(&fake, &source(), "0.9.0").unwrap().version, "1.0.0");
-        assert_eq!(
-            latest(&fake, &source(), "1.1.0-beta.0").unwrap().version,
-            "1.1.0-beta.1"
-        );
-        let offline = Fake(HashMap::new());
-        assert_eq!(
-            latest(&offline, &source(), "0.9.0").unwrap_err().code,
-            Code::UpdateCheck
-        );
+        let version = |current| latest(&fake, &source(), current).unwrap().unwrap().version;
+        assert_eq!(version("0.9.0"), "1.0.0");
+        assert_eq!(version("1.1.0-beta.0"), "1.1.0-beta.1");
+        for current in ["0.9.0", "1.1.0-beta.0"] {
+            assert_eq!(
+                latest(&offline(), &source(), current).unwrap_err().code,
+                Code::UpdateCheck
+            );
+        }
         let junk = Fake(HashMap::from([(
             "http://127.0.0.1:1/repos/o/r/releases/latest".to_owned(),
             Ok(b"<html>".to_vec()),
@@ -432,6 +538,90 @@ mod tests {
             latest(&junk, &source(), "0.9.0").unwrap_err().code,
             Code::UpdateRelease
         );
+    }
+
+    /// No release published yet: GitHub answers `latest` with 404 (also
+    /// while there are only pre-releases) and the list with `[]`. That is
+    /// "nothing newer", not a failed check.
+    #[test]
+    fn up1_no_release_yet_is_nothing_newer() {
+        let none = Fake(HashMap::from([
+            (LIST.to_owned(), Ok(b"[]".to_vec())),
+            (PROBE.to_owned(), Ok(b"[]".to_vec())),
+        ]));
+        assert_eq!(latest(&none, &source(), "1.0.0").unwrap(), None);
+        assert_eq!(latest(&none, &source(), "1.0.0-beta.1").unwrap(), None);
+        // Only pre-releases: `latest` is 404, the list is not empty.
+        let only_beta = Fake(HashMap::from([(
+            PROBE.to_owned(),
+            Ok(br#"[{"tag_name":"v1.0.0-beta.1"}]"#.to_vec()),
+        )]));
+        assert_eq!(latest(&only_beta, &source(), "1.0.0").unwrap(), None);
+        // A repository that is gone (or a wrong mirror): 404 for both.
+        let gone = Fake(HashMap::new());
+        let err = latest(&gone, &source(), "1.0.0").unwrap_err();
+        assert_eq!(err.code, Code::UpdateCheck);
+        assert!(err.reason.contains("releases/latest: HTTP 404"), "{err}");
+        // The probe fails otherwise: its reason is the one reported.
+        let probe_down = Fake(HashMap::from([(
+            PROBE.to_owned(),
+            Err("unreachable".to_owned()),
+        )]));
+        let err = latest(&probe_down, &source(), "1.0.0").unwrap_err();
+        assert_eq!(err.code, Code::UpdateCheck);
+        assert!(err.reason.contains("unreachable"), "{err}");
+        // A server that answers anything with 200 is not "none yet".
+        let anything = Fake(HashMap::from([(PROBE.to_owned(), Ok(b"<html>".to_vec()))]));
+        assert_eq!(
+            latest(&anything, &source(), "1.0.0").unwrap_err().code,
+            Code::UpdateRelease
+        );
+        // A 404 for the list is not "none yet": the list exists, empty.
+        let no_list = Fake(HashMap::new());
+        assert_eq!(
+            latest(&no_list, &source(), "1.0.0-beta.1")
+                .unwrap_err()
+                .code,
+            Code::UpdateCheck
+        );
+        // Other answers stay errors (rate limit, server error).
+        for status in [403, 500] {
+            struct Status(u32);
+            impl Fetch for Status {
+                fn get(
+                    &self,
+                    url: &str,
+                    _: &str,
+                    _: usize,
+                ) -> std::result::Result<Vec<u8>, FetchError> {
+                    Err(FetchError::status(url, self.0))
+                }
+            }
+            assert_eq!(
+                latest(&Status(status), &source(), "1.0.0")
+                    .unwrap_err()
+                    .code,
+                Code::UpdateCheck
+            );
+        }
+        // `check` records it as a check without error and forgets a
+        // version it knew (a release that was withdrawn).
+        let dir = tempfile::tempdir().unwrap();
+        let rec = record::Record {
+            latest: Some("9.9.9".to_owned()),
+            page: Some("https://page".to_owned()),
+            error: Some("KS801: earlier".to_owned()),
+            ..Default::default()
+        };
+        record::save(dir.path(), &rec).unwrap();
+        record::mark_failed(dir.path(), "9.9.9", 1).unwrap();
+        assert_eq!(check(&none, &source(), Some(dir.path())).unwrap(), None);
+        let (rec, _) = record::load(dir.path());
+        assert!(rec.last_check.is_some());
+        // A version that failed to install is still held back if it
+        // comes again.
+        assert!(rec.failed_before("9.9.9"));
+        assert_eq!((rec.latest, rec.page, rec.error), (None, None, None));
     }
 
     #[test]
@@ -457,7 +647,7 @@ mod tests {
         assert_eq!(rec.page.as_deref(), Some("https://page"));
         assert_eq!(known_newer(&rec), Some("9.9.9"));
         assert!(rec.last_check.is_some());
-        check(&Fake(HashMap::new()), &source(), Some(dir.path())).unwrap_err();
+        check(&offline(), &source(), Some(dir.path())).unwrap_err();
         let (rec, _) = record::load(dir.path());
         // The version found earlier stays known; the error is recorded.
         assert_eq!(rec.latest.as_deref(), Some("9.9.9"));

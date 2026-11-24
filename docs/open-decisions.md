@@ -234,6 +234,15 @@ actions only", section 12):
 25. **Stale menu IDs** (section 8): the IDs of the removed items are not
     reused; a click on them does nothing (`command N has no meaning` in the
     log).
+26. **No release yet vs. a repository that is gone** (UP1 "Source"; the
+    owner decided on 2026-11-24 that "no release yet" is "nothing newer"):
+    a 404 for `releases/latest` is followed by `GET /releases?per_page=1`.
+    A release list (a JSON array, maybe `[]`) means "none yet"; any other answer is `KS802`; a failure keeps the check
+    failed (`KS801`), so a mistyped `KALTSTELLEN_UPDATE_URL` or a deleted
+    repository does not look like "up to date" forever. That is a second
+    request, only while no stable release exists. `update --force` without
+    a release is `KS802`; published releases of which none has a version
+    tag are `KS802` too, not "none".
 
 Everything else the owner has not decided yet is deferred (below).
 

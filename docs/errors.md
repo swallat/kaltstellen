@@ -42,7 +42,7 @@ when they apply. Codes are never renumbered or reused. The source of truth is
 | `KS701` | The main window could not be set up. |
 | `KS702` | The Microsoft Edge WebView2 Runtime is not installed; the main window cannot open (exit code 1). |
 | `KS801` | The update check failed: no connection, an HTTP error or a timeout (UP1). |
-| `KS802` | The release cannot be used: unreadable metadata, no executable for this system, or no SHA-256 for it in `checksums.txt`. Nothing was changed. |
+| `KS802` | The release cannot be used: unreadable metadata, no executable for this system, or no SHA-256 for it in `checksums.txt`; or `update --force` while no release is published. Nothing was changed. |
 | `KS803` | The downloaded executable does not match its SHA-256 in `checksums.txt`. Nothing was changed. |
 | `KS804` | This copy cannot update itself: installed by a package manager (scoop, winget, Chocolatey), below Program Files, in a folder that is not writable, or a development build. The message says how to update instead. |
 | `KS805` | Renaming the executable failed; the old one has been put back. |
