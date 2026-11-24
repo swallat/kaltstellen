@@ -152,6 +152,7 @@ function renderProfiles() {
 async function select(name) {
   selected = name;
   view = 'profile';
+  suggestions = [];
   forgetAbout();
   render();
   await loadUnassigned();
@@ -628,7 +629,7 @@ async function loadSuggestions() {
   if (profile && state.learn) {
     const reply = await call('suggestions', { profile: profile.name }, { quiet: true });
     if (current()?.name !== profile.name) return;
-    suggestions = reply.ok ? reply.data.filter((s) => !hiddenSuggestions.has(`${profile.name}/${s.exe}`.toLowerCase())) : [];
+    suggestions = reply.ok ? reply.data.map((s) => ({ ...s, profile: profile.name })).filter((s) => !hiddenSuggestions.has(`${profile.name}/${s.exe}`.toLowerCase())) : [];
   }
   renderSuggestions();
 }
@@ -637,34 +638,50 @@ async function loadSuggestions() {
 const hiddenSuggestions = new Set();
 
 function hideSuggestion(s) {
-  hiddenSuggestions.add(`${current().name}/${s.exe}`.toLowerCase());
+  hiddenSuggestions.add(`${s.profile}/${s.exe}`.toLowerCase());
   suggestions = suggestions.filter((x) => x !== s);
   renderSuggestions();
 }
 
+let suggestionBusy = false;
+
 async function neverSuggest(s) {
-  await call('suggestion_done', { profile: current().name, exe: s.exe, never: true });
-  await loadSuggestions();
+  if (suggestionBusy) return;
+  suggestionBusy = true;
+  try {
+    await call('suggestion_done', { profile: s.profile, exe: s.exe, never: true });
+    await loadSuggestions();
+  } finally { suggestionBusy = false; }
 }
 
 async function acceptSuggestion(s) {
-  const profile = current();
-  let reply;
-  if (s.entry === null) {
-    reply = await call('add_entries', { profile: profile.name, entries: [{ exe: s.exe, path: s.path, action: s.action, confirmed: false }] });
-  } else {
-    // Another action has other options: the entry starts with the defaults
-    // of the new one, the program and its confirmation stay.
-    const old = profile.entries[s.entry];
-    reply = await call('update_entry', {
-      profile: profile.name,
-      index: s.entry,
-      entry: { exe: old.exe, path: old.path, action: s.action, args: [], cwd: null, on_timeout: 'kill', restart_on_neutral: false, trim: null, confirmed: old.confirmed },
-    });
-  }
-  if (reply.ok) await call('suggestion_done', { profile: profile.name, exe: s.exe, never: false });
-  await loadSuggestions();
-  await loadUnassigned();
+  if (suggestionBusy) return;
+  suggestionBusy = true;
+  try {
+    const profile = profileNamed(s.profile);
+    let reply;
+    if (!profile) return;
+    if (s.entry === null) {
+      reply = await call('add_entries', { profile: profile.name, entries: [{ exe: s.exe, path: s.path, action: s.action, confirmed: false }] });
+    } else {
+      // The index came with the suggestion: check that it still is this program.
+      const old = profile.entries[s.entry];
+      if (!old || old.exe.toLowerCase() !== s.exe.toLowerCase()) {
+        await loadSuggestions();
+        return;
+      }
+      // Another action has other options: the entry starts with the defaults
+      // of the new one, the program and its confirmation stay.
+      reply = await call('update_entry', {
+        profile: profile.name,
+        index: s.entry,
+        entry: { exe: old.exe, path: s.action === 'start' ? (s.path || old.path) : old.path, action: s.action, args: [], cwd: null, on_timeout: 'kill', restart_on_neutral: false, trim: null, confirmed: old.confirmed },
+      });
+    }
+    if (reply.ok) await call('suggestion_done', { profile: profile.name, exe: s.exe, never: false });
+    await loadSuggestions();
+    await loadUnassigned();
+  } finally { suggestionBusy = false; }
 }
 
 function renderUnassigned() {

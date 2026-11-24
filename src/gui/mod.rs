@@ -400,7 +400,7 @@ impl Host for RealHost {
     }
 
     fn learning(&self) -> bool {
-        paths::config_dir().is_none_or(|dir| crate::settings::load(&dir).0.learning())
+        crate::usage::enabled()
     }
 
     fn set_learning(&self, on: bool) -> Result<(), String> {

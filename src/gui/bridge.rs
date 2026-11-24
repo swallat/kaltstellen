@@ -1262,6 +1262,9 @@ impl<H: Host> Bridge<H> {
             }
             Request::Suggestions { profile } => {
                 check_text(&[&profile])?;
+                if !self.host.learning() {
+                    return Ok(Some(Value::Array(Vec::new())));
+                }
                 let config = self.document.config();
                 let apps = config.profile(&profile).map(|p| p.apps.as_slice());
                 let list: Vec<Value> = self
@@ -1291,6 +1294,9 @@ impl<H: Host> Bridge<H> {
                 never,
             } => {
                 check_text(&[&profile, &exe])?;
+                if exe.trim().is_empty() || self.document.config().profile(&profile).is_none() {
+                    return Err("unknown profile or program".to_owned());
+                }
                 self.host.suggestion_done(&profile, &exe, never)?;
                 Ok(None)
             }
@@ -2140,6 +2146,12 @@ mod tests {
     fn suggestions_are_listed_and_settled_and_learning_switches() {
         let dir = tempfile::tempdir().unwrap();
         let (mut b, fake) = bridge(&dir);
+        let off = send(
+            &mut b,
+            json!({"v": 1, "id": 9, "type": "suggestions", "profile": "focus"}),
+        );
+        assert_eq!(off["data"].as_array().unwrap().len(), 0, "learning is off");
+        fake.learn.set(true);
         let reply = send(
             &mut b,
             json!({"v": 1, "id": 1, "type": "suggestions", "profile": "focus"}),
