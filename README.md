@@ -235,6 +235,9 @@ sent. Choose the mode with any of:
 A running tray takes a mode chosen in the window or on the command line over
 at once, and a mode that checks checks right away.
 
+While no release is published for your channel yet, a check says so and
+counts as "nothing newer", not as a failure.
+
 With the check off, nothing connects unless you run `kaltstellen update`.
 A copy installed by scoop, winget or Chocolatey, or placed below Program
 Files or in a folder you cannot write to, does not replace itself; it says

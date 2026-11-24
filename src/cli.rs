@@ -631,7 +631,17 @@ fn automation(switch: Option<OnOff>) -> u8 {
 fn update_check(quiet: bool) -> u8 {
     let source = update::Source::current();
     let release = match update::check(&update::WinHttp, &source, paths::data_dir().as_deref()) {
-        Ok(release) => release,
+        Ok(Some(release)) => release,
+        Ok(None) => {
+            info!("update: no release published yet");
+            if !quiet {
+                println!(
+                    "no release is published yet; kaltstellen {} is the newest version",
+                    update::CURRENT
+                );
+            }
+            return exit::OK;
+        }
         Err(err) => {
             warn!("update: {err}");
             if !quiet {
@@ -698,7 +708,21 @@ fn update_install(force: bool, unattended: bool) -> u8 {
         Err(err) => return refused(err),
     };
     let release = match update::check(&update::WinHttp, &source, paths::data_dir().as_deref()) {
-        Ok(release) => release,
+        Ok(Some(release)) => release,
+        // `--force` asks for a reinstall; without a release there is none.
+        Ok(None) if force => {
+            return refused(Error::new(
+                Code::UpdateRelease,
+                "no release is published yet; nothing to install",
+            ));
+        }
+        Ok(None) => {
+            println!(
+                "no release is published yet; kaltstellen {} is the newest version",
+                update::CURRENT
+            );
+            return exit::OK;
+        }
         Err(err) => return refused(err),
     };
     if !force && !update::version::newer(update::CURRENT, &release.version) {

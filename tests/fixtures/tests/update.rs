@@ -329,6 +329,30 @@ fn up1_check_reports_a_newer_release_and_records_it() {
     );
 }
 
+/// No release published yet (GitHub: `latest` is 404, the list `[]`):
+/// nothing newer, not a failed check; `update` has nothing to do and
+/// `update --force` nothing to install.
+#[test]
+fn up1_no_release_yet_is_not_a_failed_check() {
+    let api = serve(HashMap::from([(
+        "/repos/o/r/releases?per_page=30".to_owned(),
+        b"[]".to_vec(),
+    )]));
+    let s = Setup::new(format!("{api}/repos/o/r"));
+    let (code, out, err) = s.run(&["update", "--check"], &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("no release is published yet"), "{out}");
+    let record = fs::read_to_string(s.data().join("update.json")).unwrap();
+    assert!(!record.contains("KS80"), "{record}");
+    let (code, out, err) = s.run(&["update"], &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("no release is published yet"), "{out}");
+    let (code, _, err) = s.run(&["update", "--force"], &[]);
+    assert_eq!(code, 1);
+    assert!(err.contains("KS802"), "{err}");
+    assert_eq!(fs::read(&s.exe).unwrap(), s.original, "nothing replaced");
+}
+
 #[test]
 fn up1_mode_is_saved_and_nothing_to_do_without_a_newer_release() {
     let version = built_version();

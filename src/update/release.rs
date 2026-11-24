@@ -65,18 +65,19 @@ pub fn parse_latest(json: &[u8]) -> Result<Release, String> {
 }
 
 /// The answer of `/releases`: the highest version that is not a draft
-/// (used while a pre-release runs, so a beta sees the next beta).
-pub fn parse_list(json: &[u8]) -> Result<Release, String> {
+/// (used while a pre-release runs, so a beta sees the next beta); `None`
+/// when there is none yet.
+pub fn parse_list(json: &[u8]) -> Result<Option<Release>, String> {
     let raws: Vec<Raw> =
         serde_json::from_slice(json).map_err(|e| format!("release information: {e}"))?;
-    raws.into_iter()
+    Ok(raws
+        .into_iter()
         .filter(|r| !r.draft)
         .filter_map(|r| r.release().ok())
         .max_by(|a, b| {
             let (x, y) = (Version::parse(&a.version), Version::parse(&b.version));
             x.cmp(&y)
-        })
-        .ok_or_else(|| "no release found".to_owned())
+        }))
 }
 
 /// The executable of `version` for this architecture
@@ -140,10 +141,16 @@ mod tests {
             {"tag_name": "v0.9.0", "draft": false}
         ]"#;
         assert_eq!(
-            parse_list(list.as_bytes()).unwrap().version,
+            parse_list(list.as_bytes()).unwrap().unwrap().version,
             "1.0.0-beta.10"
         );
-        assert!(parse_list(b"[]").is_err());
+        // None published yet, or only drafts: nothing, not an error.
+        assert_eq!(parse_list(b"[]").unwrap(), None);
+        assert_eq!(
+            parse_list(br#"[{"tag_name": "v2.0.0", "draft": true}]"#).unwrap(),
+            None
+        );
+        assert!(parse_list(b"{").is_err());
     }
 
     #[test]
