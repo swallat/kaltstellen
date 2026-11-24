@@ -294,9 +294,10 @@ kaltstellen:
    brings the open window to the front (or opens it again) and starts no
    second tray icon.
 2. **Install over a running tray**: with a profile active that freezes
-   something, run the setup and keep its folder
-   (`%LOCALAPPDATA%\Programs\kaltstellen`, the folder of the copy above).
-   Before files are copied the tray ends and the frozen program runs again;
+   something and the main window open, run the setup with the folder it
+   proposes (`%LOCALAPPDATA%\Programs\kaltstellen`; if your copy from
+   section 0 is there, the setup replaces it). Before files are copied the
+   window closes, the tray ends and the frozen program runs again;
    no administrator prompt; at the end "Start kaltstellen now" brings the
    tray back. Windows' list of installed apps shows `kaltstellen` with the
    version; the Start menu has `kaltstellen`.

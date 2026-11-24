@@ -250,13 +250,21 @@ actions only", section 12):
       and applies on a first installation only; an upgrade keeps what was
       chosen since. `kaltstellen autostart on|off` now also counts as the
       answer to the tray's one-time question (L8);
-    - before copying files the setup runs `kaltstellen quit` with the new
-      executable and stops only when that reports exit code 5 (the tray
-      neither answered nor ended); the Restart Manager is off, since it
-      would close the tray without resuming;
-    - uninstalling runs `quit`, `recover` and `autostart off`, and removes
-      `kaltstellen.old*.exe`, `.new.exe`, `.failed.exe`; `/REMOVEDATA`
-      deletes the data without asking;
+    - before copying files the setup closes an open main window (WM_CLOSE
+      to its window class) and runs `kaltstellen quit` with the new
+      executable; it stops when the window stays open for 15 s or `quit`
+      reports exit code 5 (the tray neither answered nor ended). The
+      Restart Manager is off, since it would close the tray without
+      resuming. A silent upgrade starts the tray again if one ran;
+    - uninstalling does the same first and stops when it fails, so it
+      never removes the program under a tray that holds programs frozen;
+      then `recover` and `autostart off`, and it removes
+      `kaltstellen.old*.exe`, `.new.exe`, `.failed.exe`;
+    - the question about the data comes only when a `config.toml` exists
+      (otherwise nothing worth keeping); deleting removes the files
+      kaltstellen writes (`config.toml*`, `settings.*`, `state.*`,
+      `seen.json*`, `update.json*`, `kaltstellen.log*`, `webview2\`) and
+      then the folder only if empty; `/REMOVEDATA` deletes without asking;
     - English and German pages; an x86_64 setup also installs on ARM64
       (emulated), the aarch64 setup only there;
     - after a self-update the version in the list of installed apps
