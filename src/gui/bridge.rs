@@ -2332,7 +2332,7 @@ mod tests {
         assert_eq!(reply["data"]["running"][0]["exe"], "browser.exe");
         assert_eq!(reply["data"]["running"][1]["protection"], "warn");
         let browser = &reply["data"]["running"][0];
-        assert_eq!(browser["kind"]["label"], "browser");
+        assert_eq!(browser["kind"]["label"], "a browser");
         assert_eq!(browser["suggestion"]["action"], "suspend");
         assert_eq!(browser["windows"]["count"], 2);
         assert_eq!(browser["windows"]["unsaved"], true);

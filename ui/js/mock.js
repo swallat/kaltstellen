@@ -267,7 +267,7 @@ function handle(message) {
       const row = (exe, extra = {}) => ({
         exe, path: `C:\\Apps\\${exe}`, private_bytes: 0, protection: protectionOf(exe),
         elevated: false, background: false, held: null, first_seen: null,
-        kind: { label: 'browser', known: exe === 'browser.exe', source: 'name' },
+        kind: { label: 'a browser', known: exe === 'browser.exe', source: 'name' },
         suggestion: exe === 'browser.exe' || exe === 'mail.exe' ? { action: 'suspend', reason: 'state and sign-in stay, nothing is lost; notifications wait' } : null,
         windows: { count: exe === 'browser.exe' ? 3 : 1, dialog: exe === 'mail.exe', unsaved: exe === 'browser.exe', hung: false },
         ...extra,

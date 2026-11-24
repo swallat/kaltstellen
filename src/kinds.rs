@@ -27,22 +27,22 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// For `probably a …`.
+    /// With its article, for `probably …`.
     pub fn label(self) -> &'static str {
         match self {
-            Kind::Browser => "browser",
-            Kind::Mail => "mail program",
-            Kind::Chat => "chat program",
-            Kind::CloudSync => "cloud sync program",
-            Kind::Updater => "updater or helper",
-            Kind::MediaPlayer => "media player",
-            Kind::Launcher => "launcher or store client",
-            Kind::Game => "game",
-            Kind::Editor => "editor, office or development tool",
-            Kind::PasswordManager => "password manager",
-            Kind::Sensitive => "security, remote-access or developer tool",
+            Kind::Browser => "a browser",
+            Kind::Mail => "a mail program",
+            Kind::Chat => "a chat program",
+            Kind::CloudSync => "a cloud sync program",
+            Kind::Updater => "an updater or helper",
+            Kind::MediaPlayer => "a media player",
+            Kind::Launcher => "a launcher or store client",
+            Kind::Game => "a game",
+            Kind::Editor => "an editor, office or development tool",
+            Kind::PasswordManager => "a password manager",
+            Kind::Sensitive => "a security, remote-access or developer tool",
             Kind::System => "part of Windows",
-            Kind::Unknown => "program the tool cannot place",
+            Kind::Unknown => "a program the tool cannot place",
         }
     }
 

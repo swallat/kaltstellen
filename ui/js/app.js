@@ -808,6 +808,14 @@ function snapKeeps(row, action) {
   return action === 'stop' && (w.count > 0 || w.dialog || w.unsaved);
 }
 
+/** Whether the list shows the row now: background programs and rows the
+ * `Heavy only` filter hides are not touched by quick fills. */
+function snapShown(row) {
+  if (snap.data.running.includes(row) && row.background && !$('snapshot-background').checked) return false;
+  if ($('snapshot-heavy').checked && !snap.load.get(row.exe.toLowerCase())?.heavy) return false;
+  return true;
+}
+
 const snapKey = (row) => `${row.exe.toLowerCase()}|${(row.path || '').toLowerCase()}`;
 
 /** What the owner can pick for a row: a program without a known path (an
@@ -870,7 +878,7 @@ function snapTable(title, rows, note) {
         el('span', { class: 'names' }, el('span', { class: 'exe', text: row.exe }),
           row.path ? el('span', { class: 'path', text: row.path }) : el('span', { class: 'path', text: row.elevated ? 'higher integrity, path not readable' : 'path not known' }),
           row.protection === 'warn' ? el('span', { class: 'protection warn', text: 'warn list' }) : null,
-          row.kind && row.kind.known ? el('span', { class: 'hint', text: `probably a ${row.kind.label}` }) : null,
+          row.kind && row.kind.known ? el('span', { class: 'hint', text: `probably ${row.kind.label}` }) : null,
           row.suggestion ? el('span', { class: 'hint', text: `Suggested: ${snapActionLabel[row.suggestion.action]} (${row.suggestion.reason})` }) : null,
           ...snapWarnings(row).map((text) => el('span', { class: 'diff-tag only_a', text }))))),
       el('td', { class: 'num', text: row.private_bytes ? megabytes(row.private_bytes) : '' }),
@@ -967,7 +975,7 @@ $('snapshot-suggestions').addEventListener('click', () => {
   // Only rows that have a suggestion and no choice yet; a suggestion is
   // a pre-selected choice, never an entry the owner did not see.
   for (const row of snapRows()) {
-    if (!row.suggestion || row.protection !== 'none') continue;
+    if (!row.suggestion || row.protection !== 'none' || !snapShown(row)) continue;
     const key = snapKey(row);
     const now = snap.choices.get(key);
     if (now && now.action !== 'none') continue;
