@@ -67,8 +67,8 @@ $root = Join-Path $temp ("ks-setup-test-" + [Guid]::NewGuid().ToString('N').Subs
 $innoTempBefore = @(Get-ChildItem -LiteralPath $temp -Directory -Filter 'is-*.tmp' -ErrorAction SilentlyContinue |
         ForEach-Object FullName)
 $app = Join-Path $root 'app'
-$cfg = Join-Path $root 'config'
-$data = Join-Path $root 'data'
+$cfg = Join-Path $root 'kaltstellen-config'
+$data = Join-Path $root 'kaltstellen-data'
 $runRoot = "Software\kaltstellen-setup-test-$PID"
 $runKey = "$runRoot\Run"
 $exe = Join-Path $app 'kaltstellen.exe'
