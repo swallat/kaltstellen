@@ -27,6 +27,44 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// A stable word for the page and the templates (H7).
+    pub fn id(self) -> &'static str {
+        match self {
+            Kind::Browser => "browser",
+            Kind::Mail => "mail",
+            Kind::Chat => "chat",
+            Kind::CloudSync => "cloud_sync",
+            Kind::Updater => "updater",
+            Kind::MediaPlayer => "media_player",
+            Kind::Launcher => "launcher",
+            Kind::Game => "game",
+            Kind::Editor => "editor",
+            Kind::PasswordManager => "password_manager",
+            Kind::Sensitive => "sensitive",
+            Kind::System => "system",
+            Kind::Unknown => "unknown",
+        }
+    }
+
+    /// The plural for lists of programs of this kind (H7, H8).
+    pub fn plural(self) -> &'static str {
+        match self {
+            Kind::Browser => "browsers",
+            Kind::Mail => "mail programs",
+            Kind::Chat => "chat programs",
+            Kind::CloudSync => "cloud sync programs",
+            Kind::Updater => "updaters and helpers",
+            Kind::MediaPlayer => "media players",
+            Kind::Launcher => "launchers and store clients",
+            Kind::Game => "games",
+            Kind::Editor => "editors, office and development tools",
+            Kind::PasswordManager => "password managers",
+            Kind::Sensitive => "security, remote-access and developer tools",
+            Kind::System => "parts of Windows",
+            Kind::Unknown => "programs of unknown kind",
+        }
+    }
+
     /// With its article, for `probably …`.
     pub fn label(self) -> &'static str {
         match self {

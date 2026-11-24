@@ -46,6 +46,7 @@ pub mod protection;
 pub mod settings;
 pub mod snapshot;
 pub mod state;
+pub mod templates;
 pub mod tray;
 pub mod unassigned;
 pub mod update;

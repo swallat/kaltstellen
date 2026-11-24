@@ -1039,8 +1039,9 @@ function renderSnapshot() {
     snapTable('Not running, seen earlier', snap.data.seen, ''));
   loadIcons($('snapshot-groups'));
   const existing = $('snapshot-existing');
-  existing.hidden = !(snap.mode === 'update' && snap.data.existing > 0);
-  existing.textContent = `${snap.data.existing} ${snap.data.existing === 1 ? 'program already has an entry' : 'programs already have an entry'} in this profile and ${snap.data.existing === 1 ? 'is' : 'are'} not listed. Use Compare to change entries.`;
+  existing.hidden = !(snap.mode === 'update' && snap.data.existing > 0) && !snap.note;
+  if (snap.note && snap.mode === 'new') existing.textContent = snap.note;
+  else existing.textContent = `${snap.data.existing} ${snap.data.existing === 1 ? 'program already has an entry' : 'programs already have an entry'} in this profile and ${snap.data.existing === 1 ? 'is' : 'are'} not listed. Use Compare to change entries.`;
   snapUpdateOk();
 }
 
@@ -1057,19 +1058,54 @@ async function loadSnapshot() {
   return true;
 }
 
-async function openSnapshot(mode) {
+async function openSnapshot(mode, template) {
   snap = { mode, profile: mode === 'update' ? current().name : null, data: null, choices: new Map(), load: new Map(), token: null };
   $('snapshot-title').textContent = mode === 'new' ? 'New profile from the current state' : `Update ${current().name} from the current state`;
   $('snapshot-name-row').hidden = mode !== 'new';
-  $('snapshot-name').value = '';
+  $('snapshot-name').value = template ? template.name : '';
   $('snapshot-background').checked = false;
   $('snapshot-measuring').textContent = '';
   $('snapshot-heavy').checked = false;
   $('snapshot-tray').checked = false;
   $('snapshot-sort').checked = false;
   if (!(await loadSnapshot())) return;
+  if (template) {
+    const count = snapApplyTemplate(template);
+    $('snapshot-title').textContent = `New profile from the ${template.name} template`;
+    snap.note = `The ${template.name} template set ${count} ${count === 1 ? 'program' : 'programs'}. Check every row; nothing is created before you confirm.`;
+    renderSnapshot();
+  }
   openDialog($('snapshot-dialog'));
   measureSnapshot();
+}
+
+const TEMPLATE_VERB = { suspend: 'Freeze', stop: 'Stop', ignore: 'Leave as it is' };
+
+/** H7: the rows a template sets. Only programs of a known kind that the
+ * template has a rule for, never a warn-list program (P6) and never what
+ * kaltstellen holds; the choice has to be one the row can have. Nothing is
+ * written here: the owner still sees and confirms every row. */
+function snapTemplateRows(template) {
+  const rules = new Map(template.rules.map((r) => [r.kind, r.action]));
+  const out = [];
+  for (const row of [...snap.data.running, ...snap.data.seen]) {
+    if (!row.kind || !row.kind.known || row.protection !== 'none') continue;
+    const action = rules.get(row.kind.id);
+    if (!action) continue;
+    if (!snapOptions(row).some(([v]) => v === action)) continue;
+    out.push([row, action]);
+  }
+  return out;
+}
+
+function snapApplyTemplate(template) {
+  let count = 0;
+  for (const [row, action] of snapTemplateRows(template)) {
+    if (snap.data.running.includes(row) && row.background) continue;
+    snap.choices.set(snapKey(row), { action, confirmed: false });
+    count += 1;
+  }
+  return count;
 }
 $('snapshot-dialog').addEventListener('close', () => { if (snap) snap.token = null; });
 
@@ -1438,6 +1474,33 @@ $('new-empty').addEventListener('click', () => {
     if (reply.ok) await select(name.trim());
     return reply;
   });
+});
+$('new-template').addEventListener('click', async () => {
+  $('new-dialog').close();
+  $('template-error').textContent = '';
+  const [templates, groups] = await Promise.all([
+    call('templates', {}, { quiet: true }),
+    call('snapshot', { mode: 'new' }, { quiet: true }),
+  ]);
+  if (!templates.ok) {
+    notice(templates.error);
+    return;
+  }
+  snap = { mode: 'new', profile: null, data: groups.ok ? groups.data : null, choices: new Map(), load: new Map(), token: null };
+  $('template-list').replaceChildren(...templates.data.map((t) => {
+    const words = t.rules.map((r) => `${r.label}: ${TEMPLATE_VERB[r.action]}`).join('; ');
+    const found = snap.data ? snapTemplateRows(t).filter(([row, action]) => action !== 'ignore' && !(snap.data.running.includes(row) && row.background)).length : null;
+    return el('section', { class: 'snap-group' },
+      el('h3', { text: t.name }),
+      el('p', { text: t.purpose }),
+      el('p', { class: 'hint', text: words }),
+      el('p', { class: 'hint', text: found === null ? 'The programs on this computer could not be read.' : `${found} ${found === 1 ? 'program' : 'programs'} found that this template would freeze or stop.` }),
+      el('button', { type: 'button', class: 'button primary small', text: 'Use this template', onclick: () => {
+        $('template-dialog').close();
+        openSnapshot('new', t);
+      } }));
+  }));
+  openDialog($('template-dialog'));
 });
 $('new-snapshot').addEventListener('click', () => {
   $('new-dialog').close();
