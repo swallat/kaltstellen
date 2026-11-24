@@ -68,3 +68,9 @@ jobs:
           echo "$out"
           echo "$out" | grep -Eq '^kaltstellen [0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?\+[0-9a-f]{7,}$'
           test "$(target/release/kaltstellen.exe -v | head -n 1 | tr -d '\r')" = "$out"
+      - name: The setup builds, installs, upgrades and uninstalls (Q2)
+        shell: pwsh
+        run: |
+          $setup = ./scripts/installer.ps1 -Exe target/release/kaltstellen.exe `
+            -OutputDir "$env:RUNNER_TEMP/setup" -ToolsDir "$env:RUNNER_TEMP/tools"
+          ./scripts/installer-test.ps1 -Setup $setup

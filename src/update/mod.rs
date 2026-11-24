@@ -14,6 +14,7 @@ pub mod install;
 pub mod record;
 pub mod release;
 pub mod session;
+pub mod uninstall_entry;
 pub mod url;
 pub mod version;
 

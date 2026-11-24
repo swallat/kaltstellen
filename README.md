@@ -28,6 +28,27 @@ configuration says and undoes it on the next switch. A first tray icon
 settings window are planned; see [docs/spec.md](docs/spec.md) and
 [docs/plan.md](docs/plan.md).
 
+## Install
+
+Download `kaltstellen-<version>-windows-x86_64-setup.exe` (or `aarch64` on
+ARM) from the [releases](https://github.com/swallat/kaltstellen/releases)
+and run it. It installs for your user only, without administrator rights,
+to `%LOCALAPPDATA%\Programs\kaltstellen`; adds `kaltstellen` to the Start
+menu (it starts the tray icon) and to Windows' list of installed apps; and
+can start kaltstellen at sign-in. A newer setup installs over an older one
+and quits a running tray first, which resumes everything it froze.
+
+Uninstall it in Windows' settings under installed apps. That quits the
+tray, resumes what is frozen, removes start at sign-in and asks whether
+your profiles and data should go too (by default they stay). The setup is
+not signed yet, so Windows SmartScreen may warn: "More info", then "Run
+anyway".
+
+Without the setup, the bare `kaltstellen-<version>-windows-<arch>.exe` of
+the same release works as well: put it anywhere you can write to, as
+`kaltstellen.exe`. A double-click on it opens the main window and starts
+the tray; in a terminal it is the command line below.
+
 ## Using it
 
 Copy [config.example.toml](config.example.toml) to
@@ -152,6 +173,13 @@ design in a normal browser without building Rust.
 The binary is `target\release\kaltstellen.exe`. Freezing processes that run
 elevated or under another user requires an elevated terminal.
 
+`.\scripts\installer.ps1 -Exe target\release\kaltstellen.exe` builds the
+setup around it (Inno Setup is fetched once, pinned by its SHA-256, and kept
+portable in `%TEMP%\kaltstellen-tools`). `scripts\installer-test.ps1`
+installs, upgrades and uninstalls a setup and checks each step; it touches
+the Start menu and the list of installed apps of your user, so outside CI it
+needs `-OnThisMachine`.
+
 ## The tray icon
 
 `kaltstellen tray` puts an icon in the notification area. Its menu holds
@@ -197,8 +225,7 @@ with the scripts that generate them. The notes there are in German.
 
 ## Updates
 
-There are no releases yet; this describes how updates will work once there
-are. kaltstellen updates itself from the
+kaltstellen updates itself from the
 [GitHub releases](https://github.com/swallat/kaltstellen/releases) of this
 repository:
 

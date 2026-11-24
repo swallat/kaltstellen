@@ -36,9 +36,14 @@ updater, without changing the client.
 | --- | --- |
 | `kaltstellen-<version>-windows-x86_64.exe` | The executable itself, not packed. |
 | `kaltstellen-<version>-windows-aarch64.exe` | The same for ARM64. |
-| `checksums.txt` | One line per file: `<sha256, 64 lower-case hex digits>  <file name>` (two spaces, `sha256sum` format). Must list every executable above. |
+| `kaltstellen-<version>-windows-x86_64-setup.exe` | The per-user setup around that executable (spec Q2, `installer/kaltstellen.iss`), for people; the updater does not use it. |
+| `kaltstellen-<version>-windows-aarch64-setup.exe` | The same for ARM64. |
+| `checksums.txt` | One line per file: `<sha256, 64 lower-case hex digits>  <file name>` (two spaces, `sha256sum` format). Must list every executable and setup above. |
 
-The architecture part is Rust's `std::env::consts::ARCH`. Other files (a zip
+The architecture part is Rust's `std::env::consts::ARCH`. Each setup is built
+with `scripts/installer.ps1` (Inno Setup, pinned by SHA-256) and installed,
+upgraded and uninstalled by `scripts/installer-test.ps1` on the runner of its
+architecture before it is uploaded. Other files (a zip
 with licence and readme for people, release notes, signatures, an SBOM,
 build attestations) may be added freely; the updater ignores them.
 
@@ -70,6 +75,8 @@ at most 64 KiB, metadata at most 4 MiB.
 v1.2.0
   kaltstellen-1.2.0-windows-x86_64.exe
   kaltstellen-1.2.0-windows-aarch64.exe
+  kaltstellen-1.2.0-windows-x86_64-setup.exe
+  kaltstellen-1.2.0-windows-aarch64-setup.exe
   checksums.txt
   kaltstellen-1.2.0-windows-x86_64.zip   (optional, for people)
 ```

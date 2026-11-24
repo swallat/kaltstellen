@@ -14,6 +14,9 @@ on:
       - .github/workflows/release.yml
       - scripts/release-version.sh
       - scripts/set-version.sh
+      - scripts/installer.ps1
+      - scripts/installer-test.ps1
+      - installer/**
 
 permissions:
   contents: read
@@ -72,6 +75,8 @@ jobs:
       KALTSTELLEN_RELEASE: "1"
       VERSION: ${{ needs.version.outputs.version }}
       FILE: kaltstellen-${{ needs.version.outputs.version }}-windows-${{ matrix.arch }}.exe
+      # The per-user setup around that executable (spec Q2).
+      SETUP: kaltstellen-${{ needs.version.outputs.version }}-windows-${{ matrix.arch }}-setup.exe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -90,10 +95,21 @@ jobs:
           out=$("./$FILE" --version | head -n 1 | tr -d '\r')
           echo "$out"
           test "$out" = "kaltstellen $VERSION"
+      - name: The setup builds, installs, upgrades and uninstalls
+        shell: pwsh
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          $setup = ./scripts/installer.ps1 -Exe $env:FILE -Arch $env:ARCH -Version $env:VERSION `
+            -OutputDir . -ToolsDir "$env:RUNNER_TEMP/tools"
+          if ((Split-Path -Leaf $setup) -ne $env:SETUP) { throw "the setup is $setup, expected $env:SETUP" }
+          ./scripts/installer-test.ps1 -Setup $setup
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kaltstellen-${{ matrix.arch }}
-          path: ${{ env.FILE }}
+          path: |
+            ${{ env.FILE }}
+            ${{ env.SETUP }}
           if-no-files-found: error
           retention-days: 14
 
@@ -120,9 +136,10 @@ jobs:
           sha256sum kaltstellen-*.exe | tee checksums.txt
           for arch in x86_64 aarch64; do
             grep -Eq '^[0-9a-f]{64}  kaltstellen-'"$VERSION"'-windows-'"$arch"'\.exe$' checksums.txt
+            grep -Eq '^[0-9a-f]{64}  kaltstellen-'"$VERSION"'-windows-'"$arch"'-setup\.exe$' checksums.txt
           done
-          # Exactly these executables and nothing else.
-          test "$(ls kaltstellen-*.exe | wc -l)" -eq 2
+          # Exactly these executables and setups, nothing else.
+          test "$(ls kaltstellen-*.exe | wc -l)" -eq 4
           ls -l
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
