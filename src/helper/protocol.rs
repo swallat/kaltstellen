@@ -190,9 +190,9 @@ pub fn answer(line: &str, context: &Context, session: Option<u32>) -> Reply {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs());
-            reply.traffic = Some(ring.traffic.usage(u64::from(seconds), now, |pid| {
-                (context.session_of)(pid) == Some(session)
-            }));
+            let mut usage = ring.traffic.usage(u64::from(seconds), now);
+            usage.retain(|u| (context.session_of)(u.pid) == Some(session));
+            reply.traffic = Some(usage);
             reply
         }
     }

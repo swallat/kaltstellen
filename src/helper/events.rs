@@ -142,7 +142,8 @@ impl Traffic {
         while buckets.front().is_some_and(|b| b.second <= oldest) {
             buckets.pop_front();
         }
-        if buckets.back().is_none_or(|b| b.second != now) {
+        // A clock stepped back keeps adding to the newest second.
+        if buckets.back().is_none_or(|b| b.second < now) {
             buckets.push_back(Bucket {
                 second: now,
                 up: 0,
@@ -159,15 +160,24 @@ impl Traffic {
         }
     }
 
+    /// Forgets the counters of a process id: it started or ended, so what
+    /// was counted under that number belongs to another process.
+    pub fn forget(&self, pid: u32) {
+        self.counters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&pid);
+    }
+
     /// Bytes per process over the last `window_s` seconds (at most
-    /// [`TRAFFIC_WINDOW_S`]) for the processes `wanted` accepts, those with
-    /// no traffic left out, ordered by process id.
-    pub fn usage(&self, window_s: u64, now: u64, wanted: impl Fn(u32) -> bool) -> Vec<Usage> {
+    /// [`TRAFFIC_WINDOW_S`]), those with no traffic left out, ordered by
+    /// process id. The lock is held for the sums only; the caller filters
+    /// afterwards.
+    pub fn usage(&self, window_s: u64, now: u64) -> Vec<Usage> {
         let counters = self.counters.lock().unwrap_or_else(|e| e.into_inner());
         let from = now.saturating_sub(window_s.min(TRAFFIC_WINDOW_S));
         let mut all: Vec<Usage> = counters
             .iter()
-            .filter(|(pid, _)| wanted(**pid))
             .filter_map(|(pid, buckets)| {
                 let (up, down) = buckets
                     .iter()
@@ -498,8 +508,7 @@ mod tests {
         traffic.add_at(&got(7, 40), NOW);
         traffic.add_at(&got(7, 10), NOW + 5);
         traffic.add_at(&sent(8, 1), NOW + 5);
-        let all = |_: u32| true;
-        let usage = traffic.usage(10, NOW + 5, all);
+        let usage = traffic.usage(10, NOW + 5);
         assert_eq!(
             usage,
             [
@@ -516,16 +525,14 @@ mod tests {
             ]
         );
         // A shorter window sees only the later seconds.
-        let recent = traffic.usage(3, NOW + 5, all);
+        let recent = traffic.usage(3, NOW + 5);
         assert_eq!(recent.len(), 2);
         assert_eq!(recent[0].up + recent[0].down, 10);
-        // Only the wanted processes, and nothing once the window has passed.
-        assert_eq!(traffic.usage(10, NOW + 5, |pid| pid == 8).len(), 1);
-        assert!(
-            traffic
-                .usage(10, NOW + TRAFFIC_WINDOW_S + 100, all)
-                .is_empty()
-        );
+        // Nothing once the window has passed.
+        assert!(traffic.usage(10, NOW + TRAFFIC_WINDOW_S + 100).is_empty());
+        // A process that ended or started again under the number is forgotten.
+        traffic.forget(8);
+        assert_eq!(traffic.usage(10, NOW + 5).len(), 1);
         // Old seconds are dropped when new bytes arrive.
         traffic.add_at(&sent(7, 1), NOW + TRAFFIC_WINDOW_S + 100);
         let counters = traffic.counters.lock().unwrap();

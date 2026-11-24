@@ -310,15 +310,18 @@ Hardening from the review of M4a (same day):
 
 ## M4b as built, part 2: network counters
 
-- The same event session also enables `Microsoft-Windows-Kernel-Network`
-  (TCP and UDP, IPv4 and IPv6). Only the process id and the size in bytes of
-  each event are read; no address, no port, no data. If it cannot be
-  enabled, the process events still run and `helper status` says
-  `network counters: not running`.
+- A second event session `kaltstellen-helper-network` enables
+  `Microsoft-Windows-Kernel-Network` (TCP and UDP, IPv4 and IPv6), with more
+  buffers, so a burst of packet events cannot cost process events. Only the
+  process id and the size in bytes of each event are read; no address, no
+  port, no data. If it cannot be started, the process events still run and
+  `helper status` says `network counters: not running`.
 - The helper keeps per process per second sums of bytes sent and received
   for the last 10 minutes, in memory (at most 4096 processes). A process id
-  can be reused: the counters name a process id, the reader checks the
-  creation time as everywhere else (S6).
+  can be reused: the counters of a process id are forgotten when a process
+  with that number starts or ends, so a short-lived program has no counters
+  after it ended and a new program never inherits old ones. At the limit,
+  memory is bounded at a few tens of MB.
 - Pipe verb `{"v":1,"cmd":"network","seconds":N}` (`seconds` 1 to 600,
   default 10, only with `network`): `traffic`, a list of `{pid, up, down}` for the
   processes of the **caller's own Windows session** (each process id is

@@ -47,6 +47,15 @@ const INVALID_TRACE: u64 = u64::MAX;
 /// Time stamps as system time (`FILETIME`), not performance counter ticks.
 const CLOCK_SYSTEM_TIME: u32 = 2;
 
+/// What a session reports. Process events are rare; network events come per
+/// packet, so each gets a session of its own and a burst of one cannot cost
+/// events of the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provider {
+    Process,
+    Network,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Start,
@@ -104,7 +113,7 @@ fn error(what: &str, code: impl std::fmt::Display) -> Error {
 }
 
 /// The properties block for a session called `name`.
-fn properties_for(name: &str) -> (Vec<u64>, Vec<u16>) {
+fn properties_for(name: &str, provider: Provider) -> (Vec<u64>, Vec<u16>) {
     let name_wide = wide(name);
     let bytes = std::mem::size_of::<EVENT_TRACE_PROPERTIES>() + name_wide.len() * 2;
     let mut buffer = vec![0u64; bytes.div_ceil(8)];
@@ -117,8 +126,13 @@ fn properties_for(name: &str) -> (Vec<u64>, Vec<u16>) {
         (*props).Wnode.ClientContext = CLOCK_SYSTEM_TIME;
         (*props).LogFileMode = EVENT_TRACE_REAL_TIME_MODE;
         (*props).BufferSize = 64;
-        (*props).MinimumBuffers = 4;
-        (*props).MaximumBuffers = 16;
+        // Network events come per packet: that session gets room for bursts.
+        let (minimum, maximum) = match provider {
+            Provider::Process => (4, 16),
+            Provider::Network => (8, 64),
+        };
+        (*props).MinimumBuffers = minimum;
+        (*props).MaximumBuffers = maximum;
         (*props).LoggerNameOffset = std::mem::size_of::<EVENT_TRACE_PROPERTIES>() as u32;
         let target = buffer
             .as_mut_ptr()
@@ -136,7 +150,7 @@ fn props_ptr(buffer: &mut [u64]) -> *mut EVENT_TRACE_PROPERTIES {
 
 /// Stops a session by name (one a crashed service left behind).
 fn stop_by_name(name: &str) {
-    let (mut buffer, name_wide) = properties_for(name);
+    let (mut buffer, name_wide) = properties_for(name, Provider::Process);
     // SAFETY: valid properties block and NUL-terminated name.
     let _ = unsafe {
         ControlTraceW(
@@ -151,8 +165,12 @@ fn stop_by_name(name: &str) {
 /// Starts the session `name` and calls `sink` for every process start and
 /// stop, on the thread of the session. Needs the rights of a service
 /// account or an administrator.
-pub fn start(name: &str, sink: impl Fn(Event) + Send + Sync + 'static) -> Result<Session> {
-    let (mut properties, name_wide) = properties_for(name);
+pub fn start(
+    name: &str,
+    provider: Provider,
+    sink: impl Fn(Event) + Send + Sync + 'static,
+) -> Result<Session> {
+    let (mut properties, name_wide) = properties_for(name, provider);
     let mut control = CONTROLTRACE_HANDLE::default();
     // SAFETY: valid out handle, NUL-terminated name and properties block.
     let mut status = unsafe {
@@ -164,7 +182,7 @@ pub fn start(name: &str, sink: impl Fn(Event) + Send + Sync + 'static) -> Result
     };
     if status == ERROR_ALREADY_EXISTS {
         stop_by_name(name);
-        let (fresh, _) = properties_for(name);
+        let (fresh, _) = properties_for(name, provider);
         properties = fresh;
         // SAFETY: as above.
         status = unsafe {
@@ -189,20 +207,27 @@ pub fn start(name: &str, sink: impl Fn(Event) + Send + Sync + 'static) -> Result
         sink,
     };
     // SAFETY: the session handle is valid; the provider id outlives the call.
+    let (guid, keyword, what) = match provider {
+        Provider::Process => (&PROVIDER, KEYWORD_PROCESS, "process"),
+        Provider::Network => (&NETWORK_PROVIDER, KEYWORD_NETWORK, "network"),
+    };
     let enabled = unsafe {
         EnableTraceEx2(
             control,
-            &PROVIDER,
+            guid,
             EVENT_CONTROL_CODE_ENABLE_PROVIDER.0,
             TRACE_LEVEL_INFORMATION as u8,
-            KEYWORD_PROCESS,
+            keyword,
             0,
             0,
             None,
         )
     };
     if enabled != ERROR_SUCCESS {
-        return Err(error("cannot enable the process events", enabled.0));
+        return Err(error(
+            &format!("cannot enable the {what} events"),
+            enabled.0,
+        ));
     }
     let mut logger = name_wide.clone();
     let mut logfile = EVENT_TRACE_LOGFILEW {
@@ -237,29 +262,6 @@ pub fn start(name: &str, sink: impl Fn(Event) + Send + Sync + 'static) -> Result
 }
 
 impl Session {
-    /// Also reports the bytes sent and received per process. Separate from
-    /// [`start`] so a machine that cannot do it still gets the process
-    /// events.
-    pub fn enable_network(&mut self) -> Result<()> {
-        // SAFETY: the session handle is valid; the provider id outlives the call.
-        let enabled = unsafe {
-            EnableTraceEx2(
-                self.control,
-                &NETWORK_PROVIDER,
-                EVENT_CONTROL_CODE_ENABLE_PROVIDER.0,
-                TRACE_LEVEL_INFORMATION as u8,
-                KEYWORD_NETWORK,
-                0,
-                0,
-                None,
-            )
-        };
-        if enabled != ERROR_SUCCESS {
-            return Err(error("cannot enable the network events", enabled.0));
-        }
-        Ok(())
-    }
-
     /// Whether the session still delivers: false once the trace thread has
     /// ended (the session was stopped from outside, or the trace failed).
     pub fn alive(&self) -> bool {
@@ -482,7 +484,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let name = format!("kaltstellen-test-{}", std::process::id());
-        let session = match start(&name, move |event| {
+        let session = match start(&name, Provider::Process, move |event| {
             let _ = tx.lock().unwrap().send(event);
         }) {
             Ok(session) => session,
@@ -538,7 +540,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let name = format!("kaltstellen-test-net-{}", std::process::id());
-        let mut session = match start(&name, move |event| {
+        let session = match start(&name, Provider::Network, move |event| {
             if let Event::Network(net) = event {
                 let _ = tx.lock().unwrap().send(net);
             }
@@ -549,10 +551,6 @@ mod tests {
                 return;
             }
         };
-        if let Err(err) = session.enable_network() {
-            eprintln!("skipped: {err}");
-            return;
-        }
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
