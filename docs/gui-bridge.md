@@ -37,6 +37,7 @@ control characters; paths must be absolute.
 | `drop_files` | (files attached, see below) | M2: `.exe` files dropped from Explorer. `data`: `{files: [{exe, path, protection}], refused: [reason]}`. Nothing is added yet: the page adds each file with `add_entry` exactly as after `pick_executable` (warn list asks, hard-protected and duplicates are refused there). Refused here: more than 64 files, an item that is not a file, a name without a full path, a file not on a fixed local disk, a folder, a file that is not `.exe` (also shortcuts), a file that does not exist; a `drop_files` without files. |
 | `drop_done` | `profile`, `added`, `not_added` (reasons) | M2: the summary of a drop becomes the status line. |
 | `running` | | `data`: running programs `{exe, private_bytes, protection}`, largest first. |
+| `compare` | `a`, `b` | H6: `data` is `{rows, meta}`: rows `{exe, path, a, b, difference}` with `difference` one of `only_a`, `only_b`, `action`, `options` or `null` (identical), in the order of A and then what only B has; `a` and `b` are the entries as text (`suspend · no trim`) or `null`; `meta` has `hotkey`, `triggers` and `priority` as `{a, b}` where they differ, else `null`. Reads the configuration only; the page copies or removes entries with `add_entry`, `update_entry` and `remove_entry`. Both profiles must exist. |
 | `unassigned` | `profile` | `data`: `{exe, path, new}` (N1). |
 | `dismiss` | `profile`, `exe` | Hide an unassigned program for this profile. |
 | `apply` | `profile` | Start `kaltstellen switch PROFILE`; the result arrives as the `applied` event. One switch at a time. |
@@ -76,7 +77,6 @@ Requests the helpers of spec section 8 need. Names and fields are a proposal
 | `create_profile_from` | `name`, `entries` | H1: a new profile with these entries in one atomic save; refused as a whole when any entry breaks C1 to C8 or P6. |
 | `add_entries` | `profile`, `entries` | H1 update mode: adds entries for programs without one; refused as a whole like `create_profile_from`. |
 | `preview` | `profile` | H4: `data` is the plan in W1 order with outcomes, predicted problems, totals and the time of the reading. Changes nothing. |
-| `compare` | `a`, `b` | H6: `data` rows `{exe, path, a, b, difference}` and the read-only differences of hotkey, triggers and priority. |
 | `suggestions` | `profile` | H5: `data` the suggestions `{exe, path, action, reason}`. |
 | `suggestion_answer` | `profile`, `exe`, `answer` (`add`, `later`, `never`), `action?` | H5: `add` writes an entry as `add_entry` does. |
 | `templates` | | H7: `data` the templates `{id, name, purpose, rules, found}`; `snapshot` takes `template` (an id) and sets the rows by its rules. |

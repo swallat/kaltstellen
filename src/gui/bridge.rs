@@ -203,6 +203,11 @@ pub enum Request {
         not_added: Vec<String>,
     },
     Running,
+    /// H6: how two profiles differ.
+    Compare {
+        a: String,
+        b: String,
+    },
     Unassigned {
         profile: String,
     },
@@ -311,6 +316,40 @@ pub struct AutomationView {
     /// Set while a running tray did not take the value shown (an older
     /// tray): it keeps its own until it restarts.
     pub note: Option<String>,
+}
+
+/// H6: the comparison as the page gets it.
+fn compare_json(result: &crate::compare::Comparison) -> Value {
+    use crate::compare::Difference;
+    let rows: Vec<Value> = result
+        .rows
+        .iter()
+        .map(|row| {
+            let difference = row.difference.map(|d| match d {
+                Difference::OnlyA => "only_a",
+                Difference::OnlyB => "only_b",
+                Difference::Action => "action",
+                Difference::Options => "options",
+            });
+            json!({
+                "exe": row.exe,
+                "path": row.path,
+                "a": row.a,
+                "b": row.b,
+                "difference": difference,
+            })
+        })
+        .collect();
+    let pair =
+        |value: &Option<(String, String)>| value.as_ref().map(|(a, b)| json!({"a": a, "b": b}));
+    json!({
+        "rows": rows,
+        "meta": {
+            "hotkey": pair(&result.meta.hotkey),
+            "triggers": pair(&result.meta.triggers),
+            "priority": result.meta.priority.map(|(a, b)| json!({"a": a, "b": b})),
+        },
+    })
 }
 
 fn protection_name(exe: &str) -> &'static str {
@@ -936,6 +975,17 @@ impl<H: Host> Bridge<H> {
                     })
                     .collect();
                 Ok(Some(Value::Array(list)))
+            }
+            Request::Compare { a, b } => {
+                check_text(&[&a, &b])?;
+                let config = self.document.config();
+                let find = |name: &str| {
+                    config
+                        .profile(name)
+                        .ok_or_else(|| format!("no profile named \"{}\"", name.trim()))
+                };
+                let (first, second) = (find(&a)?, find(&b)?);
+                Ok(Some(compare_json(&crate::compare::compare(first, second))))
             }
             Request::Unassigned { profile } => {
                 check_text(&[&profile])?;
@@ -1926,6 +1976,36 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn compare_names_the_differences_of_two_profiles() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "create_profile", "name": "flight"}),
+        );
+        send(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "add_entry", "profile": "flight", "exe": "tool.exe", "path": "C:\\tools\\tool.exe"}),
+        );
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 3, "type": "compare", "a": "focus", "b": "flight"}),
+        );
+        assert_eq!(reply["ok"], true);
+        let rows = reply["data"]["rows"].as_array().unwrap();
+        assert_eq!(rows[0]["exe"], "browser.exe");
+        assert_eq!(rows[0]["difference"], "only_a");
+        assert_eq!(rows[1]["exe"], "tool.exe");
+        assert_eq!(rows[1]["difference"], "only_b");
+        assert!(reply["data"]["meta"]["hotkey"].is_null());
+        let unknown = send(
+            &mut b,
+            json!({"v": 1, "id": 4, "type": "compare", "a": "focus", "b": "nope"}),
+        );
+        assert_eq!(unknown["ok"], false);
     }
 
     #[test]
