@@ -248,10 +248,12 @@ Everything else the owner has not decided yet is deferred (below).
 
 ## Decided by the owner on 2026-11-24
 
-- **P1 Icons of paused programs**: no hiding or greying of foreign
+- **N3 Icons of paused programs**: no hiding or greying of foreign
   notification-area icons; the tray menu and the main window list the
-  paused programs instead (spec section 8 "P1", limitation R9). The exact
-  layout is **[assumed]** until the owner has reviewed the mock.
+  paused programs instead (spec section 8 "N3", limitation R9). The exact
+  layout, the new state-file field `frozen_at` and the wording of the hint on
+  choosing `suspend` (owner request, 2026-11-24) are **[assumed]** until the
+  owner has reviewed them.
 
 ## Deferred by the owner on 2026-11-23
 
