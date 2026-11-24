@@ -1549,8 +1549,17 @@ mod tests {
                 background: false,
                 held,
                 first_seen: None,
-                kind: crate::kinds::classify(exe, None, None).kind,
-                source: crate::kinds::classify(exe, None, None).source,
+                kind: crate::kinds::classify(
+                    if exe == "browser.exe" {
+                        "chrome.exe"
+                    } else {
+                        exe
+                    },
+                    None,
+                    None,
+                )
+                .kind,
+                source: crate::kinds::Source::Name,
                 windows: crate::process::WindowInfo {
                     windows: 2,
                     unsaved: exe == "browser.exe",
