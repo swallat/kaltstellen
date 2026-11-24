@@ -165,6 +165,27 @@ impl Document {
         }
     }
 
+    /// H1: a new profile with all `entries` in one edit, so a refused
+    /// entry (C1 to C8) leaves no half-made profile behind.
+    pub fn add_profile_with(&mut self, name: &str, entries: &[NewEntry]) -> Result<(), Error> {
+        let name = checked_name(name)?;
+        self.edit(|doc| {
+            let mut table = Table::new();
+            table.insert("name", value(name.as_str()));
+            push_entries(&mut table, entries)?;
+            profiles_mut(doc)?.push(table);
+            Ok(())
+        })
+    }
+
+    /// H1: adds `entries` to `profile` in one edit; all or none.
+    pub fn add_entries(&mut self, profile: &str, entries: &[NewEntry]) -> Result<(), Error> {
+        self.edit(|doc| {
+            let table = profile_mut(doc, profile)?;
+            push_entries(table, entries)
+        })
+    }
+
     pub fn add_profile(&mut self, name: &str) -> Result<(), Error> {
         let name = checked_name(name)?;
         self.edit(|doc| {
@@ -515,6 +536,36 @@ impl Document {
         self.on_disk = Some(text);
         Ok(())
     }
+}
+
+/// An entry the snapshot dialog (H1) adds: program, optional full path and
+/// the action; `confirmed` only for `stop` and `suspend` (C6, P6).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NewEntry {
+    pub exe: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    pub action: Action,
+    #[serde(default)]
+    pub confirmed: bool,
+}
+
+fn push_entries(profile: &mut Table, entries: &[NewEntry]) -> Result<(), String> {
+    let apps = apps_mut(profile)?;
+    for new in entries {
+        let mut entry = Table::new();
+        entry.insert("exe", value(new.exe.trim()));
+        if let Some(path) = new.path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            entry.insert("path", value(path));
+        }
+        entry.insert("action", value(action_name(new.action)));
+        if new.confirmed && matches!(new.action, Action::Stop | Action::Suspend) {
+            entry.insert("confirmed", value(true));
+        }
+        apps.push(entry);
+    }
+    Ok(())
 }
 
 /// All options of one entry as the main window edits them.

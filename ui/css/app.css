@@ -247,3 +247,11 @@ dialog label { font-weight: 600; font-size: 0.875rem; }
 .diff-tag.only_a { border-color: var(--color-primary); color: var(--color-primary); }
 .diff-tag.only_b { border-color: var(--color-accent); color: var(--color-accent); }
 .table td.diff-cell { text-align: left; white-space: normal; font-size: 0.875rem; }
+
+/* H1: profile from the current state */
+.compare-head { flex-wrap: wrap; }
+label.inline { display: inline-flex; align-items: center; gap: var(--space-1); font-weight: 400; }
+.snap-group h3 { margin: var(--space-3) 0 var(--space-1); font-size: 1rem; }
+#snapshot-groups { max-height: 55vh; }
+#snapshot-name-row { display: grid; gap: var(--space-1); }
+.snap-group th:last-child, .snap-group td:last-child { text-align: left; }

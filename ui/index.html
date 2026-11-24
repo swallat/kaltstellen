@@ -50,6 +50,7 @@
           </div>
           <div class="actions">
             <button type="button" class="button primary" id="apply">Apply profile</button>
+            <button type="button" class="button" id="snapshot-update">Update from the current state…</button>
             <button type="button" class="button" id="preview">Preview…</button>
             <button type="button" class="button" id="compare">Compare…</button>
             <button type="button" class="button" id="rename">Rename</button>
@@ -335,6 +336,44 @@
       <div class="dialog-actions">
         <button type="button" class="button" data-close>Cancel</button>
         <button type="submit" class="button primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="new-dialog" aria-labelledby="new-title">
+    <form method="dialog">
+      <h2 id="new-title">New profile</h2>
+      <p class="hint">Start with nothing, or from the programs that run or are held right now.</p>
+      <div class="dialog-actions">
+        <button type="button" class="button" data-close>Cancel</button>
+        <span class="spacer"></span>
+        <button type="button" class="button" id="new-empty">Empty profile</button>
+        <button type="button" class="button primary" id="new-snapshot">From the current state…</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="snapshot-dialog" class="xwide" aria-labelledby="snapshot-title">
+    <form method="dialog" id="snapshot-form">
+      <h2 id="snapshot-title">From the current state</h2>
+      <div id="snapshot-name-row">
+        <label for="snapshot-name">Name of the new profile</label>
+        <input id="snapshot-name" autocomplete="off" maxlength="200">
+      </div>
+      <p class="hint" id="snapshot-existing" hidden></p>
+      <div class="compare-head">
+        <button type="button" class="button small" id="snapshot-everything">Everything as it is now</button>
+        <button type="button" class="button small" id="snapshot-clear">Clear</button>
+        <button type="button" class="button small" id="snapshot-refresh">Refresh</button>
+        <label class="inline"><input type="checkbox" id="snapshot-background"> Show background programs</label>
+      </div>
+      <div class="scroll" id="snapshot-groups"></div>
+      <p class="hint">Arguments and working folders are not taken: kaltstellen does not read the command lines of running programs. Programs without a known path can only be left as they are.</p>
+      <p class="error" id="snapshot-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button type="button" class="button" data-close>Cancel</button>
+        <span class="spacer"></span>
+        <button type="submit" class="button primary" id="snapshot-ok">Create profile</button>
       </div>
     </form>
   </dialog>

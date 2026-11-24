@@ -239,7 +239,7 @@ fn from_icon_path(path: &str) -> Option<Observed> {
 /// with its `ExecutablePath`) whose executable name is in `running`
 /// (lower case). A registry that cannot be listed is logged, not hidden;
 /// a single entry that cannot be read is skipped.
-fn icon_programs(key: &str, running: &HashSet<String>) -> Vec<Observed> {
+pub(crate) fn icon_programs(key: &str, running: &HashSet<String>) -> Vec<Observed> {
     let names = match registry::subkeys(key) {
         Ok(names) => names,
         Err(err) => {

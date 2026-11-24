@@ -41,6 +41,7 @@ pub mod process;
 pub mod program_info;
 pub mod protection;
 pub mod settings;
+pub mod snapshot;
 pub mod state;
 pub mod tray;
 pub mod unassigned;
