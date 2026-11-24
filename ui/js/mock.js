@@ -36,6 +36,7 @@ const state = {
   autostart: false,
   automation: { on: true, triggers: true, note: null },
   learn: true,
+  notify_new: true,
   applying: false,
   status: 'Mock backend: nothing is saved.',
   update: {
@@ -89,7 +90,7 @@ const running = [
 const neverSuggested = new Set();
 const unassigned = {
   'Flight': [
-    { exe: 'game-launcher.exe', path: 'C:\\Games\\Launcher\\game-launcher.exe', new: true },
+    { exe: 'game-launcher.exe', path: 'C:\\Games\\Launcher\\game-launcher.exe', new: true, started: true },
     { exe: 'notes.exe', path: null, new: false, tray: true },
   ],
 };
@@ -442,6 +443,10 @@ function handle(message) {
     }
     case 'suggestion_done':
       if (m.never) neverSuggested.add(m.exe);
+      return { ok: true };
+    case 'set_notify_new':
+      state.notify_new = !!m.on;
+      state.status = state.notify_new ? 'New programs are announced while a profile is active.' : 'New programs are no longer announced.';
       return { ok: true };
     case 'set_learn':
       state.learn = !!m.on;

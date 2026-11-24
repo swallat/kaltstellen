@@ -45,6 +45,9 @@ pub trait Host {
     /// H5: `Suggestions from use` is on.
     fn learning(&self) -> bool;
     fn set_learning(&self, on: bool) -> Result<(), String>;
+    /// H9: tell when a program without an entry starts.
+    fn notifying_new(&self) -> bool;
+    fn set_notifying_new(&self, on: bool) -> Result<(), String>;
     /// H5: the suggestions for `profile`.
     fn suggestions(&self, config: &Config, profile: &str) -> Vec<crate::usage::Suggestion>;
     /// H5: `Add entry` (counters reset) or `Never for this program`.
@@ -289,6 +292,10 @@ pub enum Request {
     SetLearn {
         on: bool,
     },
+    /// H9: announcing new programs on or off.
+    SetNotifyNew {
+        on: bool,
+    },
     /// H5: delete what was learned.
     ForgetLearned,
     Apply {
@@ -390,6 +397,8 @@ pub struct StateView {
     pub automation: AutomationView,
     /// H5: `Suggestions from use`.
     pub learn: bool,
+    /// H9: `Tell me about new programs`.
+    pub notify_new: bool,
     pub applying: bool,
     pub status: String,
     pub update: UpdateInfo,
@@ -774,6 +783,7 @@ impl<H: Host> Bridge<H> {
                 triggers: config.profiles.iter().any(|p| !p.triggers.is_empty()),
             },
             learn: self.host.learning(),
+            notify_new: self.host.notifying_new(),
             applying: self.applying,
             status: self.status.clone(),
             update: UpdateInfo {
@@ -1331,6 +1341,7 @@ impl<H: Host> Bridge<H> {
                     .iter()
                     .map(|u| {
                         json!({"exe": u.exe, "path": u.path, "new": u.new,
+                            "started": u.started,
                             "tray": tray.contains(&u.exe.to_lowercase())})
                     })
                     .collect();
@@ -1384,6 +1395,16 @@ impl<H: Host> Bridge<H> {
                     "Suggestions from use are on."
                 } else {
                     "Suggestions from use are off; nothing is recorded."
+                }
+                .to_owned();
+                Ok(None)
+            }
+            Request::SetNotifyNew { on } => {
+                self.host.set_notifying_new(on)?;
+                self.status = if on {
+                    "New programs are announced while a profile is active."
+                } else {
+                    "New programs are no longer announced."
                 }
                 .to_owned();
                 Ok(None)
@@ -1670,6 +1691,8 @@ mod tests {
         samples: Rc<std::cell::Cell<u64>>,
         /// H5: `Suggestions from use`.
         learn: Rc<std::cell::Cell<bool>>,
+        /// H9: `Tell me about new programs`.
+        notify_new: Rc<std::cell::Cell<bool>>,
         /// H5: `suggestion_done` and `forget_learned` calls.
         done: Rc<RefCell<Vec<String>>>,
     }
@@ -1805,6 +1828,7 @@ mod tests {
                 exe: format!("{profile}-x.exe"),
                 path: None,
                 new: true,
+                started: false,
             }]
         }
         fn dismiss(&self, profile: &str, exe: &str) -> Result<(), String> {
@@ -1839,6 +1863,13 @@ mod tests {
         }
         fn learning(&self) -> bool {
             self.learn.get()
+        }
+        fn notifying_new(&self) -> bool {
+            self.notify_new.get()
+        }
+        fn set_notifying_new(&self, on: bool) -> Result<(), String> {
+            self.notify_new.set(on);
+            Ok(())
         }
         fn set_learning(&self, on: bool) -> Result<(), String> {
             self.learn.set(on);
@@ -2257,6 +2288,27 @@ mod tests {
 
     fn send(b: &mut Bridge<Fake>, message: Value) -> Value {
         serde_json::from_str(&b.handle(&message.to_string())).unwrap()
+    }
+
+    #[test]
+    fn h9_announcing_new_programs_switches_and_started_is_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, fake) = bridge(&dir);
+        fake.notify_new.set(true);
+        let state = send(&mut b, json!({"v": 1, "id": 1, "type": "get_state"}));
+        assert_eq!(state["state"]["notify_new"], true);
+        let off = send(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "set_notify_new", "on": false}),
+        );
+        assert_eq!(off["ok"], true, "{off}");
+        assert_eq!(off["state"]["notify_new"], false);
+        assert!(!fake.notify_new.get());
+        let list = send(
+            &mut b,
+            json!({"v": 1, "id": 3, "type": "unassigned", "profile": "focus"}),
+        );
+        assert_eq!(list["data"][0]["started"], false);
     }
 
     #[test]

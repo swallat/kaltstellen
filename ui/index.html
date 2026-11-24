@@ -112,6 +112,7 @@
           <button type="button" class="button small" id="refresh-unassigned">Refresh</button>
         </div>
         <p class="hint">Running programs without an entry in this profile.</p>
+        <p class="hint started-note" id="unassigned-started" role="status" hidden></p>
         <table class="table" id="unassigned">
           <caption class="visually-hidden">Unassigned programs</caption>
           <thead><tr><th scope="col">Program</th><th scope="col">Seen</th><th scope="col"><span class="visually-hidden">Commands</span></th></tr></thead>
@@ -146,6 +147,11 @@
                 <div><label class="label" for="automation-setting">Automatic switching</label>
                   <p class="hint" id="automation-setting-hint">Applies a profile when one of its trigger programs starts, and goes back when the last one has ended. Off pauses all triggers.</p></div>
                 <input type="checkbox" class="switch" id="automation-setting" role="switch" aria-describedby="automation-setting-hint">
+              </div>
+              <div class="row" id="notify-new-row">
+                <div><label class="label" for="notify-new-setting">Tell me about new programs</label>
+                  <p class="hint" id="notify-new-setting-hint">While a profile is active, shows a notification when a program without an entry in it starts and keeps running, and points at it in this window. Needs the optional helper (process events); without it nothing is announced. Only the name and folder of the program are used.</p></div>
+                <input type="checkbox" class="switch" id="notify-new-setting" role="switch" aria-describedby="notify-new-setting-hint">
               </div>
               <div class="row" id="learn-row">
                 <div><label class="label" for="learn-setting">Suggestions from use</label>

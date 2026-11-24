@@ -57,7 +57,15 @@ pub struct Seen {
     /// Per profile (lower case), the executables (lower case) dismissed.
     #[serde(default)]
     pub dismissed: BTreeMap<String, BTreeSet<String>>,
+    /// Per profile (lower case), the programs that started while it was
+    /// active and have no entry in it (the tray notes them from the helper's
+    /// process events); cleared when the profile is applied again.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub started: BTreeMap<String, Vec<SeenProgram>>,
 }
+
+/// At most this many started programs are kept per profile.
+pub const STARTED_MAX: usize = 50;
 
 /// One unassigned program of a profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +74,8 @@ pub struct Unassigned {
     pub path: Option<String>,
     /// First seen after the profile last changed.
     pub new: bool,
+    /// Started while the profile was active (the helper reported it).
+    pub started: bool,
 }
 
 impl Unassigned {
@@ -129,6 +139,26 @@ impl Seen {
         }
     }
 
+    /// Notes that `exe` started while `profile` was active. `false` when it
+    /// was noted before or the list is full.
+    pub fn note_started(&mut self, profile: &str, exe: &str, path: Option<&str>, now: u64) -> bool {
+        let list = self.started.entry(profile.to_lowercase()).or_default();
+        if list.iter().any(|p| p.exe.eq_ignore_ascii_case(exe)) || list.len() >= STARTED_MAX {
+            return false;
+        }
+        list.push(SeenProgram {
+            exe: exe.to_owned(),
+            path: path.map(str::to_owned),
+            first_seen: now,
+        });
+        true
+    }
+
+    /// Forgets what started in `profile`; `true` when there was something.
+    pub fn clear_started(&mut self, profile: &str) -> bool {
+        self.started.remove(&profile.to_lowercase()).is_some()
+    }
+
     pub fn dismiss(&mut self, profile: &str, exe: &str) {
         self.dismissed
             .entry(profile.to_lowercase())
@@ -156,6 +186,7 @@ impl Seen {
             .profiles
             .get(&entries.name.to_lowercase())
             .map_or(0, |s| s.changed);
+        let started = self.started.get(&entries.name.to_lowercase());
         let mut list: Vec<Unassigned> = Vec::new();
         for program in observed {
             let key = program.exe.to_lowercase();
@@ -172,15 +203,37 @@ impl Seen {
                 .iter()
                 .find(|p| p.exe.eq_ignore_ascii_case(&program.exe))
                 .map_or(0, |p| p.first_seen);
+            let started =
+                started.is_some_and(|l| l.iter().any(|p| p.exe.eq_ignore_ascii_case(&program.exe)));
             list.push(Unassigned {
                 exe: program.exe.clone(),
                 path: program.path.clone(),
                 new: first_seen > changed,
+                started,
+            });
+        }
+        // What started may have ended or have no window: still listed.
+        for program in started.into_iter().flatten() {
+            let key = program.exe.to_lowercase();
+            if decided.contains(&key)
+                || dismissed.is_some_and(|d| d.contains(&key))
+                || list
+                    .iter()
+                    .any(|u| u.exe.eq_ignore_ascii_case(&program.exe))
+            {
+                continue;
+            }
+            list.push(Unassigned {
+                exe: program.exe.clone(),
+                path: program.path.clone(),
+                new: false,
+                started: true,
             });
         }
         list.sort_by(|a, b| {
-            b.new
-                .cmp(&a.new)
+            b.started
+                .cmp(&a.started)
+                .then(b.new.cmp(&a.new))
                 .then(a.exe.to_lowercase().cmp(&b.exe.to_lowercase()))
         });
         list
@@ -324,6 +377,35 @@ pub fn refresh_with(
     seen.unassigned(config, profile, observed)
 }
 
+/// Notes started programs of `profile` in `seen.json` of `data_dir`;
+/// returns those that were not noted before.
+pub fn note_started(
+    data_dir: &Path,
+    profile: &str,
+    programs: &[(String, Option<String>)],
+    now: u64,
+) -> Result<Vec<String>> {
+    let (mut seen, _) = load(data_dir);
+    let fresh: Vec<String> = programs
+        .iter()
+        .filter(|(exe, path)| seen.note_started(profile, exe, path.as_deref(), now))
+        .map(|(exe, _)| exe.clone())
+        .collect();
+    if !fresh.is_empty() {
+        save(data_dir, &seen)?;
+    }
+    Ok(fresh)
+}
+
+/// Forgets the started programs of `profile` (it is applied again).
+pub fn clear_started(data_dir: &Path, profile: &str) -> Result<()> {
+    let (mut seen, _) = load(data_dir);
+    if seen.clear_started(profile) {
+        save(data_dir, &seen)?;
+    }
+    Ok(())
+}
+
 /// Dismisses `exe` for `profile` in `seen.json` of `data_dir`.
 pub fn dismiss(data_dir: &Path, profile: &str, exe: &str) -> Result<()> {
     let (mut seen, _) = load(data_dir);
@@ -370,7 +452,8 @@ mod tests {
             vec![Unassigned {
                 exe: "chat.exe".into(),
                 path: None,
-                new: false
+                new: false,
+                started: false
             }]
         );
         // Appears later: new.
@@ -386,7 +469,8 @@ mod tests {
             Unassigned {
                 exe: "Game.exe".into(),
                 path: None,
-                new: true
+                new: true,
+                started: false
             }
         );
         assert!(!list[1].new);
@@ -404,11 +488,55 @@ mod tests {
             vec![Unassigned {
                 exe: "game.exe".into(),
                 path: None,
-                new: false
+                new: false,
+                started: false
             }],
             "the profile changed after game.exe was first seen"
         );
         assert!(refresh_with(dir.path(), &c2, "neutral", &observed(&["x.exe"]), 300).is_empty());
+    }
+
+    #[test]
+    fn started_programs_come_first_stay_listed_and_are_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = config(ONE);
+        let noted = note_started(
+            dir.path(),
+            "Focus",
+            &[
+                ("chat.exe".to_owned(), Some("C:\\Apps\\chat.exe".to_owned())),
+                ("gone.exe".to_owned(), None),
+                ("browser.exe".to_owned(), None),
+            ],
+            50,
+        )
+        .unwrap();
+        assert_eq!(noted, ["chat.exe", "gone.exe", "browser.exe"]);
+        // Noted before: not reported again.
+        let again =
+            note_started(dir.path(), "focus", &[("CHAT.exe".to_owned(), None)], 60).unwrap();
+        assert!(again.is_empty());
+        // chat.exe runs, gone.exe does not; browser.exe has an entry.
+        let list = refresh_with(
+            dir.path(),
+            &c,
+            "focus",
+            &observed(&["alpha.exe", "chat.exe"]),
+            100,
+        );
+        let names: Vec<(&str, bool)> = list.iter().map(|u| (u.exe.as_str(), u.started)).collect();
+        assert_eq!(
+            names,
+            [("chat.exe", true), ("gone.exe", true), ("alpha.exe", false)],
+            "started first, also the one that is not running; entries decide"
+        );
+        // Another profile has none of it.
+        assert!(note_started(dir.path(), "other", &[("chat.exe".to_owned(), None)], 70).is_ok());
+        clear_started(dir.path(), "focus").unwrap();
+        let list = refresh_with(dir.path(), &c, "focus", &observed(&["chat.exe"]), 120);
+        assert!(list.iter().all(|u| !u.started));
+        let (seen, _) = load(dir.path());
+        assert!(seen.started.contains_key("other"), "only focus was cleared");
     }
 
     #[test]

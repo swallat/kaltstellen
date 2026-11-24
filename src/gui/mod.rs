@@ -427,6 +427,15 @@ impl Host for RealHost {
         crate::settings::edit(&dir, |s| s.learn = Some(on)).map_err(|e| e.to_string())
     }
 
+    fn notifying_new(&self) -> bool {
+        paths::config_dir().is_none_or(|dir| crate::settings::load(&dir).0.notifying_new())
+    }
+
+    fn set_notifying_new(&self, on: bool) -> Result<(), String> {
+        let dir = paths::config_dir().ok_or("the configuration folder is not known")?;
+        crate::settings::edit(&dir, |s| s.notify_new = Some(on)).map_err(|e| e.to_string())
+    }
+
     fn suggestions(&self, config: &Config, profile: &str) -> Vec<crate::usage::Suggestion> {
         let (usage, problem) = crate::usage::load(&self.data);
         if let Some(problem) = problem {

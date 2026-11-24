@@ -32,12 +32,21 @@ pub struct Settings {
     /// H5: `Suggestions from use`; absent means on, `false` records nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub learn: Option<bool>,
+    /// H9: tell when a program without an entry starts while a profile is
+    /// active (needs the helper's process events); absent means on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_new: Option<bool>,
 }
 
 impl Settings {
     /// Whether suggestions from use are recorded (H5, default on).
     pub fn learning(&self) -> bool {
         self.learn.unwrap_or(true)
+    }
+
+    /// Whether new programs are announced (H9, default on).
+    pub fn notifying_new(&self) -> bool {
+        self.notify_new.unwrap_or(true)
     }
 }
 
@@ -159,6 +168,7 @@ mod tests {
             autostart_asked: true,
             triggers_paused: true,
             learn: Some(false),
+            notify_new: Some(false),
         };
         save(&dir.path().join("nested"), &settings, BUSY).unwrap();
         assert_eq!(load(&dir.path().join("nested")), (settings, None));

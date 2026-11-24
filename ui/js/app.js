@@ -95,6 +95,7 @@ function render() {
   $('automation-hint').textContent = hint;
   $('automation-setting-hint').textContent = hint || AUTOMATION_HELP;
   $('learn-setting').checked = state.learn !== false;
+  $('notify-new-setting').checked = state.notify_new !== false;
   if (localStatus) setStatus(localStatus.text, localStatus.isError);
   else setStatus(state.status);
   renderUpdate();
@@ -653,6 +654,9 @@ $('learn-setting').addEventListener('change', async (event) => {
   await call('set_learn', { on: event.target.checked });
   await loadSuggestions();
 });
+$('notify-new-setting').addEventListener('change', async (event) => {
+  await call('set_notify_new', { on: event.target.checked });
+});
 $('forget-learned').addEventListener('click', async () => {
   if (await confirmDialog('Forget what was learned', 'Delete the counters behind the suggestions? Entries you added stay.', 'Forget')) {
     await call('forget_learned');
@@ -747,7 +751,7 @@ function renderUnassigned() {
   const rows = unassigned.map((u) => el('tr', {},
     el('td', {}, el('div', { class: 'program' }, programIcon(u.exe, null),
       el('span', { class: 'names' }, el('span', { class: 'exe', text: u.exe }), u.tray ? trayTag() : null, programAbout(u.exe, null), u.path ? el('span', { class: 'path', text: u.path }) : null))),
-    el('td', {}, u.new ? el('span', { class: 'tag new', text: 'new' }) : 'earlier'),
+    el('td', {}, u.started ? el('span', { class: 'tag new', title: 'Started while this profile was active', text: 'started' }) : u.new ? el('span', { class: 'tag new', text: 'new' }) : 'earlier'),
     el('td', {},
       el('button', { type: 'button', class: 'button small', 'aria-label': `Add ${u.exe}`, onclick: () => addProgram(u.exe, null), text: 'Add' }),
       el('button', { type: 'button', class: 'button small', 'aria-label': `Dismiss ${u.exe}`, onclick: () => dismiss(u.exe), text: 'Dismiss' }))));
@@ -756,6 +760,9 @@ function renderUnassigned() {
   loadAbout($('unassigned'));
   $('unassigned').hidden = rows.length === 0;
   $('unassigned-empty').hidden = rows.length !== 0;
+  const started = unassigned.filter((u) => u.started).length;
+  $('unassigned-started').hidden = started === 0;
+  $('unassigned-started').textContent = `${started} ${started === 1 ? 'program' : 'programs'} started while this profile was active and ${started === 1 ? 'has' : 'have'} no entry. Add or dismiss ${started === 1 ? 'it' : 'them'}.`;
 }
 
 async function loadUnassigned() {

@@ -109,6 +109,12 @@ impl Automation {
         }
     }
 
+    /// Nothing runs, nothing is held and no profile is owned: a poll
+    /// without triggers in the file has nothing to end.
+    pub fn idle(&self) -> bool {
+        self.running.is_empty() && self.owner.is_none() && !self.held
+    }
+
     pub fn paused(&self) -> bool {
         self.paused
     }
