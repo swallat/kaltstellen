@@ -269,7 +269,7 @@ function handle(message) {
       const row = (exe, extra = {}) => ({
         exe, path: `C:\\Apps\\${exe}`, private_bytes: 0, protection: protectionOf(exe),
         elevated: false, background: false, held: null, first_seen: null,
-        kind: { label: 'a browser', known: exe === 'browser.exe', source: 'name' },
+        kind: { id: exe === 'browser.exe' ? 'browser' : 'unknown', label: 'a browser', known: exe === 'browser.exe', source: 'name' },
         suggestion: exe === 'browser.exe' || exe === 'mail.exe' ? { action: 'suspend', reason: 'state and sign-in stay, nothing is lost; notifications wait' } : null,
         windows: { count: exe === 'browser.exe' ? 3 : 1, dialog: exe === 'mail.exe', unsaved: exe === 'browser.exe', hung: false },
         ...extra,
@@ -337,6 +337,15 @@ function handle(message) {
       const sum = items.filter((i) => i.outcome === 'will' && i.step !== 'start').reduce((n, i) => n + i.private_bytes, 0);
       return { ok: true, data: { profile: p.name, items, problems: [], private_bytes: sum } };
     }
+    case 'templates':
+      return { ok: true, data: [
+        { id: 'focus', name: 'Focus', purpose: 'Quiet for work: nothing chimes, nothing updates, the browser stays.', rules: [
+          { kind: 'chat', label: 'chat programs', action: 'suspend' }, { kind: 'mail', label: 'mail programs', action: 'suspend' },
+          { kind: 'updater', label: 'updaters and helpers', action: 'stop' }, { kind: 'browser', label: 'browsers', action: 'ignore' }] },
+        { id: 'gaming', name: 'Gaming', purpose: 'Memory and processor for the game: what runs beside it waits.', rules: [
+          { kind: 'browser', label: 'browsers', action: 'suspend' }, { kind: 'mail', label: 'mail programs', action: 'suspend' },
+          { kind: 'launcher', label: 'launchers and store clients', action: 'ignore' }] },
+      ] };
     case 'compare': {
       const a = state.profiles.find((p) => p.name.toLowerCase() === String(m.a).toLowerCase());
       const b = state.profiles.find((p) => p.name.toLowerCase() === String(m.b).toLowerCase());

@@ -366,7 +366,20 @@
         <button type="button" class="button" data-close>Cancel</button>
         <span class="spacer"></span>
         <button type="button" class="button" id="new-empty">Empty profile</button>
+        <button type="button" class="button" id="new-template">From a template…</button>
         <button type="button" class="button primary" id="new-snapshot">From the current state…</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="template-dialog" class="wide" aria-labelledby="template-title">
+    <form method="dialog">
+      <h2 id="template-title">New profile from a template</h2>
+      <p class="hint">A template sets actions by kind of program, for the programs found on this computer. You check and change every row before anything is created. It sets no hotkey, no triggers and starts nothing.</p>
+      <div id="template-list"></div>
+      <p class="error" id="template-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button type="button" class="button" data-close>Cancel</button>
       </div>
     </form>
   </dialog>

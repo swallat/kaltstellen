@@ -229,6 +229,8 @@ pub enum Request {
         a: String,
         b: String,
     },
+    /// H7: the shipped templates.
+    Templates,
     /// H1: the three groups of the current state.
     Snapshot {
         /// `new` or `update`.
@@ -451,6 +453,7 @@ fn groups_json(groups: &crate::snapshot::Groups) -> Value {
                     "held": r.held.map(action_name),
                     "first_seen": r.first_seen,
                     "kind": {
+                        "id": r.kind.id(),
                         "label": r.kind.label(),
                         "known": r.kind != crate::kinds::Kind::Unknown,
                         "source": match r.source {
@@ -1175,6 +1178,23 @@ impl<H: Host> Bridge<H> {
                 let (first, second) = (find(&a)?, find(&b)?);
                 Ok(Some(compare_json(&crate::compare::compare(first, second))))
             }
+            Request::Templates => Ok(Some(Value::Array(
+                crate::templates::TEMPLATES
+                    .iter()
+                    .map(|t| {
+                        json!({
+                            "id": t.id,
+                            "name": t.name,
+                            "purpose": t.purpose,
+                            "rules": t.rules.iter().map(|(kind, action)| json!({
+                                "kind": kind.id(),
+                                "label": kind.plural(),
+                                "action": action_name(*action),
+                            })).collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect(),
+            ))),
             Request::Snapshot { mode, profile } => {
                 let entries = match mode.as_str() {
                     "new" => Vec::new(),
@@ -2473,6 +2493,31 @@ mod tests {
     }
 
     #[test]
+    fn h7_templates_are_listed_with_rules_by_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        let reply = send(&mut b, json!({"v": 1, "id": 1, "type": "templates"}));
+        assert_eq!(reply["ok"], true);
+        let list = reply["data"].as_array().unwrap();
+        assert_eq!(list.len(), crate::templates::TEMPLATES.len());
+        let focus = &list[0];
+        assert_eq!(focus["id"], "focus");
+        let chat = focus["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"] == "chat")
+            .unwrap();
+        assert_eq!(chat["action"], "suspend");
+        assert!(chat["label"].as_str().unwrap().contains("chat"));
+        assert!(
+            list.iter()
+                .flat_map(|t| t["rules"].as_array().unwrap())
+                .all(|r| r["action"] != "start")
+        );
+    }
+
+    #[test]
     fn compare_names_the_differences_of_two_profiles() {
         let dir = tempfile::tempdir().unwrap();
         let (mut b, _) = bridge(&dir);
@@ -2515,6 +2560,7 @@ mod tests {
         assert_eq!(reply["data"]["running"][1]["protection"], "warn");
         let browser = &reply["data"]["running"][0];
         assert_eq!(browser["kind"]["label"], "a browser");
+        assert_eq!(browser["kind"]["id"], "browser");
         assert_eq!(browser["suggestion"]["action"], "suspend");
         assert_eq!(browser["windows"]["count"], 2);
         assert_eq!(browser["windows"]["unsaved"], true);
