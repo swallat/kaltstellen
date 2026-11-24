@@ -34,10 +34,10 @@ pub fn command_line(exe: &Path) -> String {
 /// data folder with its access list, policy file, service. Needs an
 /// elevated process.
 pub fn install(owner_sid: &str) -> Result<()> {
-    if !super::valid_sid(owner_sid) {
+    if !super::valid_owner(owner_sid) {
         return Err(Error::new(
             Code::HelperService,
-            format!("{owner_sid:?} is not a SID"),
+            format!("{owner_sid:?} is not the SID of one user account"),
         ));
     }
     if !service::is_elevated() {
@@ -46,22 +46,38 @@ pub fn install(owner_sid: &str) -> Result<()> {
             "installing the helper needs an elevated process",
         ));
     }
-    let program =
-        program_dir().ok_or_else(|| Error::new(Code::HelperService, "ProgramFiles is not set"))?;
+    let program = program_dir()
+        .ok_or_else(|| Error::new(Code::HelperService, "ProgramFiles is not known"))?;
     let data =
-        data_dir().ok_or_else(|| Error::new(Code::HelperService, "ProgramData is not set"))?;
-    let source = std::env::current_exe()
-        .map_err(|e| Error::new(Code::HelperService, format!("own path: {e}")))?;
+        data_dir().ok_or_else(|| Error::new(Code::HelperService, "ProgramData is not known"))?;
+    // The source is where the running image is now, not the path it was
+    // started from: a file put at that path meanwhile is not what runs.
+    let source = service::running_image()?;
     let target = program.join(EXE_NAME);
 
+    // Any user can create a folder in ProgramData first and would keep the
+    // right to change its access list. Use only folders that SYSTEM or the
+    // administrators own.
+    for dir in [&program, &data] {
+        if dir.exists() && !service::folder_is_trusted(dir)? {
+            return Err(Error::new(
+                Code::HelperService,
+                format!(
+                    "{} exists but is not owned by SYSTEM or the administrators (or is a link); remove it as an administrator and install again",
+                    dir.display()
+                ),
+            ));
+        }
+    }
     fs::create_dir_all(&program).map_err(|e| io_error("cannot create", &program, e))?;
     fs::create_dir_all(&data).map_err(|e| io_error("cannot create", &data, e))?;
-    service::protect_data_dir(&data, owner_sid)?;
-    write_policy(owner_sid)?;
 
-    // A running service holds its file: stop it first, copy, start it again.
+    // A running service holds its file: stop it first, copy, then set the
+    // rest up and start it again.
     service::stop(SERVICE_NAME)?;
     copy_exe(&source, &target)?;
+    service::protect_data_dir(&data, owner_sid)?;
+    write_policy(owner_sid)?;
     service::install(
         SERVICE_NAME,
         "kaltstellen background helper",
@@ -74,7 +90,8 @@ pub fn install(owner_sid: &str) -> Result<()> {
 }
 
 /// Writes `helper.toml`: a new one, or the existing one with the owner
-/// updated (roles and allow lists the administrator set stay).
+/// updated (roles and allow lists the administrator set stay; the folder
+/// was checked to be trusted before).
 fn write_policy(owner_sid: &str) -> Result<()> {
     let path = policy_file().ok_or_else(|| Error::new(Code::HelperService, "no data folder"))?;
     let policy = match Policy::read(&path) {
@@ -87,18 +104,47 @@ fn write_policy(owner_sid: &str) -> Result<()> {
     fs::write(&path, policy.to_toml()).map_err(|e| io_error("cannot write", &path, e))
 }
 
-/// Puts `source` at `target` through a temporary file, so a failure leaves
-/// the old copy. Nothing to do when they are the same file.
+/// Puts `source` at `target` through a temporary file in the same folder,
+/// so a failure leaves the old copy. The source is opened once and held
+/// against writers while it is read, and what was written is read back and
+/// compared. Nothing to do when they are the same file.
 fn copy_exe(source: &Path, target: &Path) -> Result<()> {
+    use std::io::{Read, Write};
+    use std::os::windows::fs::OpenOptionsExt;
     if let (Ok(a), Ok(b)) = (fs::canonicalize(source), fs::canonicalize(target))
         && a == b
     {
         return Ok(());
     }
+    const FILE_SHARE_READ: u32 = 1;
+    let mut input = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(source)
+        .map_err(|e| io_error("cannot open", source, e))?;
     let temporary = target.with_extension("exe.new");
     let _ = fs::remove_file(&temporary);
-    fs::copy(source, &temporary).map_err(|e| io_error("cannot copy to", &temporary, e))?;
-    let wanted = fs::metadata(source)
+    let mut write = || -> std::io::Result<()> {
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        let mut buffer = vec![0u8; 256 * 1024];
+        loop {
+            let read = input.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            output.write_all(&buffer[..read])?;
+        }
+        output.sync_all()
+    };
+    if let Err(e) = write() {
+        let _ = fs::remove_file(&temporary);
+        return Err(io_error("cannot copy to", &temporary, e));
+    }
+    let wanted = input
+        .metadata()
         .map_err(|e| io_error("cannot read", source, e))?
         .len();
     let got = fs::metadata(&temporary)
@@ -111,8 +157,12 @@ fn copy_exe(source: &Path, target: &Path) -> Result<()> {
             format!("the copy has {got} bytes, expected {wanted}"),
         ));
     }
-    let _ = fs::remove_file(target);
-    fs::rename(&temporary, target).map_err(|e| io_error("cannot put in place", target, e))
+    // One step that replaces the old file, so there is never a moment
+    // without a file at the registered path.
+    fs::rename(&temporary, target).map_err(|e| {
+        let _ = fs::remove_file(&temporary);
+        io_error("cannot put in place", target, e)
+    })
 }
 
 /// Stops and removes the service and the files the install made. Needs an

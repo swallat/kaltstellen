@@ -24,6 +24,15 @@ const MAX_CLIENTS: usize = 8;
 /// How long one conversation may take.
 const DEADLINE: Duration = Duration::from_secs(5);
 
+/// One of the client slots; given back on drop.
+struct Slot(Arc<AtomicUsize>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// A pipe connection read through a buffer and written directly.
 struct Duplex {
     reader: BufReader<File>,
@@ -78,8 +87,20 @@ pub fn main() -> u8 {
 fn serve(stop: Stop) -> Result<()> {
     let path = policy_file().ok_or_else(|| Error::new(Code::HelperPolicy, "no data folder"))?;
     let policy = policy::Policy::read(&path)?;
-    let mut listener = Listener::bind_for(PIPE_NAME, &policy.owner_sid)
-        .map_err(|e| Error::new(Code::HelperService, e.reason))?;
+    // The pipe's name can be taken by any local user before the delayed
+    // start; try again for a while before giving up.
+    let mut attempt = 0;
+    let mut listener = loop {
+        match Listener::bind_for(PIPE_NAME, &policy.owner_sid) {
+            Ok(listener) => break listener,
+            Err(err) if attempt < 12 && !stop.is_set() => {
+                attempt += 1;
+                warn!("{err}; trying again in 5 s");
+                std::thread::sleep(Duration::from_secs(5));
+            }
+            Err(err) => return Err(Error::new(Code::HelperService, err.reason)),
+        }
+    };
     info!(
         "helper {} serves {} (observe {}, act {}, services {}; none implemented yet)",
         version(),
@@ -118,11 +139,13 @@ fn serve(stop: Stop) -> Result<()> {
                 }
                 let context = Arc::clone(&context);
                 let active = Arc::clone(&active);
+                // The slot is given back when the thread ends, however it ends.
+                let slot = Slot(active);
                 let spawned = std::thread::Builder::new()
                     .name("helper client".to_owned())
                     .spawn(move || {
+                        let _slot = slot;
                         handle(conn, &context);
-                        active.fetch_sub(1, Ordering::SeqCst);
                     });
                 if let Err(err) = spawned {
                     error!("cannot start a client thread: {err}");
@@ -135,6 +158,7 @@ fn serve(stop: Stop) -> Result<()> {
                 format!("cannot start the pipe thread: {e}"),
             )
         })?;
+    stop.running();
     stop.wait();
     info!("helper stopping");
     // Wake the accept loop, which sees the stop flag and ends.

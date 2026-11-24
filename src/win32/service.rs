@@ -6,14 +6,15 @@
 //! decided by safe code in [`crate::helper`].
 
 use std::ffi::c_void;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_CANCELLED, ERROR_SERVICE_DOES_NOT_EXIST, ERROR_SERVICE_NOT_ACTIVE, HANDLE,
-    HLOCAL, LocalFree, WAIT_OBJECT_0,
+    CloseHandle, ERROR_CANCELLED, ERROR_FAILED_SERVICE_CONTROLLER_CONNECT,
+    ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_CANNOT_ACCEPT_CTRL, ERROR_SERVICE_DOES_NOT_EXIST,
+    ERROR_SERVICE_NOT_ACTIVE, HANDLE, HLOCAL, LocalFree, WAIT_OBJECT_0,
 };
 use windows::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SE_FILE_OBJECT,
@@ -28,14 +29,16 @@ use windows::Win32::System::Services::{
     ChangeServiceConfig2W, ChangeServiceConfigW, CloseServiceHandle, ControlService,
     CreateServiceW, DeleteService, OpenSCManagerW, OpenServiceW, QueryServiceStatusEx,
     RegisterServiceCtrlHandlerExW, SC_ACTION, SC_ACTION_RESTART, SC_HANDLE, SC_MANAGER_ALL_ACCESS,
-    SC_STATUS_PROCESS_INFO, SERVICE_ACCEPT_SHUTDOWN, SERVICE_ACCEPT_STOP, SERVICE_ALL_ACCESS,
-    SERVICE_AUTO_START, SERVICE_CONFIG_DELAYED_AUTO_START_INFO, SERVICE_CONFIG_DESCRIPTION,
-    SERVICE_CONFIG_FAILURE_ACTIONS, SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO,
+    SC_MANAGER_CONNECT, SC_STATUS_PROCESS_INFO, SERVICE_ACCEPT_SHUTDOWN, SERVICE_ACCEPT_STOP,
+    SERVICE_ALL_ACCESS, SERVICE_AUTO_START, SERVICE_CONFIG_DELAYED_AUTO_START_INFO,
+    SERVICE_CONFIG_DESCRIPTION, SERVICE_CONFIG_FAILURE_ACTIONS,
+    SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO,
     SERVICE_CONTROL_INTERROGATE, SERVICE_CONTROL_SHUTDOWN, SERVICE_CONTROL_STOP,
     SERVICE_DELAYED_AUTO_START_INFO, SERVICE_DESCRIPTIONW, SERVICE_ERROR_NORMAL,
-    SERVICE_FAILURE_ACTIONSW, SERVICE_NO_CHANGE, SERVICE_REQUIRED_PRIVILEGES_INFOW,
-    SERVICE_RUNNING, SERVICE_START_PENDING, SERVICE_STATUS, SERVICE_STATUS_CURRENT_STATE,
-    SERVICE_STATUS_HANDLE, SERVICE_STATUS_PROCESS, SERVICE_STOP_PENDING, SERVICE_STOPPED,
+    SERVICE_FAILURE_ACTIONS_FLAG, SERVICE_FAILURE_ACTIONSW, SERVICE_NO_CHANGE,
+    SERVICE_QUERY_STATUS, SERVICE_REQUIRED_PRIVILEGES_INFOW, SERVICE_RUNNING,
+    SERVICE_START_PENDING, SERVICE_STATUS, SERVICE_STATUS_CURRENT_STATE, SERVICE_STATUS_HANDLE,
+    SERVICE_STATUS_PROCESS, SERVICE_STOP, SERVICE_STOP_PENDING, SERVICE_STOPPED,
     SERVICE_TABLE_ENTRYW, SERVICE_WIN32_OWN_PROCESS, StartServiceCtrlDispatcherW, StartServiceW,
 };
 use windows::Win32::System::Threading::{
@@ -123,6 +126,107 @@ pub fn run_elevated(exe: &Path, parameters: &str) -> Result<u32> {
     }
 }
 
+/// The folders the helper lives in, from the system and not from the
+/// environment (an elevated process inherits the caller's variables).
+#[derive(Clone, Copy)]
+pub enum Known {
+    ProgramFiles,
+    ProgramData,
+}
+
+pub fn known_folder(which: Known) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{
+        FOLDERID_ProgramData, FOLDERID_ProgramFiles, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
+    };
+    let id = match which {
+        Known::ProgramFiles => &FOLDERID_ProgramFiles,
+        Known::ProgramData => &FOLDERID_ProgramData,
+    };
+    // SAFETY: the returned string is copied and freed with CoTaskMemFree.
+    unsafe {
+        let text = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
+        let path = std::ffi::OsString::from_wide(text.as_wide());
+        CoTaskMemFree(Some(text.0.cast_const().cast()));
+        Some(PathBuf::from(path))
+    }
+}
+
+/// Where the running executable is now, as the kernel tracks its image
+/// (follows a rename; a new file put at the old path is not it).
+pub fn running_image() -> Result<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::System::Threading::{PROCESS_NAME_FORMAT, QueryFullProcessImageNameW};
+    let mut buffer = vec![0u16; 32 * 1024];
+    let mut size = buffer.len() as u32;
+    // SAFETY: the buffer and its size are valid for the call.
+    unsafe {
+        QueryFullProcessImageNameW(
+            GetCurrentProcess(),
+            PROCESS_NAME_FORMAT(0),
+            PWSTR(buffer.as_mut_ptr()),
+            &mut size,
+        )
+    }
+    .map_err(|e| service_error("cannot find the running executable", e))?;
+    Ok(PathBuf::from(std::ffi::OsString::from_wide(
+        &buffer[..size as usize],
+    )))
+}
+
+/// Is `path` a folder that only SYSTEM or the administrators own, and no
+/// link to somewhere else? A folder that any user could have created first
+/// is not trusted: its creator keeps the right to change its access list.
+pub fn folder_is_trusted(path: &Path) -> Result<bool> {
+    use std::os::windows::fs::MetadataExt;
+    use windows::Win32::Security::Authorization::{ConvertSidToStringSidW, GetNamedSecurityInfoW};
+    use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, PSID};
+    const REPARSE_POINT: u32 = 0x400;
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|e| service_error(&format!("cannot read {}", path.display()), e))?;
+    if !meta.is_dir() || meta.file_attributes() & REPARSE_POINT != 0 {
+        return Ok(false);
+    }
+    let wpath = wide_path(path);
+    // SAFETY: NUL-terminated path; the descriptor (which the owner SID
+    // points into) is freed after the SID was turned into text.
+    unsafe {
+        let mut owner = PSID::default();
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        let status = GetNamedSecurityInfoW(
+            PCWSTR(wpath.as_ptr()),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            Some(&mut owner),
+            None,
+            None,
+            None,
+            &mut descriptor,
+        );
+        if status.is_err() {
+            return Err(service_error(
+                &format!("cannot read the owner of {}", path.display()),
+                status.0,
+            ));
+        }
+        let mut text = PWSTR::null();
+        let converted = ConvertSidToStringSidW(owner, &mut text);
+        let sid = if converted.is_ok() {
+            let value = text.to_string().unwrap_or_default();
+            let _ = LocalFree(Some(HLOCAL(text.0.cast())));
+            value
+        } else {
+            String::new()
+        };
+        let _ = LocalFree(Some(HLOCAL(descriptor.0)));
+        // SYSTEM, the administrators group, or TrustedInstaller.
+        Ok(sid == "S-1-5-18"
+            || sid == "S-1-5-32-544"
+            || sid.starts_with("S-1-5-80-956008885-3418522649-"))
+    }
+}
+
 /// Gives `dir` the helper's access list and stops inheritance: administrators
 /// and SYSTEM full control, the owner `owner_sid` (a checked SID) read and
 /// list only. So `helper.toml` and the log cannot be changed by users.
@@ -182,18 +286,18 @@ impl Drop for Scm {
     }
 }
 
-fn manager() -> Result<Scm> {
+fn manager(access: u32) -> Result<Scm> {
     // SAFETY: plain call; the handle is closed by `Scm`.
-    unsafe { OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_ALL_ACCESS) }
+    unsafe { OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), access) }
         .map(Scm)
         .map_err(|e| service_error("cannot open the service control manager", e))
 }
 
 /// `None` if the service does not exist.
-fn open(manager: &Scm, name: &str) -> Result<Option<Scm>> {
+fn open(manager: &Scm, name: &str, access: u32) -> Result<Option<Scm>> {
     let name = wide(name);
     // SAFETY: NUL-terminated name; the handle is closed by `Scm`.
-    match unsafe { OpenServiceW(manager.0, PCWSTR(name.as_ptr()), SERVICE_ALL_ACCESS) } {
+    match unsafe { OpenServiceW(manager.0, PCWSTR(name.as_ptr()), access) } {
         Ok(handle) => Ok(Some(Scm(handle))),
         Err(e) if e.code() == ERROR_SERVICE_DOES_NOT_EXIST.to_hresult() => Ok(None),
         Err(e) => Err(service_error("cannot open the service", e)),
@@ -245,10 +349,11 @@ fn status_of(service: &Scm) -> Result<Info> {
     })
 }
 
-/// The state of the service; `None` if it is not installed.
+/// The state of the service; `None` if it is not installed. Asks for the
+/// right to read the state only, so any user can call it.
 pub fn query(name: &str) -> Result<Option<Info>> {
-    let manager = manager()?;
-    match open(&manager, name)? {
+    let manager = manager(SC_MANAGER_CONNECT)?;
+    match open(&manager, name, SERVICE_QUERY_STATUS)? {
         Some(service) => status_of(&service).map(Some),
         None => Ok(None),
     }
@@ -257,8 +362,16 @@ pub fn query(name: &str) -> Result<Option<Info>> {
 fn wait_for(service: &Scm, wanted: State, what: &str) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        if status_of(service)?.state == wanted {
+        let state = status_of(service)?.state;
+        if state == wanted {
             return Ok(());
+        }
+        // A service that was started and is stopped again will not come up.
+        if wanted == State::Running && state == State::Stopped {
+            return Err(service_error(
+                what,
+                "it stopped again at once; see kaltstellen.log in the helper's data folder",
+            ));
         }
         if Instant::now() >= deadline {
             return Err(service_error(what, "timed out after 30 s"));
@@ -273,6 +386,8 @@ fn stop_service(service: &Scm) -> Result<()> {
     match unsafe { ControlService(service.0, SERVICE_CONTROL_STOP, &mut status) } {
         Ok(()) => {}
         Err(e) if e.code() == ERROR_SERVICE_NOT_ACTIVE.to_hresult() => return Ok(()),
+        // Already stopping (or starting): wait for it below.
+        Err(e) if e.code() == ERROR_SERVICE_CANNOT_ACCEPT_CTRL.to_hresult() => {}
         Err(e) => return Err(service_error("cannot stop the service", e)),
     }
     wait_for(service, State::Stopped, "the service did not stop")
@@ -280,15 +395,19 @@ fn stop_service(service: &Scm) -> Result<()> {
 
 fn start_service(service: &Scm) -> Result<()> {
     // SAFETY: valid handle, no arguments.
-    unsafe { StartServiceW(service.0, None) }
-        .map_err(|e| service_error("cannot start the service", e))?;
+    match unsafe { StartServiceW(service.0, None) } {
+        Ok(()) => {}
+        // Started by someone else a moment ago: wait for it below.
+        Err(e) if e.code() == ERROR_SERVICE_ALREADY_RUNNING.to_hresult() => {}
+        Err(e) => return Err(service_error("cannot start the service", e)),
+    }
     wait_for(service, State::Running, "the service did not start")
 }
 
 /// Stops the service if it runs; nothing if it is not installed.
 pub fn stop(name: &str) -> Result<()> {
-    let manager = manager()?;
-    match open(&manager, name)? {
+    let manager = manager(SC_MANAGER_CONNECT)?;
+    match open(&manager, name, SERVICE_STOP | SERVICE_QUERY_STATUS)? {
         Some(service) => stop_service(&service),
         None => Ok(()),
     }
@@ -305,11 +424,11 @@ pub fn install(
     command_line: &str,
     privileges: &[&str],
 ) -> Result<()> {
-    let manager = manager()?;
+    let manager = manager(SC_MANAGER_ALL_ACCESS)?;
     let wname = wide(name);
     let wdisplay = wide(display);
     let wcommand = wide(command_line);
-    let service = match open(&manager, name)? {
+    let service = match open(&manager, name, SERVICE_ALL_ACCESS)? {
         Some(service) => {
             // SAFETY: valid handle and NUL-terminated strings.
             unsafe {
@@ -409,10 +528,21 @@ pub fn install(
         &failure,
         "restart after failure",
     )?;
-    if status_of(&service)?.state != State::Running {
-        start_service(&service)?;
+    // Also a clean exit with an error (a broken policy) is a failure.
+    let flag = SERVICE_FAILURE_ACTIONS_FLAG {
+        fFailureActionsOnNonCrashFailures: true.into(),
+    };
+    set_config(
+        &service,
+        SERVICE_CONFIG_FAILURE_ACTIONS_FLAG.0,
+        &flag,
+        "restart after an error exit",
+    )?;
+    match status_of(&service)?.state {
+        State::Running => Ok(()),
+        State::Starting => wait_for(&service, State::Running, "the service did not start"),
+        _ => start_service(&service),
     }
-    Ok(())
 }
 
 fn set_config<T>(service: &Scm, level: u32, value: &T, what: &str) -> Result<()> {
@@ -430,14 +560,27 @@ fn set_config<T>(service: &Scm, level: u32, value: &T, what: &str) -> Result<()>
 
 /// Stops and deletes the service; nothing if it is not installed.
 pub fn remove(name: &str) -> Result<bool> {
-    let manager = manager()?;
-    let Some(service) = open(&manager, name)? else {
+    let manager = manager(SC_MANAGER_ALL_ACCESS)?;
+    let Some(service) = open(&manager, name, SERVICE_ALL_ACCESS)? else {
         return Ok(false);
     };
     stop_service(&service)?;
     // SAFETY: valid handle.
     unsafe { DeleteService(service.0) }
         .map_err(|e| service_error("cannot delete the service", e))?;
+    // The entry goes once the last handle is closed: close ours, then wait
+    // until it is gone, so an install right after does not meet it.
+    drop(service);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while open(&manager, name, SERVICE_QUERY_STATUS)?.is_some() {
+        if Instant::now() >= deadline {
+            return Err(service_error(
+                "the service is marked for deletion",
+                "it goes when every program that holds it closes it (close services.msc) or after a restart",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
     Ok(true)
 }
 
@@ -452,6 +595,13 @@ impl Stop {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
         signal.notify_all();
+    }
+
+    /// Tells the service control manager that the service is up. The body
+    /// calls it once it can serve; until then the service is starting, and
+    /// a body that ends before it ran is reported as a failed start.
+    pub fn running(&self) {
+        report(SERVICE_RUNNING, 0, 0);
     }
 
     pub fn is_set(&self) -> bool {
@@ -551,7 +701,6 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut PWSTR) {
         report(SERVICE_STOPPED, 1, 0);
         return;
     };
-    report(SERVICE_RUNNING, 0, 0);
     let code = match body(stop) {
         Ok(()) => 0,
         Err(err) => {
@@ -581,9 +730,13 @@ pub fn dispatch(name: &str, body: impl FnOnce(Stop) -> Result<()> + Send + 'stat
     // SAFETY: the table ends with a null entry and, like the name, outlives
     // the call, which returns when the service has stopped.
     unsafe { StartServiceCtrlDispatcherW(table.as_ptr()) }.map_err(|e| {
-        service_error(
-            "not started by the service control manager (use `kaltstellen helper install`)",
-            e,
-        )
+        if e.code() == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT.to_hresult() {
+            service_error(
+                "not started by the service control manager (use `kaltstellen helper install`)",
+                e,
+            )
+        } else {
+            service_error("cannot hand the process to the service control manager", e)
+        }
     })
 }

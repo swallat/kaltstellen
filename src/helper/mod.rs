@@ -24,6 +24,7 @@ use std::path::PathBuf;
 
 use crate::update;
 use crate::update::version::Version;
+use crate::win32::service::Known;
 
 /// Name of the Windows service.
 pub const SERVICE_NAME: &str = "kaltstellen-helper";
@@ -34,25 +35,28 @@ pub const EXE_NAME: &str = "kaltstellen.exe";
 
 /// The folder of the protected copy: `%ProgramFiles%\kaltstellen`,
 /// writable by administrators only. `KALTSTELLEN_HELPER_PROGRAM_DIR`
-/// redirects it for tests.
+/// redirects it in debug builds (tests only).
 pub fn program_dir() -> Option<PathBuf> {
-    redirected("KALTSTELLEN_HELPER_PROGRAM_DIR", "ProgramFiles")
+    redirected("KALTSTELLEN_HELPER_PROGRAM_DIR", Known::ProgramFiles)
 }
 
 /// The helper's data folder: `%ProgramData%\kaltstellen` (policy file, `kaltstellen.log`,
 /// later the state record). `KALTSTELLEN_HELPER_DATA_DIR` redirects it for
-/// tests.
+/// tests, in debug builds.
 pub fn data_dir() -> Option<PathBuf> {
-    redirected("KALTSTELLEN_HELPER_DATA_DIR", "ProgramData")
+    redirected("KALTSTELLEN_HELPER_DATA_DIR", Known::ProgramData)
 }
 
-fn redirected(override_var: &str, base_var: &str) -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os(override_var).filter(|v| !v.is_empty()) {
+fn redirected(override_var: &str, known: Known) -> Option<PathBuf> {
+    // The redirection is for tests with a built-in debug executable only.
+    // An elevated process inherits the caller's environment, so a release
+    // build must not let it decide where a SYSTEM service's files go.
+    if cfg!(debug_assertions)
+        && let Some(dir) = std::env::var_os(override_var).filter(|v| !v.is_empty())
+    {
         return Some(PathBuf::from(dir));
     }
-    std::env::var_os(base_var)
-        .filter(|v| !v.is_empty())
-        .map(|base| PathBuf::from(base).join("kaltstellen"))
+    crate::win32::service::known_folder(known).map(|base| base.join("kaltstellen"))
 }
 
 /// The protected copy of the executable.
@@ -116,9 +120,35 @@ pub fn valid_sid(sid: &str) -> bool {
             .all(|p| !p.is_empty() && p.len() <= 20 && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// Is `sid` acceptable as the user the helper serves? A well-formed SID of
+/// one account, not a group everybody belongs to (Everyone, Users,
+/// Authenticated Users, Interactive, Network, Anonymous).
+pub fn valid_owner(sid: &str) -> bool {
+    valid_sid(sid)
+        && !matches!(
+            sid,
+            "S-1-1-0"
+                | "S-1-5-11"
+                | "S-1-5-32-545"
+                | "S-1-5-4"
+                | "S-1-5-2"
+                | "S-1-5-7"
+                | "S-1-5-18"
+                | "S-1-5-32-544"
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_owner_is_one_account_not_a_group_everybody_is_in() {
+        assert!(valid_owner("S-1-5-21-1004336348-1177238915-682003330-1001"));
+        for broad in ["S-1-1-0", "S-1-5-11", "S-1-5-32-545", "S-1-5-18", "S-1-5-4"] {
+            assert!(!valid_owner(broad), "{broad}");
+        }
+    }
 
     #[test]
     fn sids_are_checked_before_they_reach_an_access_list() {

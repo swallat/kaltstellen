@@ -146,7 +146,10 @@ impl Listener {
     /// owner and SYSTEM (the service itself, to wake its own accept loop at
     /// stop) and nobody else. `sid` must be a checked SID string.
     pub fn bind_for(name: &str, sid: &str) -> Result<Listener> {
-        Listener::bind_sddl(name, &format!("D:P(A;;GA;;;{sid})(A;;GA;;;SY)"))
+        Listener::bind_sddl(
+            name,
+            &format!("D:P(A;;0x{HELPER_ACCESS:x};;;{sid})(A;;GA;;;SY)"),
+        )
     }
 
     fn bind_sddl(name: &str, sddl: &str) -> Result<Listener> {
@@ -260,8 +263,10 @@ impl Peer {
     }
 }
 
-/// The SID of the local system account, which runs the helper service.
-const SYSTEM_SID: &str = "S-1-5-18";
+/// The access the helper's pipe grants its owner, and what a client asks
+/// for: read and write, but not `FILE_APPEND_DATA`, which on a pipe is the
+/// right to create further instances of it.
+const HELPER_ACCESS: u32 = (FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0) & !0x4;
 
 /// Connects to the tray's pipe `name`. `Ok(None)` if no such pipe exists.
 /// Waits up to `busy` while all instances are busy. Fails with
@@ -279,7 +284,10 @@ pub fn connect_peer(name: &str, busy: Duration, peer: Peer) -> Result<Option<Fil
         let result = unsafe {
             CreateFileW(
                 PCWSTR(wide_name.as_ptr()),
-                (FILE_GENERIC_READ | FILE_GENERIC_WRITE).0,
+                match peer {
+                    Peer::Tray => (FILE_GENERIC_READ | FILE_GENERIC_WRITE).0,
+                    Peer::Helper => HELPER_ACCESS,
+                },
                 FILE_SHARE_NONE,
                 None,
                 OPEN_EXISTING,
@@ -312,16 +320,20 @@ pub fn connect_peer(name: &str, busy: Duration, peer: Peer) -> Result<Option<Fil
     };
     // SAFETY: the handle is ours; the File closes it on every path below.
     let file = unsafe { File::from_raw_handle(handle.0) };
-    let server_user = server_user(&file)?;
-    let expected = match peer {
-        Peer::Tray => current_user_sid()?,
-        Peer::Helper => SYSTEM_SID.to_owned(),
-    };
-    if server_user != expected {
-        return Err(Error::new(
-            peer.code(),
-            "the pipe is served by a process of another user; not used",
-        ));
+    match peer {
+        Peer::Tray => {
+            if server_user(&file)? != current_user_sid()? {
+                return Err(Error::new(
+                    peer.code(),
+                    "the pipe is served by a process of another user; not used",
+                ));
+            }
+        }
+        // A standard user cannot open the token of a SYSTEM process, so the
+        // helper's server is identified by its process id instead: the
+        // caller compares `server_pid` with the service's (see
+        // `helper::client`).
+        Peer::Helper => {}
     }
     Ok(Some(file))
 }
@@ -340,6 +352,14 @@ fn server_user(file: &File) -> Result<String> {
         let _ = CloseHandle(process);
         sid
     }
+}
+
+/// The PID of the server at the other end of a client connection.
+pub fn server_pid(file: &File) -> Option<u32> {
+    let mut pid = 0u32;
+    // SAFETY: valid pipe handle and out pointer.
+    unsafe { GetNamedPipeServerProcessId(HANDLE(file.as_raw_handle()), &mut pid) }.ok()?;
+    Some(pid)
 }
 
 /// The PID of the client at the other end of a server connection (T16).

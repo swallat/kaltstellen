@@ -66,7 +66,7 @@ impl Policy {
                 format!("helper.toml: version {} is not supported", policy.version),
             ));
         }
-        if !super::valid_sid(&policy.owner_sid) {
+        if !super::valid_owner(&policy.owner_sid) {
             return Err(Error::new(
                 Code::HelperPolicy,
                 "helper.toml: owner_sid is not a SID",

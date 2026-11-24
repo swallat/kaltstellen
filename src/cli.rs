@@ -1013,7 +1013,7 @@ fn relaunch_elevated(arguments: impl FnOnce(&str) -> String, owner_sid: Option<S
         Ok(sid) => sid,
         Err(err) => return refused(err),
     };
-    if !crate::helper::valid_sid(&sid) {
+    if !crate::helper::valid_owner(&sid) {
         return refused(Error::new(
             Code::HelperService,
             format!("{sid:?} is not a SID"),

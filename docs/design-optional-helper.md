@@ -232,3 +232,23 @@ set, and `status` says that they are not all implemented.
   run in CI. Installing, starting and stopping the service has no automatic
   test (a test must never touch a real service); it is checked by hand on
   the VM (docs/manual-checks.md).
+
+Hardening from the review of M4a (same day):
+
+- The install uses a folder under `%ProgramFiles%` or `%ProgramData%` only if
+  SYSTEM or the administrators own it and it is no link; any user can create
+  a folder in ProgramData first and would keep the right to change its
+  access list. Both folders come from the system (known folders), not from
+  the environment, which an elevated process inherits from its caller; the
+  `KALTSTELLEN_HELPER_*` redirections work in debug builds only (tests).
+- The source of the copy is the running image as the kernel tracks it, opened
+  once against writers, written to a temporary file and moved over the old
+  copy in one step.
+- A standard user cannot read the token of the SYSTEM service, so the client
+  identifies the helper by process id: the pipe server must be the service's
+  process (service state is read with query rights only). The owner's right
+  on the pipe is read and write without creating further instances.
+- The service reports `running` only once the policy is read and the pipe is
+  bound, tries again for about a minute if the pipe name is taken, and is
+  restarted also after an error exit.
+- The owner SID must be one account, not a group everybody is in.

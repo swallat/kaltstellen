@@ -19,6 +19,15 @@ pub fn ask(command: Command) -> Result<Option<Reply>> {
     else {
         return Ok(None);
     };
+    // The pipe name can be taken by any local user before the service
+    // runs: only the service's own process counts as the helper.
+    let service_pid = crate::win32::service::query(super::SERVICE_NAME)?.and_then(|info| info.pid);
+    if service_pid.is_none() || pipe::server_pid(&conn) != service_pid {
+        return Err(Error::new(
+            Code::HelperUnreachable,
+            "the pipe is not served by the helper service; not used",
+        ));
+    }
     let request = Request {
         v: protocol::VERSION,
         command,
