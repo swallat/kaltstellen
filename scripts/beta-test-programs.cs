@@ -147,7 +147,7 @@ internal sealed class BetaForm : Form
     // with unsaved work does.
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        if (stubborn && e.CloseReason == CloseReason.UserClosing)
+        if (stubborn && e.CloseReason != CloseReason.WindowsShutDown)
         {
             e.Cancel = true;
             return;
