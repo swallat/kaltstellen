@@ -29,6 +29,14 @@ use crate::error::{Code, Error, Result};
 const PROVIDER: GUID = GUID::from_u128(0x22FB_2CD6_0E7B_422B_A0C7_2FAD_1FD0_E716);
 /// `WINEVENT_KEYWORD_PROCESS`: process start and stop, nothing else.
 const KEYWORD_PROCESS: u64 = 0x10;
+/// `Microsoft-Windows-Kernel-Network`: bytes sent and received per process.
+const NETWORK_PROVIDER: GUID = GUID::from_u128(0x7DD4_2A49_5329_4832_8DFD_43D9_7915_3A88);
+/// `KERNEL_NETWORK_KEYWORD_IPV4 | KERNEL_NETWORK_KEYWORD_IPV6`.
+const KEYWORD_NETWORK: u64 = 0x30;
+/// Data sent: TCP and UDP over IPv4 and IPv6.
+const NETWORK_SENT: [u16; 4] = [10, 26, 42, 58];
+/// Data received: TCP and UDP over IPv4 and IPv6.
+const NETWORK_RECEIVED: [u16; 4] = [11, 27, 43, 59];
 /// Event ids of the provider.
 const EVENT_START: u16 = 1;
 const EVENT_STOP: u16 = 2;
@@ -38,6 +46,15 @@ const NO_ARRAY: u32 = u32::MAX;
 const INVALID_TRACE: u64 = u64::MAX;
 /// Time stamps as system time (`FILETIME`), not performance counter ticks.
 const CLOCK_SYSTEM_TIME: u32 = 2;
+
+/// What a session reports. Process events are rare; network events come per
+/// packet, so each gets a session of its own and a burst of one cannot cost
+/// events of the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provider {
+    Process,
+    Network,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -62,7 +79,22 @@ pub struct ProcessEvent {
     pub image: String,
 }
 
-type Sink = Box<dyn Fn(ProcessEvent) + Send + Sync>;
+/// Bytes of one network event, counted for the process that caused them.
+/// No addresses and no ports are read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetEvent {
+    pub pid: u32,
+    pub bytes: u32,
+    pub received: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
+    Process(ProcessEvent),
+    Network(NetEvent),
+}
+
+type Sink = Box<dyn Fn(Event) + Send + Sync>;
 
 /// A running event session. Dropping it stops the session.
 pub struct Session {
@@ -81,7 +113,7 @@ fn error(what: &str, code: impl std::fmt::Display) -> Error {
 }
 
 /// The properties block for a session called `name`.
-fn properties_for(name: &str) -> (Vec<u64>, Vec<u16>) {
+fn properties_for(name: &str, provider: Provider) -> (Vec<u64>, Vec<u16>) {
     let name_wide = wide(name);
     let bytes = std::mem::size_of::<EVENT_TRACE_PROPERTIES>() + name_wide.len() * 2;
     let mut buffer = vec![0u64; bytes.div_ceil(8)];
@@ -94,8 +126,13 @@ fn properties_for(name: &str) -> (Vec<u64>, Vec<u16>) {
         (*props).Wnode.ClientContext = CLOCK_SYSTEM_TIME;
         (*props).LogFileMode = EVENT_TRACE_REAL_TIME_MODE;
         (*props).BufferSize = 64;
-        (*props).MinimumBuffers = 4;
-        (*props).MaximumBuffers = 16;
+        // Network events come per packet: that session gets room for bursts.
+        let (minimum, maximum) = match provider {
+            Provider::Process => (4, 16),
+            Provider::Network => (8, 64),
+        };
+        (*props).MinimumBuffers = minimum;
+        (*props).MaximumBuffers = maximum;
         (*props).LoggerNameOffset = std::mem::size_of::<EVENT_TRACE_PROPERTIES>() as u32;
         let target = buffer
             .as_mut_ptr()
@@ -113,7 +150,7 @@ fn props_ptr(buffer: &mut [u64]) -> *mut EVENT_TRACE_PROPERTIES {
 
 /// Stops a session by name (one a crashed service left behind).
 fn stop_by_name(name: &str) {
-    let (mut buffer, name_wide) = properties_for(name);
+    let (mut buffer, name_wide) = properties_for(name, Provider::Process);
     // SAFETY: valid properties block and NUL-terminated name.
     let _ = unsafe {
         ControlTraceW(
@@ -128,8 +165,12 @@ fn stop_by_name(name: &str) {
 /// Starts the session `name` and calls `sink` for every process start and
 /// stop, on the thread of the session. Needs the rights of a service
 /// account or an administrator.
-pub fn start(name: &str, sink: impl Fn(ProcessEvent) + Send + Sync + 'static) -> Result<Session> {
-    let (mut properties, name_wide) = properties_for(name);
+pub fn start(
+    name: &str,
+    provider: Provider,
+    sink: impl Fn(Event) + Send + Sync + 'static,
+) -> Result<Session> {
+    let (mut properties, name_wide) = properties_for(name, provider);
     let mut control = CONTROLTRACE_HANDLE::default();
     // SAFETY: valid out handle, NUL-terminated name and properties block.
     let mut status = unsafe {
@@ -141,7 +182,7 @@ pub fn start(name: &str, sink: impl Fn(ProcessEvent) + Send + Sync + 'static) ->
     };
     if status == ERROR_ALREADY_EXISTS {
         stop_by_name(name);
-        let (fresh, _) = properties_for(name);
+        let (fresh, _) = properties_for(name, provider);
         properties = fresh;
         // SAFETY: as above.
         status = unsafe {
@@ -166,20 +207,27 @@ pub fn start(name: &str, sink: impl Fn(ProcessEvent) + Send + Sync + 'static) ->
         sink,
     };
     // SAFETY: the session handle is valid; the provider id outlives the call.
+    let (guid, keyword, what) = match provider {
+        Provider::Process => (&PROVIDER, KEYWORD_PROCESS, "process"),
+        Provider::Network => (&NETWORK_PROVIDER, KEYWORD_NETWORK, "network"),
+    };
     let enabled = unsafe {
         EnableTraceEx2(
             control,
-            &PROVIDER,
+            guid,
             EVENT_CONTROL_CODE_ENABLE_PROVIDER.0,
             TRACE_LEVEL_INFORMATION as u8,
-            KEYWORD_PROCESS,
+            keyword,
             0,
             0,
             None,
         )
     };
     if enabled != ERROR_SUCCESS {
-        return Err(error("cannot enable the process events", enabled.0));
+        return Err(error(
+            &format!("cannot enable the {what} events"),
+            enabled.0,
+        ));
     }
     let mut logger = name_wide.clone();
     let mut logfile = EVENT_TRACE_LOGFILEW {
@@ -289,24 +337,46 @@ unsafe extern "system" fn on_event(record: *mut EVENT_RECORD) {
         let Some(record) = (unsafe { record.as_ref() }) else {
             return;
         };
-        if record.EventHeader.ProviderId != PROVIDER {
-            return;
-        }
-        let kind = match record.EventHeader.EventDescriptor.Id {
-            EVENT_START => Kind::Start,
-            EVENT_STOP => Kind::Stop,
-            _ => return,
-        };
+        let id = record.EventHeader.EventDescriptor.Id;
         // SAFETY: the context is the sink pointer from `start`.
         let Some(sink) = (unsafe { record.UserContext.cast::<Sink>().as_ref() }) else {
             return;
+        };
+        if record.EventHeader.ProviderId == NETWORK_PROVIDER {
+            let received = NETWORK_RECEIVED.contains(&id);
+            if (!received && !NETWORK_SENT.contains(&id)) || record.UserDataLength < 8 {
+                return;
+            }
+            // The first two fields of these events are the process id and
+            // the size in bytes; reading them directly keeps this cheap.
+            // SAFETY: the record holds `UserDataLength` bytes of user data.
+            let data = unsafe {
+                std::slice::from_raw_parts(
+                    record.UserData.cast::<u8>(),
+                    usize::from(record.UserDataLength),
+                )
+            };
+            sink(Event::Network(NetEvent {
+                pid: u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+                bytes: u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
+                received,
+            }));
+            return;
+        }
+        if record.EventHeader.ProviderId != PROVIDER {
+            return;
+        }
+        let kind = match id {
+            EVENT_START => Kind::Start,
+            EVENT_STOP => Kind::Stop,
+            _ => return,
         };
         let record_ptr: *const EVENT_RECORD = record;
         let number = |name: &str| property_u64(record_ptr, name, 4);
         let Some(pid) = number("ProcessID") else {
             return;
         };
-        sink(ProcessEvent {
+        sink(Event::Process(ProcessEvent {
             kind,
             pid: pid as u32,
             parent_pid: number("ParentProcessID").unwrap_or(0) as u32,
@@ -314,7 +384,7 @@ unsafe extern "system" fn on_event(record: *mut EVENT_RECORD) {
             created: property_u64(record_ptr, "CreateTime", 8).unwrap_or(0),
             time: u64::try_from(record.EventHeader.TimeStamp).unwrap_or(0),
             image: property_string(record_ptr, "ImageName").unwrap_or_default(),
-        });
+        }));
     }));
 }
 
@@ -414,7 +484,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let name = format!("kaltstellen-test-{}", std::process::id());
-        let session = match start(&name, move |event| {
+        let session = match start(&name, Provider::Process, move |event| {
             let _ = tx.lock().unwrap().send(event);
         }) {
             Ok(session) => session,
@@ -433,7 +503,7 @@ mod tests {
         let mut stopped = false;
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
         while std::time::Instant::now() < deadline && !(started.is_some() && stopped) {
-            let Ok(event) = rx.recv_timeout(Duration::from_secs(1)) else {
+            let Ok(Event::Process(event)) = rx.recv_timeout(Duration::from_secs(1)) else {
                 continue;
             };
             if event.pid != pid {
@@ -460,5 +530,61 @@ mod tests {
             "{} maps to no drive: {map:?}",
             started.image
         );
+    }
+
+    /// Bytes sent over loopback by this process show up as its network
+    /// events. Skipped where the session cannot be started.
+    #[test]
+    fn the_bytes_of_a_loopback_connection_are_counted_for_this_process() {
+        use std::io::{Read, Write};
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let name = format!("kaltstellen-test-net-{}", std::process::id());
+        let session = match start(&name, Provider::Network, move |event| {
+            if let Event::Network(net) = event {
+                let _ = tx.lock().unwrap().send(net);
+            }
+        }) {
+            Ok(session) => session,
+            Err(err) => {
+                eprintln!("skipped: {err}");
+                return;
+            }
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut buffer = vec![0u8; 64 * 1024];
+            let mut total = 0;
+            while total < 100_000 {
+                match conn.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => total += n,
+                }
+            }
+        });
+        let mut client = std::net::TcpStream::connect(address).unwrap();
+        client.write_all(&vec![7u8; 100_000]).unwrap();
+        server.join().unwrap();
+        let mut sent = 0u64;
+        let mut received = 0u64;
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while std::time::Instant::now() < deadline && (sent < 100_000 || received < 100_000) {
+            let Ok(net) = rx.recv_timeout(Duration::from_secs(1)) else {
+                continue;
+            };
+            if net.pid != std::process::id() {
+                continue;
+            }
+            if net.received {
+                received += u64::from(net.bytes);
+            } else {
+                sent += u64::from(net.bytes);
+            }
+        }
+        drop(session);
+        assert!(sent >= 100_000, "sent {sent}");
+        assert!(received >= 100_000, "received {received}");
     }
 }

@@ -27,6 +27,8 @@ const MAX_CLIENTS: usize = 8;
 const DEADLINE: Duration = Duration::from_secs(5);
 /// Name of the kernel event session.
 const EVENT_SESSION: &str = "kaltstellen-helper-process";
+/// Name of the kernel event session for network bytes.
+const NETWORK_SESSION: &str = "kaltstellen-helper-network";
 
 /// One of the client slots; given back on drop.
 struct Slot(Arc<AtomicUsize>);
@@ -118,10 +120,15 @@ fn serve(stop: Stop) -> Result<()> {
     // answers; the status then says the role does not run.
     let ring = Arc::new(events::Ring::new());
     let mut session = None;
+    let mut network = None;
     if policy.roles.observe {
         let sink = Arc::clone(&ring);
-        match etw::start(EVENT_SESSION, move |event| {
-            sink.push(&event, etw::device_map);
+        match etw::start(EVENT_SESSION, etw::Provider::Process, move |event| {
+            if let etw::Event::Process(event) = event {
+                // A process id that starts or ends leaves its old counters behind.
+                sink.traffic.forget(event.pid);
+                sink.push(&event, etw::device_map);
+            }
         }) {
             Ok(started) => {
                 info!("observe: the process event session runs");
@@ -130,12 +137,28 @@ fn serve(stop: Stop) -> Result<()> {
             }
             Err(err) => error!("observe does not run: {err}"),
         }
+        if session.is_some() {
+            let sink = Arc::clone(&ring);
+            match etw::start(NETWORK_SESSION, etw::Provider::Network, move |event| {
+                if let etw::Event::Network(event) = event {
+                    sink.traffic.add(&event);
+                }
+            }) {
+                Ok(started) => {
+                    info!("observe: the network event session runs");
+                    ring.traffic.set_running(true);
+                    network = Some(started);
+                }
+                Err(err) => warn!("observe: no network counters: {err}"),
+            }
+        }
     }
     let context = Arc::new(Context {
         version: version().to_owned(),
         pid: std::process::id(),
         roles: policy.roles.clone(),
         events: session.as_ref().map(|_| Arc::clone(&ring)),
+        session_of: pipe::session_of,
     });
     let active = Arc::new(AtomicUsize::new(0));
     let accepting = stop.clone();
@@ -187,7 +210,12 @@ fn serve(stop: Stop) -> Result<()> {
         if let Some(session) = session.as_mut() {
             if ring.running() && !session.alive() {
                 ring.set_running(false);
+                ring.traffic.set_running(false);
                 error!("observe: the process event session has ended; the role does not run");
+            }
+            if ring.traffic.running() && network.as_ref().is_some_and(|n| !n.alive()) {
+                ring.traffic.set_running(false);
+                warn!("observe: the network event session has ended; no counters");
             }
             if let Some(lost) = session.lost() {
                 ring.set_lost(lost);
@@ -199,6 +227,7 @@ fn serve(stop: Stop) -> Result<()> {
         }
     }
     info!("helper stopping");
+    drop(network);
     drop(session);
     // Wake the accept loop, which sees the stop flag and ends.
     let _ = pipe::connect_peer(PIPE_NAME, Duration::from_millis(500), Peer::Helper);

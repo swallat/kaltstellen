@@ -3,12 +3,12 @@
 //! disk; a restart starts empty. No command lines, no window titles, no
 //! network data (the counters come later).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use crate::win32::etw::{Kind, ProcessEvent};
+use crate::win32::etw::{Kind, NetEvent, ProcessEvent};
 
 /// Most events kept.
 pub const CAPACITY: usize = 4096;
@@ -82,9 +82,124 @@ struct Inner {
     sessions: VecDeque<((u32, u64), u32)>,
 }
 
+/// How long per-second byte counters are kept, in seconds.
+pub const TRAFFIC_WINDOW_S: u64 = 600;
+/// Most processes with counters at once.
+const MAX_TRAFFIC_PIDS: usize = 4096;
+
+/// Bytes of one process over a time window.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Usage {
+    pub pid: u32,
+    /// Bytes sent.
+    pub up: u64,
+    /// Bytes received.
+    pub down: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Bucket {
+    second: u64,
+    up: u64,
+    down: u64,
+}
+
+/// Per-process byte counters per second for the last [`TRAFFIC_WINDOW_S`]
+/// seconds: no addresses, no ports, nothing on disk. Counters are not a
+/// record of traffic; the kernel may lose events under load.
+#[derive(Debug, Default)]
+pub struct Traffic {
+    counters: Mutex<HashMap<u32, VecDeque<Bucket>>>,
+    running: std::sync::atomic::AtomicBool,
+}
+
+impl Traffic {
+    pub fn running(&self) -> bool {
+        self.running.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_running(&self, running: bool) {
+        self.running
+            .store(running, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn add(&self, event: &NetEvent) {
+        self.add_at(event, now());
+    }
+
+    /// [`add`](Traffic::add) with the current time (seconds since 1970) given.
+    pub fn add_at(&self, event: &NetEvent, now: u64) {
+        let mut counters = self.counters.lock().unwrap_or_else(|e| e.into_inner());
+        let oldest = now.saturating_sub(TRAFFIC_WINDOW_S);
+        if counters.len() >= MAX_TRAFFIC_PIDS && !counters.contains_key(&event.pid) {
+            counters.retain(|_, buckets| buckets.back().is_some_and(|b| b.second > oldest));
+            if counters.len() >= MAX_TRAFFIC_PIDS {
+                return;
+            }
+        }
+        let buckets = counters.entry(event.pid).or_default();
+        while buckets.front().is_some_and(|b| b.second <= oldest) {
+            buckets.pop_front();
+        }
+        // A clock stepped back keeps adding to the newest second.
+        if buckets.back().is_none_or(|b| b.second < now) {
+            buckets.push_back(Bucket {
+                second: now,
+                up: 0,
+                down: 0,
+            });
+        }
+        if let Some(last) = buckets.back_mut() {
+            let bytes = u64::from(event.bytes);
+            if event.received {
+                last.down += bytes;
+            } else {
+                last.up += bytes;
+            }
+        }
+    }
+
+    /// Forgets the counters of a process id: it started or ended, so what
+    /// was counted under that number belongs to another process.
+    pub fn forget(&self, pid: u32) {
+        self.counters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&pid);
+    }
+
+    /// Bytes per process over the last `window_s` seconds (at most
+    /// [`TRAFFIC_WINDOW_S`]), those with no traffic left out, ordered by
+    /// process id. The lock is held for the sums only; the caller filters
+    /// afterwards.
+    pub fn usage(&self, window_s: u64, now: u64) -> Vec<Usage> {
+        let counters = self.counters.lock().unwrap_or_else(|e| e.into_inner());
+        let from = now.saturating_sub(window_s.min(TRAFFIC_WINDOW_S));
+        let mut all: Vec<Usage> = counters
+            .iter()
+            .filter_map(|(pid, buckets)| {
+                let (up, down) = buckets
+                    .iter()
+                    .filter(|b| b.second > from)
+                    .fold((0, 0), |(up, down), b| (up + b.up, down + b.down));
+                (up + down > 0).then_some(Usage {
+                    pid: *pid,
+                    up,
+                    down,
+                })
+            })
+            .collect();
+        all.sort_by_key(|u| u.pid);
+        all
+    }
+}
+
 /// The ring of events, shared by the event thread and the pipe threads.
 #[derive(Debug, Default)]
 pub struct Ring {
+    /// Network counters of the same session.
+    pub traffic: Traffic,
     inner: Mutex<Inner>,
     /// Events the kernel reported lost (set from the session).
     lost: std::sync::atomic::AtomicU64,
@@ -374,6 +489,54 @@ mod tests {
             later,
         );
         assert_eq!(ring.read_at(0, Some(1), later).events.len(), 1);
+    }
+
+    #[test]
+    fn traffic_is_summed_over_the_window_and_old_seconds_fall_out() {
+        let traffic = Traffic::default();
+        let sent = |pid, bytes| NetEvent {
+            pid,
+            bytes,
+            received: false,
+        };
+        let got = |pid, bytes| NetEvent {
+            pid,
+            bytes,
+            received: true,
+        };
+        traffic.add_at(&sent(7, 100), NOW);
+        traffic.add_at(&got(7, 40), NOW);
+        traffic.add_at(&got(7, 10), NOW + 5);
+        traffic.add_at(&sent(8, 1), NOW + 5);
+        let usage = traffic.usage(10, NOW + 5);
+        assert_eq!(
+            usage,
+            [
+                Usage {
+                    pid: 7,
+                    up: 100,
+                    down: 50
+                },
+                Usage {
+                    pid: 8,
+                    up: 1,
+                    down: 0
+                }
+            ]
+        );
+        // A shorter window sees only the later seconds.
+        let recent = traffic.usage(3, NOW + 5);
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].up + recent[0].down, 10);
+        // Nothing once the window has passed.
+        assert!(traffic.usage(10, NOW + TRAFFIC_WINDOW_S + 100).is_empty());
+        // A process that ended or started again under the number is forgotten.
+        traffic.forget(8);
+        assert_eq!(traffic.usage(10, NOW + 5).len(), 1);
+        // Old seconds are dropped when new bytes arrive.
+        traffic.add_at(&sent(7, 1), NOW + TRAFFIC_WINDOW_S + 100);
+        let counters = traffic.counters.lock().unwrap();
+        assert_eq!(counters[&7].len(), 1);
     }
 
     #[test]
