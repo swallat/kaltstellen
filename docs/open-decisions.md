@@ -279,6 +279,50 @@ actions only", section 12):
 
 Everything else the owner has not decided yet is deferred (below).
 
+## Open: profile assistance (owner request 2026-11-24)
+
+The six helpers of spec section 8, H1 to H6 (a profile from the current
+state, load hints, kinds and suggestions, preview, suggestions from use,
+compare). The owner asked for them; everything below is **[assumed]** until
+the owner has seen the mock (`profile-assist-mock/mock.html` in the project
+files) and, later, the real window.
+
+1. **H5 learning without a watcher** (put to the owner as a single question,
+   2026-11-24; the spec follows the recommended answer): (a) compare only at
+   transitions, using lists the tool reads anyway (recommended); (b) in
+   addition one single snapshot about 10 minutes after applying, from a
+   one-shot timer in the tray (better data, but a new timer and a softer
+   "no watcher"); (c) leave H5 out for now.
+2. **H1 meaning of "stopped programs"**: running = programs with a window or
+   a notification-area icon; stopped = what kaltstellen holds (state file) and
+   programs seen earlier that do not run now (default `Stop` only through
+   `Everything as it is now`).
+3. **H1 `Keep running`** writes `start` with the image path and no arguments
+   (A8: the command line of a process is not read).
+4. **H1 update mode** adds missing programs only; existing entries are never
+   changed there (N1: an entry is a decision).
+5. **H2 network**: no per-program volume without administrator rights; `I/O`
+   (files, pipes and sockets together) and `Connections` stand in, and a real
+   figure waits for the elevated helper. Thresholds of `Heavy` (500 MiB, 5 %
+   CPU, 1 MiB/s) and the 1.5 s interval are guesses.
+6. **H3 kinds**: a shipped name list plus version resource and folder; the
+   table of suggestions; `Stop` pre-sets `on_timeout = keep` for programs with
+   a dialog, unsaved-title or open windows; launchers and editors are `Leave as
+   it is`; unknown programs get no suggestion.
+7. **H3 window signals**: window titles are read in the host to spot `*` or
+   `●` and never leave it; `Dialog open` is a heuristic (disabled owner window
+   or dialog-class window).
+8. **H4 preview**: one planner shared with the switch, a probe that opens the
+   same handles as the switch and closes them (visible to endpoint software),
+   no side effects, exit code `1` for predicted problems, no tray menu item.
+9. **H5 details** (if answer 1 is (a) or (b)): one observation per activation
+   (A at the end of the apply, B before the next switch), none after sign-out;
+   `usage.json` with counters of the last 10 activations; a suggestion after 3
+   of 5; `Suggestions from use` on by default; `Forget what was learned`;
+   `KS305`.
+10. **H6 compare**: profile with profile only; `Take over from B` and
+    `Remove from A` per row; `kaltstellen compare` always exits `0`.
+
 ## Decided by the owner on 2026-11-24
 
 - **N3 Icons of paused programs**: no hiding or greying of foreign

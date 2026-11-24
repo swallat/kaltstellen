@@ -64,6 +64,24 @@ change, the line endings and a byte order mark of the file; entries written
 inline (`app = [{ exe = "a.exe" }]`) are turned into `[[profile.app]]`
 tables by the first edit of that profile.
 
+## Planned: profile assistance (H1 to H6, not built)
+
+Requests the helpers of spec section 8 need. Names and fields are a proposal
+**[assumed]** and may change when they are built.
+
+| `type` | Fields | Effect |
+| --- | --- | --- |
+| `snapshot` | `mode` (`new` or `update`), `profile?` | H1: the three groups of the current state (`running`, `held`, `seen`), each row `{exe, path, protection, kind, suggestion, warnings, held_action}` with the program info of M2 asked for as usual. Reads only. |
+| `measure` | `programs` (up to 256 `{exe, path?}`), `interval_ms` (1000 to 3000) | H2: `data` per program `{private_bytes, cpu, io_bytes_per_s, tcp, udp, frozen}`; two handle-free process queries `interval_ms` apart; no process is opened. |
+| `create_profile_from` | `name`, `entries` | H1: a new profile with these entries in one atomic save; refused as a whole when any entry breaks C1 to C8 or P6. |
+| `add_entries` | `profile`, `entries` | H1 update mode: adds entries for programs without one; refused as a whole like `create_profile_from`. |
+| `preview` | `profile` | H4: `data` is the plan in W1 order with outcomes, predicted problems, totals and the time of the reading. Changes nothing. |
+| `compare` | `a`, `b` | H6: `data` rows `{exe, path, a, b, difference}` and the read-only differences of hotkey, triggers and priority. |
+| `suggestions` | `profile` | H5: `data` the suggestions `{exe, path, action, reason}`. |
+| `suggestion_answer` | `profile`, `exe`, `answer` (`add`, `later`, `never`), `action?` | H5: `add` writes an entry as `add_entry` does. |
+| `set_learning` | `on` | H5: the `learn` key of `settings.json`. |
+| `forget_learning` | | H5: deletes `usage.json`. |
+
 ## Replies (host to page)
 
 ```json
