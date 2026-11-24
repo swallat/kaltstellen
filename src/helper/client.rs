@@ -30,7 +30,7 @@ pub fn ask(command: Command) -> Result<Option<Reply>> {
     }
     let request = Request {
         v: protocol::VERSION,
-        command,
+        cmd: command,
     };
     let reply = pipe::with_deadline(DEADLINE, || -> Result<Option<String>> {
         protocol::write_line(&mut conn, &request)?;

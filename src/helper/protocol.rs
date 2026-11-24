@@ -21,12 +21,11 @@ pub const MAX_REQUEST: usize = 4096;
 pub struct Request {
     /// Protocol version of the sender.
     pub v: u32,
-    #[serde(flatten)]
-    pub command: Command,
+    pub cmd: Command,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(tag = "cmd", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum Command {
     /// Version check and who is answering.
     Hello,
@@ -94,7 +93,7 @@ pub fn answer(line: &str, context: &Context) -> Reply {
             request.v
         ));
     }
-    match request.command {
+    match request.cmd {
         Command::Hello | Command::Status => Reply {
             v: VERSION,
             ok: true,
