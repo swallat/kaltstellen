@@ -405,3 +405,23 @@ The author's defaults, confirmed as built:
   only actions; `Automatic switching`, `Start at sign-in` and the update
   modes are in the main window (spec section 8). The first-start question
   about start at sign-in stays.
+- **Settings view in the main window** (owner request 2026-11-24, mock
+  approved): all settings in one place, opened from the foot of the sidebar.
+  `[assumed]`: the layout (sections `General`, `Program defaults`,
+  `Profiles`, `Updates`, `Files and data`, `About`); `Automatic switching`
+  stays in the header as a quick switch next to the new place (the owner
+  chose this on 2026-11-24), `Start at sign-in` only in `Settings`; the
+  `Updates` box left the sidebar; the four keys of `[settings]` are edited in
+  the window for the first time (new bridge request `set_defaults`; the time
+  to close is limited to 1 to 300 s in the window, the file accepts more); a
+  key that is missing and would get its default stays out of the file;
+  `[settings]` is created at the end of the file when it is missing;
+  `open_location` and `forget_last_profile` are new requests (the page names
+  a target, never a path); `reload_config` (the `Reload` button) reads the configuration file again;
+  an inline `settings = { … }` table becomes a `[settings]` section when the
+  defaults are saved.
+- **GUI polish** (owner request 2026-11-24): the main window's colours follow
+  the branding (primary teal `#0A7288` light, `#4CCBE3` dark), a failed entry
+  is marked by a tint instead of a stripe, and states, motion and focus
+  were refined with the rules of impeccable (design checks only, nothing of it
+  ships with kaltstellen).

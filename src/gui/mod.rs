@@ -48,7 +48,8 @@ const SIZE: (i32, i32) = (1040, 760);
 pub struct Args {
     /// Capture the page as PNG into this file and exit.
     pub screenshot: Option<PathBuf>,
-    /// Open a view before the capture: `entry`, `add`, `confirm`, `new`.
+    /// Open a view before the capture: `entry`, `add`, `confirm`, `new`,
+    /// `settings`.
     pub view: Option<String>,
     pub theme: Option<Theme>,
     /// Run these bridge requests (JSON array) through the page, then exit.
@@ -298,6 +299,43 @@ impl Host for RealHost {
             warn!("gui: no status from the tray, markers kept: {err}");
             err.to_string()
         })
+    }
+
+    fn locations(&self) -> bridge::Locations {
+        let config = paths::config_dir();
+        bridge::Locations {
+            settings_file: config
+                .as_deref()
+                .map(|dir| crate::settings::file(dir).display().to_string()),
+            data_dir: Some(self.data.display().to_string()),
+            log_file: Some(
+                self.data
+                    .join(crate::logging::FILE_NAME)
+                    .display()
+                    .to_string(),
+            ),
+            last_profile: config
+                .and_then(|dir| crate::settings::load(&dir).0.last_profile)
+                .filter(|name| !name.is_empty()),
+        }
+    }
+
+    fn forget_last_profile(&self) -> Result<(), String> {
+        let dir = paths::config_dir().ok_or("the configuration folder is not known")?;
+        crate::settings::edit(&dir, |s| s.last_profile = None).map_err(|e| e.to_string())
+    }
+
+    fn open_path(&self, path: &Path) -> Result<(), String> {
+        if !path.exists() {
+            return Err(format!("{} does not exist yet", path.display()));
+        }
+        // Explorer hands the path to the registered program (a folder opens,
+        // a file opens with its program); no shell is involved.
+        Command::new("explorer.exe")
+            .arg(path)
+            .status()
+            .map(|_| ())
+            .map_err(|e| format!("could not open {}: {e}", path.display()))
     }
 
     fn triggers_paused(&self) -> bool {

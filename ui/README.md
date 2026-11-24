@@ -9,6 +9,7 @@ there is no build step, no framework and no network access.
 | `index.html` | Markup: profile list, profile detail, dialogs. |
 | `css/tokens.css` | Design tokens (colours, type, spacing) from `branding/README.md`, light and dark. |
 | `css/app.css` | Layout and components, using the tokens only. |
+| `css/settings.css` | The Settings view (M6): section list, rows, switches. |
 | `js/app.js` | The view: renders the state, sends intents. |
 | `js/bridge.js` | Messages to the Rust side (`docs/gui-bridge.md`). |
 | `img/logo.svg` | The ice cube logo of the header (`branding/logos/09-eiswuerfel-warm-avatar.svg`, colours for the dark top bar). |
@@ -27,7 +28,9 @@ python -m http.server 8000     # or: npx serve, or any other static server
 
 Without the WebView2 bridge, `bridge.js` loads `mock.js`; all buttons work
 on sample data in memory, nothing is saved. `?theme=dark` or `?theme=light`
-forces a colour scheme; `?view=entry|add|confirm|new` opens a dialog.
+forces a colour scheme; `?view=entry|add|confirm|new` opens a dialog and
+`?view=settings` the Settings view; `?state=update|locked|notriggers` shows
+an update found, the update mode set by the environment, or no triggers.
 
 ## Rules the page must keep
 
@@ -42,6 +45,6 @@ forces a colour scheme; `?view=entry|add|confirm|new` opens a dialog.
 
 ## Checking the real window
 
-`kaltstellen gui --screenshot out.png --view add --theme dark` renders the
+`kaltstellen gui --screenshot out.png --view settings --theme dark` renders the
 real window with the current configuration (use a test configuration via
 `KALTSTELLEN_CONFIG_DIR` and `KALTSTELLEN_DATA_DIR`) and saves a PNG.

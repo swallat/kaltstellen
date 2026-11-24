@@ -31,7 +31,8 @@ pub struct Settings {
     pub triggers_paused: bool,
 }
 
-fn file(dir: &Path) -> PathBuf {
+/// `settings.json` in the configuration directory `dir`.
+pub fn file(dir: &Path) -> PathBuf {
     dir.join("settings.json")
 }
 

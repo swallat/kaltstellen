@@ -12,6 +12,10 @@ let selected = null;
 let unassigned = [];
 /** U4: unsaved input of the trigger fields, `{profile, triggers, priority, invalid}`. */
 let triggerDraft = null;
+/** `profile` (a profile and its programs) or `settings` (M6). */
+let view = 'profile';
+/** M6: the program defaults are being edited and not saved yet. */
+let defaultsDirty = false;
 
 const actionLabel = { start: 'Start', stop: 'Stop', suspend: 'Suspend', ignore: 'Ignore' };
 
@@ -69,21 +73,27 @@ function current() {
   return state.profiles.find((p) => p.name.toLowerCase() === (selected || '').toLowerCase()) || null;
 }
 
+const AUTOMATION_HELP = 'Applies a profile when one of its trigger programs starts, and goes back when the last one has ended. Off pauses all triggers.';
+
 function render() {
   $('active-badge').replaceChildren('Active: ', el('strong', { text: state.active }));
-  $('autostart-wrap').hidden = state.autostart === null;
+  $('autostart-row').hidden = state.autostart === null;
   $('autostart').checked = !!state.autostart;
   // U4: moved here from the tray menu; without triggers it does nothing yet.
   const automation = state.automation || { on: true, triggers: false };
   // An older tray that did not take a change keeps its own until it restarts.
   const hint = automation.note
     || (automation.triggers ? '' : 'No profile has triggers yet; set them under Triggers of a profile.');
-  $('automation').checked = automation.on;
-  $('automation').disabled = !automation.triggers;
+  // The header and the Settings view show the same switch.
+  for (const id of ['automation', 'automation-setting']) {
+    $(id).checked = automation.on;
+    $(id).disabled = !automation.triggers;
+  }
   $('automation-wrap').classList.toggle('unused', !automation.triggers);
+  $('automation-row').classList.toggle('disabled', !automation.triggers);
   $('automation-wrap').title = hint;
   $('automation-hint').textContent = hint;
-  $('config-file').textContent = state.config_file;
+  $('automation-setting-hint').textContent = hint || AUTOMATION_HELP;
   if (localStatus) setStatus(localStatus.text, localStatus.isError);
   else setStatus(state.status);
   renderUpdate();
@@ -99,6 +109,10 @@ function when(seconds) {
 function renderUpdate() {
   const u = state.update;
   $('update-version').textContent = `Version ${u.version}`;
+  const pill = $('update-pill');
+  pill.textContent = u.checking ? 'Checking…' : u.available ? 'Update available' : u.error ? 'Check failed' : u.last_check ? 'Up to date' : 'Not checked';
+  pill.classList.toggle('warn', !!u.available || !!u.error);
+  $('update-tag').hidden = !u.available;
   let text;
   if (u.checking) text = 'Checking for a newer version…';
   else if (u.error) text = `Last check failed: ${u.error}`;
@@ -109,9 +123,11 @@ function renderUpdate() {
   else if (u.last_check) text = `Up to date (checked ${when(u.last_check)}).`;
   else text = 'Not checked yet.';
   $('update-state').textContent = text;
-  const mode = $('update-mode');
-  if (document.activeElement !== mode) mode.value = u.mode;
-  mode.disabled = u.mode_locked;
+  for (const radio of document.querySelectorAll('input[name="update-mode"]')) {
+    radio.checked = radio.value === u.mode;
+    radio.disabled = u.mode_locked;
+  }
+  $('row-mode').classList.toggle('disabled', u.mode_locked);
   $('update-locked').hidden = !u.mode_locked;
   $('check-updates').disabled = u.checking;
   const install = $('install-update');
@@ -122,7 +138,7 @@ function renderUpdate() {
 function renderProfiles() {
   const list = $('profile-list');
   list.replaceChildren(...state.profiles.map((profile) => {
-    const isSelected = profile === current();
+    const isSelected = view === 'profile' && profile === current();
     return el('li', {}, el('button', {
       type: 'button',
       'aria-current': isSelected ? 'true' : 'false',
@@ -134,6 +150,7 @@ function renderProfiles() {
 
 async function select(name) {
   selected = name;
+  view = 'profile';
   forgetAbout();
   render();
   await loadUnassigned();
@@ -407,9 +424,12 @@ function failureMarker(f) {
 
 function renderDetail() {
   const profile = current();
-  $('empty').hidden = !!profile;
-  $('profile').hidden = !profile;
-  if (!profile) return;
+  $('settings').hidden = view !== 'settings';
+  $('empty').hidden = !!profile || view === 'settings';
+  $('profile').hidden = !profile || view === 'settings';
+  $('open-settings').setAttribute('aria-current', String(view === 'settings'));
+  if (view === 'settings') renderSettings();
+  if (!profile || view === 'settings') return;
   $('profile-name').textContent = profile.name;
   $('profile-meta').textContent = profile.active
     ? 'This profile is active.'
@@ -449,6 +469,108 @@ function renderDetail() {
   $('entries-empty').hidden = rows.length !== 0;
   renderUnassigned();
 }
+
+// Settings (M6) ---------------------------------------------------------------
+
+const DEFAULT_FIELDS = ['d-action', 'd-trim', 'd-minimize', 'd-timeout'];
+
+function defaultsFromState() {
+  return {
+    default_action: state.default_action,
+    trim: state.default_trim,
+    stop_timeout_s: state.stop_timeout_s,
+    minimize_before_suspend: state.minimize_before_suspend,
+  };
+}
+
+function defaultsFromForm() {
+  return {
+    default_action: $('d-action').value,
+    trim: $('d-trim').checked,
+    stop_timeout_s: Number($('d-timeout').value),
+    minimize_before_suspend: $('d-minimize').checked,
+  };
+}
+
+function fillDefaults() {
+  const d = defaultsFromState();
+  $('d-action').value = d.default_action;
+  $('d-trim').checked = d.trim;
+  $('d-minimize').checked = d.minimize_before_suspend;
+  $('d-timeout').value = String(d.stop_timeout_s);
+}
+
+function markDefaults(dirty) {
+  defaultsDirty = dirty;
+  $('defaults-save').disabled = !dirty;
+  $('defaults-reset').disabled = !dirty;
+  $('defaults-state').textContent = dirty ? 'Unsaved changes.' : 'Saved. Applies from the next switch.';
+  $('d-timeout').removeAttribute('aria-invalid');
+}
+
+function keyCaps(hotkey) {
+  return el('span', { class: 'keys' }, ...hotkey.split('+').map((key) => el('kbd', { text: key })));
+}
+
+function renderSettings() {
+  if (!defaultsDirty && !DEFAULT_FIELDS.some((id) => document.activeElement === $(id))) {
+    fillDefaults();
+    markDefaults(false);
+  }
+  const rows = state.profiles.map((p) => el('tr', {},
+    el('td', {}, el('strong', { text: p.name }), p.active ? ' ' : null, p.active ? el('span', { class: 'tag', text: 'active' }) : null),
+    el('td', p.hotkey ? {} : { class: 'opts' }, p.hotkey ? keyCaps(p.hotkey) : 'none'),
+    el('td', { class: p.triggers.length ? 'mono' : 'opts', text: p.triggers.length ? p.triggers.join(', ') : 'none' }),
+    el('td', { class: 'num', text: String(p.priority || 0) }),
+    el('td', {}, el('button', { type: 'button', class: 'button small', 'aria-label': `Open profile ${p.name}`, onclick: () => select(p.name), text: 'Open profile' }))));
+  $('settings-profiles').tBodies[0].replaceChildren(...rows);
+  const where = state.locations || {};
+  $('file-config').textContent = state.config_file;
+  $('file-settings').textContent = where.settings_file || '';
+  $('file-log').textContent = where.log_file || '';
+  $('open-log').disabled = !where.log_file;
+  $('open-log-folder').disabled = !where.data_dir;
+  $('forget-last').disabled = !where.last_profile;
+  $('last-profile-hint').textContent = where.last_profile
+    ? `Update mode, paused automatic switching and the profile that was active when you signed out (${where.last_profile}).`
+    : 'Update mode, paused automatic switching and the profile that was active when you signed out (none saved).';
+  $('about-version').textContent = `kaltstellen ${state.update.version}`;
+}
+
+function showSettings(section = null) {
+  view = 'settings';
+  render();
+  if (section) $(section).scrollIntoView({ block: 'start' });
+  else $('detail').scrollTo(0, 0);
+  for (const button of document.querySelectorAll('.settings-nav button')) {
+    button.setAttribute('aria-current', String(button.dataset.section === (section || 'general')));
+  }
+}
+
+$('open-settings').addEventListener('click', () => showSettings());
+for (const button of document.querySelectorAll('.settings-nav button')) {
+  button.addEventListener('click', () => showSettings(button.dataset.section));
+}
+$('automation-setting').addEventListener('change', (event) => call('set_automation', { on: event.target.checked }));
+for (const radio of document.querySelectorAll('input[name="update-mode"]')) {
+  radio.addEventListener('change', () => call('set_update_mode', { mode: radio.value }));
+}
+$('defaults-form').addEventListener('input', () => markDefaults(true));
+$('defaults-reset').addEventListener('click', () => { fillDefaults(); markDefaults(false); });
+$('defaults-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const reply = await call('set_defaults', defaultsFromForm());
+  if (reply.ok) { fillDefaults(); markDefaults(false); }
+  else {
+    $('defaults-state').textContent = reply.error;
+    $('d-timeout').setAttribute('aria-invalid', 'true');
+  }
+});
+$('open-config-folder').addEventListener('click', () => call('open_location', { target: 'config_folder' }));
+$('open-log').addEventListener('click', () => call('open_location', { target: 'log' }));
+$('open-log-folder').addEventListener('click', () => call('open_location', { target: 'log_folder' }));
+$('reload-config').addEventListener('click', () => call('reload_config'));
+$('forget-last').addEventListener('click', () => call('forget_last_profile'));
 
 function renderUnassigned() {
   const rows = unassigned.map((u) => el('tr', {},
@@ -633,7 +755,7 @@ function hasFiles(event) {
 /** Files can be dropped while a profile is shown and no dialog other than
  * `Add a program` is open. */
 function canDrop() {
-  return !!state && !!current() && !document.querySelector('dialog[open]:not(#add-dialog)');
+  return !!state && view === 'profile' && !!current() && !document.querySelector('dialog[open]:not(#add-dialog)');
 }
 
 // The page takes every drag and drop, so the WebView never opens a dropped
@@ -809,7 +931,6 @@ $('add-program').addEventListener('click', openAdd);
 $('refresh-unassigned').addEventListener('click', loadUnassigned);
 $('autostart').addEventListener('change', (event) => call('set_autostart', { on: event.target.checked }));
 $('automation').addEventListener('change', (event) => call('set_automation', { on: event.target.checked }));
-$('update-mode').addEventListener('change', (event) => call('set_update_mode', { mode: event.target.value }));
 $('check-updates').addEventListener('click', () => call('check_updates'));
 $('install-update').addEventListener('click', () => call('install_update'));
 
@@ -912,12 +1033,13 @@ function settle() {
 }
 
 /** Screenshot views: ?view=entry|add|confirm|new opens that dialog. */
-async function openView(view) {
+async function openView(name) {
   const profile = current();
-  if (view === 'entry' && profile && profile.entries.length) editEntry(Math.min(2, profile.entries.length - 1));
-  if (view === 'add' && profile) await openAdd();
-  if (view === 'confirm' && profile) confirmDialog('Warn list', 'anydesk.exe is a remote-access tool. Freezing or closing it can cut you off or break things. Add it anyway?', 'Add anyway');
-  if (view === 'new') nameDialog('New profile', 'Evening', async () => ({ ok: false, error: 'KS205: profile name "Evening" is used already' }));
+  if (name === 'entry' && profile && profile.entries.length) editEntry(Math.min(2, profile.entries.length - 1));
+  if (name === 'add' && profile) await openAdd();
+  if (name === 'confirm' && profile) confirmDialog('Warn list', 'anydesk.exe is a remote-access tool. Freezing or closing it can cut you off or break things. Add it anyway?', 'Add anyway');
+  if (name === 'settings') showSettings();
+  if (name === 'new') nameDialog('New profile', 'Evening', async () => ({ ok: false, error: 'KS205: profile name "Evening" is used already' }));
 }
 
 // Errors of the page go to the host's log (and the console in a browser).

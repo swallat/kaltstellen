@@ -7,6 +7,7 @@
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="css/tokens.css">
   <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/settings.css">
   <script type="module" src="js/app.js"></script>
 </head>
 <body>
@@ -17,9 +18,6 @@
       <input type="checkbox" id="automation" aria-describedby="automation-hint"> Automatic switching
       <span class="visually-hidden" id="automation-hint"></span>
     </label>
-    <label class="autostart" id="autostart-wrap">
-      <input type="checkbox" id="autostart"> Start at sign-in
-    </label>
   </header>
 
   <div class="layout">
@@ -29,23 +27,13 @@
         <button type="button" class="button small" id="new-profile">New</button>
       </div>
       <ul class="profile-list" id="profile-list"></ul>
-      <section class="updates" aria-labelledby="updates-title">
-        <h2 id="updates-title">Updates</h2>
-        <p id="update-version"></p>
-        <p class="hint" id="update-state" aria-live="polite"></p>
-        <label for="update-mode">Mode</label>
-        <select id="update-mode" aria-describedby="update-locked">
-          <option value="auto">Install automatically</option>
-          <option value="manual">Check and ask</option>
-          <option value="off">Off</option>
-        </select>
-        <p class="hint" id="update-locked" hidden>Set by KALTSTELLEN_UPDATE.</p>
-        <div class="actions">
-          <button type="button" class="button small" id="check-updates">Check now</button>
-          <button type="button" class="button small primary" id="install-update" hidden>Install</button>
-        </div>
-      </section>
-      <p class="hint" id="config-file"></p>
+      <div class="sidebar-foot">
+        <button type="button" class="nav-button" id="open-settings" aria-current="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+          Settings
+          <span class="tag new" id="update-tag" hidden>update</span>
+        </button>
+      </div>
     </nav>
 
     <main class="detail" id="detail" tabindex="-1">
@@ -111,6 +99,164 @@
         </table>
         <p class="hint" id="unassigned-empty" hidden>Nothing unassigned.</p>
       </section>
+
+      <div class="settings" id="settings" hidden>
+        <nav class="settings-nav" aria-label="Settings sections">
+          <button type="button" data-section="general" aria-current="true">General</button>
+          <button type="button" data-section="defaults" aria-current="false">Program defaults</button>
+          <button type="button" data-section="profiles" aria-current="false">Profiles</button>
+          <button type="button" data-section="updates" aria-current="false">Updates</button>
+          <button type="button" data-section="files" aria-current="false">Files and data</button>
+          <button type="button" data-section="about" aria-current="false">About</button>
+        </nav>
+
+        <div class="settings-body">
+          <h2 class="visually-hidden" id="settings-title" tabindex="-1">Settings</h2>
+
+          <section class="group" id="general" aria-labelledby="g-general">
+            <header><h3 id="g-general">General</h3></header>
+            <div class="rows">
+              <div class="row" id="autostart-row">
+                <div><label class="label" for="autostart">Start at sign-in</label>
+                  <p class="hint">Starts the tray when you sign in to Windows. It never applies a profile by itself.</p></div>
+                <input type="checkbox" class="switch" id="autostart" role="switch">
+              </div>
+              <div class="row" id="automation-row">
+                <div><label class="label" for="automation-setting">Automatic switching</label>
+                  <p class="hint" id="automation-setting-hint">Applies a profile when one of its trigger programs starts, and goes back when the last one has ended. Off pauses all triggers.</p></div>
+                <input type="checkbox" class="switch" id="automation-setting" role="switch" aria-describedby="automation-setting-hint">
+              </div>
+            </div>
+          </section>
+
+          <section class="group" id="defaults" aria-labelledby="g-defaults">
+            <header>
+              <h3 id="g-defaults">Program defaults</h3>
+              <p>Used by every program entry that does not say otherwise. Each entry can override them in its own dialog. Stored in <span class="mono">config.toml</span>, section <span class="mono">[settings]</span>.</p>
+            </header>
+            <form id="defaults-form" class="group" novalidate>
+              <div class="rows">
+                <div class="row">
+                  <div><label class="label" for="d-action">Default action</label>
+                    <p class="hint">For entries that name no action. Starting a program is never a default.</p></div>
+                  <select id="d-action">
+                    <option value="suspend">Suspend (freeze)</option>
+                    <option value="stop">Stop</option>
+                    <option value="ignore">Ignore</option>
+                  </select>
+                </div>
+                <div class="row">
+                  <div><label class="label" for="d-trim">Move frozen programs out of RAM</label>
+                    <p class="hint">Trims the working set of a frozen program. Frees memory, resuming takes a moment longer.</p></div>
+                  <input type="checkbox" class="switch" id="d-trim" role="switch">
+                </div>
+                <div class="row">
+                  <div><label class="label" for="d-minimize">Minimise windows before freezing</label>
+                    <p class="hint">Avoids “not responding” ghost windows.</p></div>
+                  <input type="checkbox" class="switch" id="d-minimize" role="switch">
+                </div>
+                <div class="row">
+                  <div><label class="label" for="d-timeout">Time to close a program</label>
+                    <p class="hint">How long a stopped program gets to close before its “if it does not close in time” choice applies.</p></div>
+                  <span><input type="number" id="d-timeout" min="1" max="300" step="1" inputmode="numeric"><span class="unit">seconds</span></span>
+                </div>
+              </div>
+              <div class="save-bar">
+                <p class="hint" id="defaults-state" role="status"></p>
+                <button type="button" class="button" id="defaults-reset" disabled>Revert</button>
+                <button type="submit" class="button primary" id="defaults-save" disabled>Save defaults</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="group" id="profiles" aria-labelledby="g-profiles">
+            <header>
+              <h3 id="g-profiles">Profiles</h3>
+              <p>Hotkey, trigger programs and priority belong to a profile. Here they are side by side; change them in the profile.</p>
+            </header>
+            <table class="table" id="settings-profiles">
+              <caption class="visually-hidden">Hotkey and triggers of every profile</caption>
+              <thead><tr><th scope="col">Profile</th><th scope="col">Hotkey</th><th scope="col">Triggers</th><th scope="col" class="num">Priority</th><th scope="col"><span class="visually-hidden">Commands</span></th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <p class="hint">Neutral is built in: it has no entries and brings everything back.</p>
+          </section>
+
+          <section class="group" id="updates" aria-labelledby="g-updates">
+            <header>
+              <h3 id="g-updates">Updates</h3>
+              <p>kaltstellen asks GitHub Releases at most once a day. An update never thaws or disturbs your work: it installs only while Neutral is active.</p>
+            </header>
+            <div class="rows">
+              <div class="row">
+                <div><p class="label"><span id="update-version"></span> <span class="status-pill" id="update-pill"></span></p>
+                  <p class="hint" id="update-state" aria-live="polite"></p></div>
+                <div class="actions">
+                  <button type="button" class="button" id="check-updates">Check now</button>
+                  <button type="button" class="button primary" id="install-update" hidden>Install</button>
+                </div>
+              </div>
+              <div class="row" id="row-mode">
+                <div><p class="label" id="mode-label">How to update</p>
+                  <p class="hint"><strong>Automatic</strong> checks and installs. <strong>Ask me</strong> checks and reports. <strong>Off</strong> never connects.</p></div>
+                <div class="segmented" role="radiogroup" aria-labelledby="mode-label" id="update-mode">
+                  <label><input type="radio" name="update-mode" value="auto"><span>Automatic</span></label>
+                  <label><input type="radio" name="update-mode" value="manual"><span>Ask me</span></label>
+                  <label><input type="radio" name="update-mode" value="off"><span>Off</span></label>
+                </div>
+              </div>
+              <div class="row locked" id="update-locked" hidden>
+                <div><p class="label">Set by your system</p>
+                  <p class="hint">The environment variable <span class="mono">KALTSTELLEN_UPDATE</span> decides the mode here. Remove it to choose in this window.</p></div>
+                <span class="status-pill warn">Locked</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="group" id="files" aria-labelledby="g-files">
+            <header>
+              <h3 id="g-files">Files and data</h3>
+              <p>Everything stays on this computer. The log never leaves it.</p>
+            </header>
+            <div class="rows">
+              <div class="row">
+                <div><p class="label">Configuration <span class="where">config.toml</span></p>
+                  <p class="mono" id="file-config"></p>
+                  <p class="hint">Profiles and entries. Edit it by hand or in this window; the file stays the source.</p></div>
+                <div class="pathrow">
+                  <button type="button" class="button small" id="open-config-folder">Open folder</button>
+                  <button type="button" class="button small" id="reload-config">Reload</button>
+                </div>
+              </div>
+              <div class="row">
+                <div><p class="label">Saved settings <span class="where">settings.json</span></p>
+                  <p class="mono" id="file-settings"></p>
+                  <p class="hint" id="last-profile-hint">Update mode, paused automatic switching and the profile that was active when you signed out.</p></div>
+                <button type="button" class="button small" id="forget-last">Forget last profile</button>
+              </div>
+              <div class="row">
+                <div><p class="label">Log <span class="where">kaltstellen.log</span></p>
+                  <p class="mono" id="file-log"></p>
+                  <p class="hint">Rotates at 1 MB and keeps three files.</p></div>
+                <div class="pathrow">
+                  <button type="button" class="button small" id="open-log">Open log</button>
+                  <button type="button" class="button small" id="open-log-folder">Open folder</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="group" id="about" aria-labelledby="g-about">
+            <header><h3 id="g-about">About</h3></header>
+            <div class="rows">
+              <div class="row">
+                <div><p class="label" id="about-version"></p>
+                  <p class="hint">Switches between app profiles by freezing, stopping and starting programs. MIT or Apache-2.0.</p></div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
     </main>
   </div>
 
