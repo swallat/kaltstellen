@@ -84,6 +84,12 @@ enum Command {
         /// Second profile
         b: String,
     },
+    /// List what kaltstellen learned from your hand-made changes after a
+    /// profile was applied (H5), for one profile or all
+    Suggestions {
+        /// Profile name; omitted: all profiles
+        profile: Option<String>,
+    },
     /// Show the active profile and what kaltstellen has put on ice
     Status {
         /// Also list running programs without an entry in the active profile
@@ -237,6 +243,7 @@ pub fn main() -> ExitCode {
             }
         }
         Command::Compare { a, b } => compare(&a, &b),
+        Command::Suggestions { profile } => suggestions(profile.as_deref()),
         Command::Status { unassigned } => {
             let code = status();
             if unassigned && code == exit::OK {
@@ -462,6 +469,21 @@ fn switch(target: &str, force: bool, wait: bool) -> u8 {
     };
     let interrupted = || interrupts.as_ref().is_some_and(Interrupts::requested);
     let mut persist = |s: &State| store.save(s);
+    // H5: B of the last activation before, A of this one after.
+    let data = paths::data_dir();
+    let learning = data.clone().filter(|_| crate::usage::enabled());
+    if learning.is_none()
+        && let Some(data) = &data
+    {
+        crate::usage::drop_pending(data);
+    }
+    let stopped = crate::usage::stopped_names(&state);
+    if let Some(data) = &learning
+        && crate::usage::known_target(&config, target)
+    {
+        crate::usage::before(data, true, &config, &state);
+    }
+    let mut applied = false;
     let finished = match engine::switch_with(
         &config,
         target,
@@ -471,6 +493,7 @@ fn switch(target: &str, force: bool, wait: bool) -> u8 {
         &interrupted,
     ) {
         Ok(report) => {
+            applied = !report.errors.iter().any(|e| e.code == Code::Interrupted);
             let mut finished =
                 Finished::new(true, &state.active_profile, &report.events, &report.errors);
             if report.errors.iter().any(|e| e.code == Code::Interrupted) {
@@ -497,6 +520,9 @@ fn switch(target: &str, force: bool, wait: bool) -> u8 {
             finished
         }
     };
+    if let (Some(data), true) = (&learning, applied) {
+        crate::usage::after(data, true, &state, &stopped);
+    }
     if let Some(interrupts) = &interrupts {
         interrupts.finished();
     }
@@ -1209,6 +1235,58 @@ fn compare(a: &str, b: &str) -> u8 {
     exit::OK
 }
 
+/// H5: the suggestions from use, one block per profile.
+fn suggestions(only: Option<&str>) -> u8 {
+    let Some(file) = paths::config_file() else {
+        eprintln!("error: no configuration directory (APPDATA unset)");
+        return exit::CONFIG_INVALID;
+    };
+    let loaded = match config::load(&file) {
+        Ok(loaded) => loaded,
+        Err(rejected) => {
+            for line in config::rejected_lines(&file, &rejected) {
+                eprintln!("{line}");
+            }
+            return exit::CONFIG_INVALID;
+        }
+    };
+    if let Some(name) = only
+        && loaded.config.profile(name).is_none()
+    {
+        eprintln!(
+            "error: {}: no profile named \"{name}\"",
+            Code::UnknownProfile
+        );
+        return exit::UNKNOWN_PROFILE;
+    }
+    let Some(data) = paths::data_dir() else {
+        return exit::ERRORS;
+    };
+    let (usage, problem) = crate::usage::load(&data);
+    if let Some(problem) = problem {
+        eprintln!("warning: {problem}");
+    }
+    let mut any = false;
+    for profile in &loaded.config.profiles {
+        if only.is_some_and(|name| !profile.name.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        let list = usage.suggestions(&profile.name, &profile.apps);
+        if list.is_empty() {
+            continue;
+        }
+        any = true;
+        println!("{}:", profile.name);
+        for item in list {
+            println!("  {} -> {}  {}", item.exe, item.action_name(), item.reason);
+        }
+    }
+    if !any {
+        println!("no suggestions yet");
+    }
+    exit::OK
+}
+
 /// Prints problems as `file:line: message`, the form editors can jump to.
 fn check_config(file: Option<PathBuf>) -> u8 {
     let Some(file) = file.or_else(paths::config_file) else {
@@ -1348,6 +1426,7 @@ fn run(command: Command) -> Result<bool> {
         Command::CheckConfig { .. }
         | Command::Switch { .. }
         | Command::Compare { .. }
+        | Command::Suggestions { .. }
         | Command::Status { .. }
         | Command::Recover { .. }
         | Command::Quit

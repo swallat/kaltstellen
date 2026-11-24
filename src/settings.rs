@@ -29,6 +29,16 @@ pub struct Settings {
     /// off: all triggers are paused, also after a restart.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub triggers_paused: bool,
+    /// H5: `Suggestions from use`; absent means on, `false` records nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub learn: Option<bool>,
+}
+
+impl Settings {
+    /// Whether suggestions from use are recorded (H5, default on).
+    pub fn learning(&self) -> bool {
+        self.learn.unwrap_or(true)
+    }
 }
 
 /// `settings.json` in the configuration directory `dir`.
@@ -148,6 +158,7 @@ mod tests {
             update: None,
             autostart_asked: true,
             triggers_paused: true,
+            learn: Some(false),
         };
         save(&dir.path().join("nested"), &settings, BUSY).unwrap();
         assert_eq!(load(&dir.path().join("nested")), (settings, None));

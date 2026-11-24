@@ -57,6 +57,7 @@ Copy [config.example.toml](config.example.toml) to
 ```text
 kaltstellen check-config [FILE]   validate the configuration
 kaltstellen compare A B           show how two profiles differ
+kaltstellen suggestions [PROFILE] list what was learned from your hand-made changes
 kaltstellen switch PROFILE        switch to a profile; "neutral" brings
           [--force] [--no-wait]   everything back
 kaltstellen switch PROFILE        show what the switch would do and change

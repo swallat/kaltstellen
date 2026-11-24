@@ -214,7 +214,13 @@ impl Runner for EngineRunner {
         let mut errors: Vec<Error> = problem.into_iter().collect();
         let mut persist = |s: &crate::state::State| store.save(s);
         let result = match job {
-            Job::Recover | Job::Quit | Job::EndSession => engine::recover(&mut state, &mut persist),
+            Job::Recover | Job::Quit | Job::EndSession => {
+                // H5: an activation that ends here has no B.
+                if let Some(data) = crate::paths::data_dir() {
+                    crate::usage::drop_pending(&data);
+                }
+                engine::recover(&mut state, &mut persist)
+            }
             Job::Switch {
                 target,
                 force,
@@ -229,7 +235,21 @@ impl Runner for EngineRunner {
                     source.config().clone()
                 };
                 let options = Options { force: *force };
-                engine::switch_guarded(
+                let data = crate::paths::data_dir();
+                let learning = data.clone().filter(|_| crate::usage::enabled());
+                if learning.is_none()
+                    && let Some(data) = &data
+                {
+                    // Off: nothing is recorded and no old A is kept.
+                    crate::usage::drop_pending(data);
+                }
+                let stopped = crate::usage::stopped_names(&state);
+                if let Some(data) = &learning
+                    && crate::usage::known_target(&config, target)
+                {
+                    crate::usage::before(data, true, &config, &state);
+                }
+                let result = engine::switch_guarded(
                     &config,
                     target,
                     &mut state,
@@ -237,7 +257,16 @@ impl Runner for EngineRunner {
                     &mut persist,
                     &|| false,
                     &|| guests.list(),
-                )
+                );
+                if let (Some(data), Ok(report)) = (&learning, &result)
+                    && report
+                        .errors
+                        .iter()
+                        .all(|e| e.code != crate::error::Code::Interrupted)
+                {
+                    crate::usage::after(data, true, &state, &stopped);
+                }
+                result
             }
         };
         let mut events = Vec::new();
