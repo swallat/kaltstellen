@@ -2246,9 +2246,11 @@ function Test-Unassigned {
         'Window, profile beta-freeze: the program is listed as "new". "Add to profile" adds it and it leaves the list; "Dismiss" removes another one from this profile''s list only.'
     ) -Check {
         param($since)
-        $u = Invoke-Ks status --unassigned
+        $listed = { $r = Invoke-Ks status --unassigned; [bool]($r.Output | Where-Object { $_ -match [regex]::Escape($tp.exe) -and $_ -match '\(new\)' }) }
         $ok = $null
-        if ($tp) { $ok = [bool]($u.Output | Where-Object { $_ -match [regex]::Escape($tp.exe) -and $_ -match '\(new\)' }) }
+        # The tray icon of a new program takes a while to be noticed (longer on ARM64).
+        if ($tp) { $ok = [bool](Wait-Until 40 $listed 1000) }
+        $u = Invoke-Ks status --unassigned
         @{ ok = $ok; m = [ordered]@{ unassigned = (($u.Output | Select-Object -First 10) -join ' | ') } }
     } -Ask 'Menu item, "new" marker, "Add to profile" and "Dismiss" as described?' -AskNote
     Set-Neutral
@@ -2276,8 +2278,13 @@ function Test-Programs {
             $moved = [bool](Wait-Until 5 { (Get-Beat $p) -ne $b0 } 100)
             $answer = $null
             if ($p.role -ne 'tray_program') {
-                $w = Get-MainWindows $p | Select-Object -First 1
-                $answer = if ($w) { [KsBetaV3.Native]::Ping($w.Handle, 5000) } else { -1 }
+                # The window appears a moment after the process (slower on ARM64).
+                $answer = -1
+                $null = Wait-Until 20 {
+                    $w = Get-MainWindows $p | Select-Object -First 1
+                    if ($w) { $answer = [KsBetaV3.Native]::Ping($w.Handle, 2000) }
+                    $answer -ge 0
+                } 300
             }
             $m[$p.exe] = "beat $(if ($moved) { 'rises' } else { 'does not move' })$(if ($null -ne $answer) { ", window answers in $answer ms" })"
             if (-not $moved -or ($null -ne $answer -and $answer -lt 0)) { $ok = $false }
