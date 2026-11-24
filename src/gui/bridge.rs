@@ -2176,13 +2176,13 @@ mod tests {
             json!({"v": 1, "id": 4, "type": "set_learn", "on": true}),
         );
         let state = send(&mut b, json!({"v": 1, "id": 5, "type": "get_state"}));
-        assert_eq!(state["data"]["learn"], true);
+        assert_eq!(state["state"]["learn"], true);
         send(
             &mut b,
             json!({"v": 1, "id": 6, "type": "set_learn", "on": false}),
         );
         let state = send(&mut b, json!({"v": 1, "id": 7, "type": "get_state"}));
-        assert_eq!(state["data"]["learn"], false);
+        assert_eq!(state["state"]["learn"], false);
     }
 
     #[test]
