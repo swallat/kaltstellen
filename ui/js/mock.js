@@ -260,6 +260,23 @@ function handle(message) {
       });
       return { ok: true, data };
     }
+    case 'preview': {
+      const p = state.profiles.find((q) => q.name.toLowerCase() === String(m.profile).toLowerCase());
+      if (!p) return fail(`no profile named "${m.profile}"`);
+      const step = { suspend: 'suspend', stop: 'stop', start: 'start' };
+      const items = p.entries.filter((e) => e.action !== 'ignore').map((e) => {
+        const on = running.some((r) => r.exe.toLowerCase() === e.exe.toLowerCase());
+        const verb = e.action === 'stop' ? 'stop' : e.action === 'start' ? 'start' : 'freeze';
+        return {
+          step: step[e.action] || e.action, program: e.exe,
+          outcome: on || e.action === 'start' ? 'will' : 'no_change',
+          text: on || e.action === 'start' ? `would ${verb}${on ? ' 1 process' : ''}` : 'not running',
+          processes: on ? 1 : 0, private_bytes: on ? 50 * 1048576 : 0,
+        };
+      });
+      const sum = items.filter((i) => i.outcome === 'will' && i.step !== 'start').reduce((n, i) => n + i.private_bytes, 0);
+      return { ok: true, data: { profile: p.name, items, problems: [], private_bytes: sum } };
+    }
     case 'compare': {
       const a = state.profiles.find((p) => p.name.toLowerCase() === String(m.a).toLowerCase());
       const b = state.profiles.find((p) => p.name.toLowerCase() === String(m.b).toLowerCase());

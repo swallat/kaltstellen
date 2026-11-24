@@ -451,6 +451,7 @@ function renderDetail() {
     else field.removeAttribute('aria-invalid');
   }
   $('apply').disabled = state.applying;
+  $('preview-apply').disabled = state.applying;
   $('apply').textContent = state.applying ? 'Applying…' : 'Apply profile';
 
   const rows = profile.entries.map((e, index) => el('tr', { class: e.errors.length ? 'failed' : null },
@@ -734,6 +735,60 @@ $('compare-with').addEventListener('change', loadCompare);
 $('compare-identical').addEventListener('click', () => {
   showIdentical = !showIdentical;
   renderCompare();
+});
+
+// Preview a switch (H4) -----------------------------------------------------
+
+let previewed = null;
+let previewAll = false;
+
+const stepLabel = { resume: 'Resume', stop: 'Stop', suspend: 'Freeze', start: 'Start' };
+
+function renderPreview() {
+  const items = previewed.items;
+  const will = items.filter((i) => i.outcome === 'will').length;
+  const problems = previewed.problems;
+  const parts = [`${will} ${will === 1 ? 'program' : 'programs'} would be changed`];
+  if (previewed.private_bytes > 0) parts.push(`${megabytes(previewed.private_bytes)} of private memory in what is stopped or frozen`);
+  parts.push(problems.length ? `${problems.length} ${problems.length === 1 ? 'problem' : 'problems'} expected` : 'no problems expected');
+  $('preview-summary').textContent = `${parts.join(', ')}.`;
+  $('preview-problems').replaceChildren(...problems.map((text) => el('p', { class: 'error', text })));
+  const shown = items.filter((i) => i.outcome !== 'no_change' || previewAll);
+  const order = { problem: 0, will: 1, no_change: 2 };
+  const sorted = shown.map((item, at) => ({ item, at })).sort((x, y) => order[x.item.outcome] - order[y.item.outcome] || x.at - y.at);
+  $('preview-table').tBodies[0].replaceChildren(...sorted.map(({ item }) => el('tr', { class: item.outcome === 'problem' ? 'failed' : null },
+    el('td', { text: stepLabel[item.step] || item.step }),
+    el('td', {}, el('span', { class: 'exe', text: item.program })),
+    el('td', { class: 'diff-cell', text: item.text }))));
+  const quiet = items.length - items.filter((i) => i.outcome !== 'no_change').length;
+  const toggle = $('preview-nochange');
+  toggle.hidden = quiet === 0;
+  toggle.textContent = previewAll ? 'Hide programs without a change' : `Show programs without a change (${quiet})`;
+}
+
+async function openPreview() {
+  const name = current().name;
+  $('preview-error').textContent = '';
+  const reply = await call('preview', { profile: name }, { quiet: true });
+  if (!reply.ok) {
+    notice(reply.error, false);
+    return;
+  }
+  previewed = reply.data;
+  previewAll = false;
+  $('preview-title').textContent = `Preview: switch to ${name}`;
+  renderPreview();
+  openDialog($('preview-dialog'));
+}
+
+$('preview').addEventListener('click', openPreview);
+$('preview-nochange').addEventListener('click', () => {
+  previewAll = !previewAll;
+  renderPreview();
+});
+$('preview-apply').addEventListener('click', () => {
+  $('preview-dialog').close();
+  call('apply', { profile: previewed.profile });
 });
 
 // Dialogs -----------------------------------------------------------------
@@ -1169,7 +1224,7 @@ function settle() {
   });
 }
 
-/** Screenshot views: ?view=entry|add|confirm|new opens that dialog. */
+/** Screenshot views: ?view=entry|add|confirm|new|preview opens that dialog. */
 async function openView(name) {
   const profile = current();
   if (name === 'entry' && profile && profile.entries.length) editEntry(Math.min(2, profile.entries.length - 1));
@@ -1177,6 +1232,7 @@ async function openView(name) {
   if (name === 'confirm' && profile) confirmDialog('Warn list', 'anydesk.exe is a remote-access tool. Freezing or closing it can cut you off or break things. Add it anyway?', 'Add anyway');
   if (name === 'settings') showSettings();
   if (name === 'compare' && profile) await openCompare();
+  if (name === 'preview' && profile) await openPreview();
   if (name === 'new') nameDialog('New profile', 'Evening', async () => ({ ok: false, error: 'KS205: profile name "Evening" is used already' }));
 }
 

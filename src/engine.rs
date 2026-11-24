@@ -40,6 +40,8 @@ pub struct Event {
 pub struct Report {
     pub events: Vec<Event>,
     pub errors: Vec<Error>,
+    /// A preview (H4): problems are collected but not written to the log.
+    quiet: bool,
 }
 
 impl Report {
@@ -58,9 +60,88 @@ impl Report {
     /// The same problem is reported once, even if two passes run into it.
     fn failed(&mut self, error: Error) {
         if !self.errors.contains(&error) {
-            warn!("{error}");
+            if !self.quiet {
+                warn!("{error}");
+            }
             self.errors.push(error);
         }
+    }
+}
+
+/// What a preview says will happen to a program (H4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// The step would act on it.
+    Will,
+    /// Nothing to do: already so, or not running.
+    NoChange,
+    /// The step would fail or is refused; the error is in [`Plan::problems`].
+    Problem,
+}
+
+/// One program in one step of a preview, in the order of W1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanItem {
+    pub step: Step,
+    pub program: String,
+    pub outcome: Outcome,
+    pub text: String,
+    /// Processes of the program that the step would touch.
+    pub processes: usize,
+    /// Their private working set together, in bytes.
+    pub private_bytes: u64,
+}
+
+/// What a switch would do, without doing it (H4). Built by the same steps
+/// as the switch, so the two cannot drift apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plan {
+    pub profile: String,
+    pub items: Vec<PlanItem>,
+    /// The errors the switch would collect (P7, P6, a missing file).
+    pub problems: Vec<Error>,
+}
+
+impl Plan {
+    /// The plan as text, one line per program in the order of W1, then the
+    /// problems the switch would report.
+    pub fn lines(&self) -> Vec<String> {
+        let mut lines = vec![format!("switch to \"{}\" would:", self.profile)];
+        for item in &self.items {
+            let mark = match item.outcome {
+                Outcome::Will => "+",
+                Outcome::NoChange => "=",
+                Outcome::Problem => "!",
+            };
+            lines.push(format!(
+                "  {mark} {} {}: {}",
+                item.step, item.program, item.text
+            ));
+        }
+        if self.items.is_empty() {
+            lines.push("  (nothing)".to_owned());
+        }
+        for problem in &self.problems {
+            lines.push(format!("problem: {problem}"));
+        }
+        lines
+    }
+
+    /// How many items of `step` have `outcome`.
+    pub fn count(&self, step: Step, outcome: Outcome) -> usize {
+        self.items
+            .iter()
+            .filter(|i| i.step == step && i.outcome == outcome)
+            .count()
+    }
+
+    /// Private memory of the programs the suspend and stop steps would touch.
+    pub fn private_bytes(&self) -> u64 {
+        self.items
+            .iter()
+            .filter(|i| i.outcome == Outcome::Will && matches!(i.step, Step::Stop | Step::Suspend))
+            .map(|i| i.private_bytes)
+            .sum()
     }
 }
 
@@ -145,17 +226,7 @@ pub fn switch_guarded(
     interrupted: &dyn Fn() -> bool,
     guests: &dyn Fn() -> Vec<Guest>,
 ) -> Result<Report> {
-    let (name, apps): (String, &[App]) = if target.trim().eq_ignore_ascii_case(NEUTRAL) {
-        (NEUTRAL.to_owned(), &[])
-    } else {
-        let profile = config.profile(target).ok_or_else(|| {
-            Error::new(
-                Code::UnknownProfile,
-                format!("no profile named \"{}\"", target.trim()),
-            )
-        })?;
-        (profile.name.clone(), &profile.apps)
-    };
+    let (name, apps) = resolve_target(config, target)?;
     let to_neutral = name == NEUTRAL;
     info!("switch from \"{}\" to \"{name}\"", state.active_profile);
 
@@ -168,6 +239,8 @@ pub fn switch_guarded(
         interrupted,
         halted: false,
         guests,
+        dry: false,
+        plan: Vec::new(),
     };
     let snapshot = run.snapshot()?;
     run.drop_records_of_previous_boot(&snapshot);
@@ -190,6 +263,63 @@ pub fn switch_guarded(
     Ok(run.report)
 }
 
+/// The name and entries of the profile a switch goes to.
+fn resolve_target<'c>(config: &'c Config, target: &str) -> Result<(String, &'c [App])> {
+    if target.trim().eq_ignore_ascii_case(NEUTRAL) {
+        return Ok((NEUTRAL.to_owned(), &[]));
+    }
+    let profile = config.profile(target).ok_or_else(|| {
+        Error::new(
+            Code::UnknownProfile,
+            format!("no profile named \"{}\"", target.trim()),
+        )
+    })?;
+    Ok((profile.name.clone(), &profile.apps))
+}
+
+/// H4: what [`switch_guarded`] would do, in the same steps, without doing
+/// it. Works on a copy of `state`, writes nothing, sends no signal and
+/// minimises no window. To predict P7 it opens the processes the real step
+/// would open, with the same rights, and closes them again at once.
+pub fn preview(
+    config: &Config,
+    target: &str,
+    state: &State,
+    options: Options,
+    guests: &dyn Fn() -> Vec<Guest>,
+) -> Result<Plan> {
+    let (name, apps) = resolve_target(config, target)?;
+    let to_neutral = name == NEUTRAL;
+    let mut state = state.clone();
+    let mut persist = |_: &State| Ok(());
+    let mut run = Run {
+        settings: &config.settings,
+        options,
+        state: &mut state,
+        persist: &mut persist,
+        report: Report {
+            quiet: true,
+            ..Report::default()
+        },
+        interrupted: &|| false,
+        halted: false,
+        guests,
+        dry: true,
+        plan: Vec::new(),
+    };
+    let snapshot = run.snapshot()?;
+    run.drop_records_of_previous_boot(&snapshot);
+    run.resume(&snapshot, apps);
+    run.stop(apps)?;
+    run.suspend(apps)?;
+    run.start(apps, to_neutral)?;
+    Ok(Plan {
+        profile: name,
+        items: run.plan,
+        problems: run.report.errors,
+    })
+}
+
 /// S3, L3: resumes everything recorded as suspended and returns to
 /// `neutral`. Records of stopped programs are kept.
 pub fn recover(state: &mut State, persist: &mut dyn FnMut(&State) -> Result<()>) -> Result<Report> {
@@ -203,6 +333,8 @@ pub fn recover(state: &mut State, persist: &mut dyn FnMut(&State) -> Result<()>)
         interrupted: &|| false,
         halted: false,
         guests: &Vec::new,
+        dry: false,
+        plan: Vec::new(),
     };
     let snapshot = Snapshot::take()?;
     run.drop_records_of_previous_boot(&snapshot);
@@ -227,6 +359,9 @@ struct Run<'a> {
     guests: &'a dyn Fn() -> Vec<Guest>,
     /// Set once `interrupted` returned true; everything after is skipped.
     halted: bool,
+    /// H4: build a plan instead of acting.
+    dry: bool,
+    plan: Vec<PlanItem>,
 }
 
 impl Run<'_> {
@@ -251,6 +386,40 @@ impl Run<'_> {
         if let Err(err) = (self.persist)(self.state) {
             self.report.failed(err);
         }
+    }
+
+    /// H4: one line of the plan.
+    fn planned(
+        &mut self,
+        step: Step,
+        program: &str,
+        outcome: Outcome,
+        text: impl Into<String>,
+        processes: &[ProcessInfo],
+    ) {
+        self.plan.push(PlanItem {
+            step,
+            program: program.to_owned(),
+            outcome,
+            text: text.into(),
+            processes: processes.len(),
+            private_bytes: processes.iter().map(|p| p.private_bytes).sum(),
+        });
+    }
+
+    /// H4: opens `processes` with `access` as the real step would and
+    /// closes them again; a refusal (P7) is collected like in the real step.
+    /// Returns the processes that can be acted on.
+    fn probe(&mut self, processes: &[ProcessInfo], access: Access, step: Step) -> Vec<ProcessInfo> {
+        let mut usable = Vec::new();
+        for info in processes {
+            match Target::open(info, access) {
+                Ok(Some(_)) => usable.push(info.clone()),
+                Ok(None) => {}
+                Err(err) => self.report.failed(err.step(step)),
+            }
+        }
+        usable
     }
 
     /// S10: after a reboot no recorded process exists any more, and a PID
@@ -283,6 +452,15 @@ impl Run<'_> {
                     .program(&app.exe)
                     .step(step),
                 );
+                if self.dry {
+                    self.planned(
+                        step,
+                        &app.exe,
+                        Outcome::Problem,
+                        "on the warn list, not confirmed: skipped",
+                        &[],
+                    );
+                }
                 false
             }
             _ => true,
@@ -305,6 +483,42 @@ impl Run<'_> {
 
     fn resume(&mut self, snapshot: &Snapshot, target: &[App]) {
         let (mut stay, resume) = split_suspended(&self.state.suspended, target);
+        if self.dry {
+            for record in &stay {
+                self.planned(
+                    Step::Resume,
+                    &record.exe,
+                    Outcome::NoChange,
+                    "stays frozen: the profile freezes it too",
+                    &[],
+                );
+            }
+            for record in &resume {
+                let Some(info) = snapshot.find(record.pid, record.created).cloned() else {
+                    continue;
+                };
+                let usable = self.probe(std::slice::from_ref(&info), Access::Suspend, Step::Resume);
+                if usable.is_empty() {
+                    self.planned(
+                        Step::Resume,
+                        &record.exe,
+                        Outcome::Problem,
+                        "cannot be resumed",
+                        &[],
+                    );
+                } else {
+                    self.planned(
+                        Step::Resume,
+                        &record.exe,
+                        Outcome::Will,
+                        "will resume",
+                        &usable,
+                    );
+                }
+            }
+            self.state.suspended = stay;
+            return;
+        }
         for record in resume {
             match resume_record(snapshot, &record) {
                 Ok(true) => self
@@ -352,6 +566,32 @@ impl Run<'_> {
             }
             let processes = self.resolve(&snapshot, app, Step::Stop);
             if processes.is_empty() {
+                if self.dry {
+                    self.planned(Step::Stop, &app.exe, Outcome::NoChange, "not running", &[]);
+                }
+                continue;
+            }
+            if self.dry {
+                let usable = self.probe(&processes, Access::Stop, Step::Stop);
+                if usable.is_empty() {
+                    self.planned(
+                        Step::Stop,
+                        &app.exe,
+                        Outcome::Problem,
+                        "cannot be stopped",
+                        &processes,
+                    );
+                } else {
+                    let after = match on_timeout {
+                        crate::config::OnTimeout::Kill => "ended if it does not close",
+                        crate::config::OnTimeout::Keep => "left running if it does not close",
+                    };
+                    let text = format!(
+                        "will stop: closes within {} s, otherwise {after}",
+                        self.settings.stop_timeout_s
+                    );
+                    self.planned(Step::Stop, &app.exe, Outcome::Will, text, &usable);
+                }
                 continue;
             }
             let image = app.path.clone().or_else(|| image_of(&processes, &app.exe));
@@ -410,6 +650,19 @@ impl Run<'_> {
                     .filter(|p| !self.is_recorded(p))
                     .collect();
                 if processes.is_empty() {
+                    if self.dry && pass == 0 {
+                        let running = self.resolve(&snapshot, app, Step::Suspend);
+                        let (outcome, text) = if running.is_empty() {
+                            (Outcome::NoChange, "not running")
+                        } else {
+                            (Outcome::NoChange, "no change: already frozen")
+                        };
+                        self.planned(Step::Suspend, &app.exe, outcome, text, &[]);
+                    }
+                    continue;
+                }
+                if self.dry {
+                    self.freeze_dry(app, &processes);
                     continue;
                 }
                 if pass == 0 && self.settings.minimize_before_suspend {
@@ -420,6 +673,37 @@ impl Run<'_> {
             }
         }
         Ok(())
+    }
+
+    /// H4: what [`Run::freeze`] would do. The processes are recorded in the
+    /// copy of the state, so the second pass sees them as frozen (W5).
+    fn freeze_dry(&mut self, app: &App, processes: &[ProcessInfo]) {
+        let usable = self.probe(processes, Access::Suspend, Step::Suspend);
+        if usable.is_empty() {
+            self.planned(
+                Step::Suspend,
+                &app.exe,
+                Outcome::Problem,
+                "cannot be frozen",
+                processes,
+            );
+            return;
+        }
+        for info in &usable {
+            self.state.suspended.push(Suspended {
+                pid: info.pid,
+                created: info.created,
+                image: String::new(),
+                exe: app.exe.clone(),
+                path: app.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            });
+        }
+        let text = if self.settings.minimize_before_suspend {
+            "will freeze: windows are minimised first"
+        } else {
+            "will freeze"
+        };
+        self.planned(Step::Suspend, &app.exe, Outcome::Will, text, &usable);
     }
 
     fn is_recorded(&self, process: &ProcessInfo) -> bool {
@@ -470,6 +754,36 @@ impl Run<'_> {
         }
     }
 
+    /// H4: what starting `exe` from `path` would do. Whether it needs
+    /// elevation is not known in advance (the manifest is not read).
+    fn start_dry(&mut self, exe: &str, path: &Path) {
+        if path.is_file() {
+            self.planned(
+                Step::Start,
+                exe,
+                Outcome::Will,
+                format!("will start {}", path.display()),
+                &[],
+            );
+        } else {
+            let mut error = Error::new(
+                Code::StartFailed,
+                format!("{} was not found", path.display()),
+            )
+            .program(exe)
+            .step(Step::Start);
+            error.path = Some(path.to_string_lossy().into_owned());
+            self.report.failed(error);
+            self.planned(
+                Step::Start,
+                exe,
+                Outcome::Problem,
+                format!("{} was not found", path.display()),
+                &[],
+            );
+        }
+    }
+
     fn start(&mut self, target: &[App], to_neutral: bool) -> Result<()> {
         if self.halt() {
             return Ok(());
@@ -500,6 +814,19 @@ impl Run<'_> {
             };
             // A frozen process counts as running (W1).
             if !self.resolve(&snapshot, app, Step::Start).is_empty() {
+                if self.dry {
+                    self.planned(
+                        Step::Start,
+                        &app.exe,
+                        Outcome::NoChange,
+                        "already running",
+                        &[],
+                    );
+                }
+                continue;
+            }
+            if self.dry {
+                self.start_dry(&app.exe, path);
                 continue;
             }
             match process::start(path, args, cwd.as_deref()) {
@@ -517,6 +844,10 @@ impl Run<'_> {
                 continue;
             };
             if !snapshot.program_at(&stopped.exe, &image).0.is_empty() {
+                continue;
+            }
+            if self.dry {
+                self.start_dry(&stopped.exe, &image);
                 continue;
             }
             match process::start(&image, &stopped.args, stopped.cwd.as_deref().map(Path::new)) {
@@ -647,5 +978,77 @@ mod tests {
         assert_eq!(err.code, Code::UnknownProfile);
         assert_eq!(saved, 0);
         assert_eq!(state, State::default());
+    }
+
+    fn config_with(apps: Vec<App>) -> Config {
+        Config {
+            settings: Settings::default(),
+            profiles: vec![crate::config::Profile {
+                name: "focus".to_owned(),
+                hotkey: None,
+                apps,
+                triggers: Vec::new(),
+                priority: 0,
+            }],
+        }
+    }
+
+    #[test]
+    fn preview_lists_the_steps_and_changes_nothing() {
+        let config = config_with(vec![
+            app(
+                "kaltstellen-test-absent.exe",
+                None,
+                AppAction::Suspend { trim: false },
+            ),
+            App::new(
+                "kaltstellen-test-tool.exe",
+                Some(PathBuf::from("C:\\kaltstellen-test-absent\\tool.exe")),
+                AppAction::Start {
+                    args: Vec::new(),
+                    cwd: None,
+                },
+            ),
+        ]);
+        let state = State::default();
+        let plan = preview(&config, "focus", &state, Options::default(), &Vec::new).unwrap();
+        assert_eq!(plan.profile, "focus");
+        assert_eq!(plan.count(Step::Suspend, Outcome::NoChange), 1);
+        assert_eq!(plan.count(Step::Start, Outcome::Problem), 1);
+        assert_eq!(plan.problems.len(), 1);
+        assert_eq!(plan.problems[0].code, Code::StartFailed);
+        assert_eq!(state, State::default());
+        let lines = plan.lines();
+        assert_eq!(lines[0], "switch to \"focus\" would:");
+        assert!(lines.iter().any(|l| l.starts_with("problem: ")));
+    }
+
+    #[test]
+    fn preview_of_neutral_with_nothing_held_is_empty() {
+        let config = config_with(Vec::new());
+        let plan = preview(
+            &config,
+            "neutral",
+            &State::default(),
+            Options::default(),
+            &Vec::new,
+        )
+        .unwrap();
+        assert!(plan.items.is_empty());
+        assert!(plan.problems.is_empty());
+    }
+
+    #[test]
+    fn preview_refuses_an_unknown_profile() {
+        let config = config_with(Vec::new());
+        let err = preview(
+            &config,
+            "nope",
+            &State::default(),
+            Options::default(),
+            &Vec::new,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, Code::UnknownProfile);
     }
 }

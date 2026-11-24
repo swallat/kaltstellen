@@ -70,8 +70,11 @@ enum Command {
         #[arg(long)]
         force: bool,
         /// With a tray running: return once the tray has queued the request
-        #[arg(long)]
+        #[arg(long, conflicts_with = "dry_run")]
         no_wait: bool,
+        /// Show what the switch would do and change nothing (H4)
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Show how two profiles differ: programs only one has, other actions
     /// or options, hotkey, triggers and priority
@@ -184,7 +187,14 @@ pub fn main() -> ExitCode {
             profile,
             force,
             no_wait,
-        } => switch(&profile, force, !no_wait),
+            dry_run,
+        } => {
+            if dry_run {
+                preview(&profile, force)
+            } else {
+                switch(&profile, force, !no_wait)
+            }
+        }
         Command::Compare { a, b } => compare(&a, &b),
         Command::Status { unassigned } => {
             let code = status();
@@ -449,6 +459,64 @@ fn switch(target: &str, force: bool, wait: bool) -> u8 {
         interrupts.finished();
     }
     print_finished(&finished)
+}
+
+/// `kaltstellen switch PROFILE --dry-run` (H4): what the switch would do,
+/// in the order of W1. Takes no lock and asks no tray; the state is read
+/// without touching it. Exit code 0 when nothing would go wrong, 1 when
+/// the switch would report problems, 2 for an invalid configuration, 4 for
+/// an unknown profile.
+fn preview(target: &str, force: bool) -> u8 {
+    let config = match config::for_switch(paths::config_file().as_deref(), target) {
+        Ok((config, notes)) => {
+            for note in notes {
+                eprintln!("{note}");
+            }
+            config
+        }
+        Err(lines) => {
+            for line in lines {
+                eprintln!("{line}");
+            }
+            return exit::CONFIG_INVALID;
+        }
+    };
+    let state = store()
+        .ok()
+        .and_then(|store| store.peek())
+        .unwrap_or_default();
+    match engine::preview(
+        &config,
+        target,
+        &state,
+        engine::Options { force },
+        &Vec::new,
+    ) {
+        Ok(plan) => {
+            for line in plan.lines() {
+                println!("{line}");
+            }
+            info!(
+                "preview of \"{}\": {} steps, {} problems",
+                plan.profile,
+                plan.items.len(),
+                plan.problems.len()
+            );
+            if plan.problems.is_empty() {
+                exit::OK
+            } else {
+                exit::ERRORS
+            }
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            if err.code == Code::UnknownProfile {
+                exit::UNKNOWN_PROFILE
+            } else {
+                exit::ERRORS
+            }
+        }
+    }
 }
 
 /// L2 from the command line: the tray of this data directory resumes what

@@ -59,6 +59,8 @@ kaltstellen check-config [FILE]   validate the configuration
 kaltstellen compare A B           show how two profiles differ
 kaltstellen switch PROFILE        switch to a profile; "neutral" brings
           [--force] [--no-wait]   everything back
+kaltstellen switch PROFILE        show what the switch would do and change
+          --dry-run               nothing
 kaltstellen status [--unassigned] show the active profile and what is on ice;
                                   --unassigned also lists running programs
                                   without an entry in it, with what each is
