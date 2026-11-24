@@ -2771,6 +2771,8 @@ mod tests {
         let running = send(&mut b, json!({"v": 1, "id": 2, "type": "running"}));
         assert_eq!(running["data"][0]["protection"], "warn");
         assert!(running["data"][0]["kind"]["id"].is_string());
+        // A warn-list program never gets a Freeze or Stop hint (P6).
+        assert!(running["data"][0]["suggestion"].is_null());
         let list = send(
             &mut b,
             json!({"v": 1, "id": 3, "type": "unassigned", "profile": "focus"}),
