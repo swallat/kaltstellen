@@ -1004,6 +1004,55 @@ function snapEverything() {
   for (const row of snap.data.seen) if (row.protection !== 'warn' && snapShown(row)) set(row, 'stop');
 }
 
+/** Order of two rows by kind: known kinds by their plural name, unknown last. */
+const snapKindOrder = (x, y) => (snapKindId(x) === 'unknown') - (snapKindId(y) === 'unknown')
+  || (x.kind?.plural || '').localeCompare(y.kind?.plural || '');
+
+/** H8: the kind of a row; a program of a kind nobody could name is `unknown`. */
+const snapKindId = (row) => (row.kind && row.kind.known ? row.kind.id : 'unknown');
+
+/** H8: one line per kind found among the rows the list shows, with one
+ * choice for all of them. Nothing is remembered as a rule: it only sets the
+ * rows once, like the bulk bar. Warn-list programs are not changed for
+ * Freeze or Stop (they need their own confirmation, P6). */
+/** Rows a Freeze or Stop for a whole kind leaves alone. */
+const snapLocked = (row) => row.protection === 'warn' || row.elevated;
+
+function snapRenderKinds() {
+  const panel = $('snapshot-kinds');
+  if (panel.hidden) return;
+  const rows = new Map(snapRows().map((r) => [snapKey(r), r]));
+  const kinds = new Map();
+  for (const key of snap.order) {
+    const row = rows.get(key);
+    if (!row) continue;
+    const id = snapKindId(row);
+    if (!kinds.has(id)) kinds.set(id, { id, plural: row.kind && row.kind.plural ? row.kind.plural : 'programs', rows: [] });
+    kinds.get(id).rows.push(row);
+  }
+  const had = panel.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement : null;
+  const hadAt = had ? { line: [...panel.querySelectorAll('.kind-line')].indexOf(had.closest('.kind-line')), a: had.dataset.a } : null;
+  const lines = [...kinds.values()].sort((a, b) => (a.id === 'unknown') - (b.id === 'unknown') || a.plural.localeCompare(b.plural));
+  panel.replaceChildren(
+    el('p', { class: 'hint', text: 'One choice for every program of a kind that the list shows. It sets the rows once; nothing is remembered, and you can change each row afterwards.' }),
+    ...lines.map((kind) => el('div', { class: 'kind-line' },
+      el('span', { class: 'kind-name' }, el('strong', { text: kind.id === 'unknown' ? `Unknown kind (${kind.rows.length})` : `All ${kind.plural} (${kind.rows.length})` }),
+        el('span', { class: 'hint', text: kind.rows.map((r) => r.exe).join(', ') }),
+        kind.rows.some(snapLocked) ? el('span', { class: 'hint', text: `${kind.rows.filter(snapLocked).length} of them keep their choice for Freeze or Stop (warn list or higher integrity).` }) : null),
+      el('span', { class: 'seg', role: 'group', 'aria-label': `Choice for all ${kind.plural}` },
+        ...snapshotChoices.map(([value, label]) => el('button', {
+          type: 'button', 'data-a': value, 'aria-label': `${label}, all ${kind.plural}`, text: snapShort[value],
+          onclick: () => {
+            const keys = kind.rows
+              .filter((r) => !(r.protection === 'warn' && (value === 'suspend' || value === 'stop')))
+              .map(snapKey);
+            snapSet(keys, value, null);
+          },
+        }))))));
+  if (hadAt && hadAt.line >= 0) panel.querySelectorAll('.kind-line')[hadAt.line]?.querySelector(`button[data-a="${hadAt.a}"]`)?.focus();
+  if (lines.length === 0) panel.append(el('p', { class: 'hint', text: 'No programs are shown.' }));
+}
+
 const snapShort = { none: 'Not', ignore: 'As is', suspend: 'Freeze', stop: 'Stop', start: 'Run' };
 const snapKeyNumber = (value) => snapshotChoices.findIndex(([v]) => v === value) + 1;
 
@@ -1048,7 +1097,12 @@ function snapBulkBar() {
 function snapTable(title, rows, note) {
   if ($('snapshot-heavy').checked) rows = rows.filter((r) => snap.load.get(r.exe.toLowerCase())?.heavy);
   if ($('snapshot-tray').checked) rows = rows.filter((r) => r.tray);
-  if ($('snapshot-sort').checked) rows = [...rows].sort((a, b) => loadScore(snap.load.get(b.exe.toLowerCase())) - loadScore(snap.load.get(a.exe.toLowerCase())));
+  if ($('snapshot-sort').checked || $('snapshot-sortkind').checked) {
+    // Kind first when asked for, then the load; unknown kinds come last.
+    const byKind = $('snapshot-sortkind').checked;
+    const load = (r) => ($('snapshot-sort').checked ? loadScore(snap.load.get(r.exe.toLowerCase())) : 0);
+    rows = [...rows].sort((x, y) => (byKind ? snapKindOrder(x, y) : 0) || load(y) - load(x));
+  }
   const wrap = el('section', { class: 'snap-group' }, el('h3', { text: `${title} (${rows.length})` }));
   if (note) wrap.append(el('p', { class: 'hint', text: note }));
   if (rows.length === 0) return wrap;
@@ -1148,6 +1202,7 @@ function renderSnapshot(focusKey, action) {
     snapTable('Not running, seen earlier', snap.data.seen, ''));
   loadIcons($('snapshot-groups'));
   snapBulkBar();
+  snapRenderKinds();
   box.scrollTop = top;
   if (focusKey) {
     const node = [...$('snapshot-groups').querySelectorAll('tr[data-key]')].find((r) => r.dataset.key === focusKey);
@@ -1184,6 +1239,9 @@ async function openSnapshot(mode, template) {
   $('snapshot-heavy').checked = false;
   $('snapshot-tray').checked = false;
   $('snapshot-sort').checked = false;
+  $('snapshot-sortkind').checked = false;
+  $('snapshot-kinds').hidden = true;
+  $('snapshot-kinds-toggle').setAttribute('aria-expanded', 'false');
   if (!(await loadSnapshot())) return;
   if (template) {
     const count = snapApplyTemplate(template);
@@ -1234,6 +1292,13 @@ $('snapshot-measure').addEventListener('click', measureSnapshot);
 $('snapshot-heavy').addEventListener('change', renderSnapshot);
 $('snapshot-tray').addEventListener('change', renderSnapshot);
 $('snapshot-sort').addEventListener('change', renderSnapshot);
+$('snapshot-sortkind').addEventListener('change', () => renderSnapshot());
+$('snapshot-kinds-toggle').addEventListener('click', () => {
+  const panel = $('snapshot-kinds');
+  panel.hidden = !panel.hidden;
+  $('snapshot-kinds-toggle').setAttribute('aria-expanded', String(!panel.hidden));
+  renderSnapshot();
+});
 $('snapshot-background').addEventListener('change', renderSnapshot);
 $('snapshot-suggestions').addEventListener('click', () => {
   // Only rows that have a suggestion and no choice yet; a suggestion is

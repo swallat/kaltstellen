@@ -418,13 +418,16 @@
         <button type="button" class="button small" id="snapshot-everything">Everything as it is now</button>
         <button type="button" class="button small" id="snapshot-clear">Clear</button>
         <button type="button" class="button small" id="snapshot-all">Select all shown</button>
+        <button type="button" class="button small" id="snapshot-kinds-toggle" aria-expanded="false" aria-controls="snapshot-kinds">Choose by kind…</button>
         <button type="button" class="button small" id="snapshot-refresh">Refresh</button>
         <button type="button" class="button small" id="snapshot-measure">Measure again</button>
         <label class="inline"><input type="checkbox" id="snapshot-heavy"> Heavy only</label>
         <label class="inline"><input type="checkbox" id="snapshot-tray"> Tray icon only</label>
         <label class="inline"><input type="checkbox" id="snapshot-sort"> Sort by load</label>
+        <label class="inline"><input type="checkbox" id="snapshot-sortkind"> Sort by kind</label>
         <label class="inline"><input type="checkbox" id="snapshot-background"> Show background programs</label>
       </div>
+      <div class="kinds-panel" id="snapshot-kinds" hidden></div>
       <div class="bulk-bar" id="snapshot-bulk" hidden>
         <strong id="snapshot-bulk-count" role="status"></strong>
         <span class="hint">For all selected:</span>
