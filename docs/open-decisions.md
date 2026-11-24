@@ -281,9 +281,9 @@ Everything else the owner has not decided yet is deferred (below).
 
 ## Open: profile assistance (owner request 2026-11-24)
 
-The six helpers of spec section 8, H1 to H6 (a profile from the current
+The helpers of spec section 8, H1 to H8 (a profile from the current
 state, load hints, kinds and suggestions, preview, suggestions from use,
-compare). The owner asked for them; everything below is **[assumed]** until
+compare, templates, choose by kind). The owner asked for them; everything below is **[assumed]** until
 the owner has seen the mock (`profile-assist-mock/mock.html` in the project
 files) and, later, the real window.
 
@@ -322,6 +322,12 @@ files) and, later, the real window.
    `KS305`.
 10. **H6 compare**: profile with profile only; `Take over from B` and
     `Remove from A` per row; `kaltstellen compare` exits `0` also when profiles differ (`4` unknown profile, `2` invalid configuration).
+11. **H7 templates**: data shipped with the tool, rules by kind only, starting
+    set `Focus`, `Gaming`, `Presentation`, `Battery saver`; they open the H1
+    dialog pre-filled and write nothing themselves; only running and seen
+    programs are matched; no own templates in version 1.
+12. **H8 choose by kind**: sets rows once, no remembered rule, no kind
+    overrides in version 1.
 
 ## Open: optional background helper (owner request 2026-11-24)
 

@@ -79,6 +79,7 @@ Requests the helpers of spec section 8 need. Names and fields are a proposal
 | `compare` | `a`, `b` | H6: `data` rows `{exe, path, a, b, difference}` and the read-only differences of hotkey, triggers and priority. |
 | `suggestions` | `profile` | H5: `data` the suggestions `{exe, path, action, reason}`. |
 | `suggestion_answer` | `profile`, `exe`, `answer` (`add`, `later`, `never`), `action?` | H5: `add` writes an entry as `add_entry` does. |
+| `templates` | | H7: `data` the templates `{id, name, purpose, rules, found}`; `snapshot` takes `template` (an id) and sets the rows by its rules. |
 | `set_learning` | `on` | H5: the `learn` key of `settings.json`. |
 | `forget_learning` | | H5: deletes `usage.json`. |
 
