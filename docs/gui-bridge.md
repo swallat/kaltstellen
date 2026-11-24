@@ -64,7 +64,7 @@ change, the line endings and a byte order mark of the file; entries written
 inline (`app = [{ exe = "a.exe" }]`) are turned into `[[profile.app]]`
 tables by the first edit of that profile.
 
-## Planned: profile assistance (H1 to H6, not built)
+## Planned: profile assistance (H1 to H8, not built)
 
 Requests the helpers of spec section 8 need. Names and fields are a proposal
 **[assumed]** and may change when they are built.

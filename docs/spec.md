@@ -8,7 +8,7 @@ Legend: **[decided]** confirmed by the project owner; **[assumed]** author's rea
 ## 1. Scope of version 1
 
 - Manual activation: tray menu, command line, optional global hotkey. **[decided]** (U5.) Automatic triggers (U4) were planned after version 1 and were built on the owner's request on 2026-11-23, before the release, so both can be tested together: opt-in trigger programs per profile, see L12.
-- Actions `start`, `stop`, `suspend`, `ignore`; user processes of the current Windows session only. Services (A5) and elevation are deferred to M4, to be done with a small elevated helper rather than an elevated tray. **[decided]**
+- Actions `start`, `stop`, `suspend`, `ignore`; user processes of the current Windows session only. Services (A5) and elevation are deferred to M4, to be done with a small optional elevated helper rather than an elevated tray (P8, [design-optional-helper.md](design-optional-helper.md)). **[decided]**
 - Configuration is one TOML file and stays authoritative; the GUI reads and writes it. **[decided]** (owner, 2026-11-23)
 
 ## 2. Concepts
@@ -451,7 +451,7 @@ priority = 10                 # optional, default 0, higher wins
 - M3: main window with program assignment and per-program action; hotkeys (M1-M5, U3, E1).
 - M4: optional background helper with the roles observe, act and services (A5, P7, P8), in steps M4a to M4e of [design-optional-helper.md](design-optional-helper.md); not before code signing.
 - Automatic triggers (U4): trigger programs per profile, opt-in, a priority per profile, a manual choice always wins **[decided]** (owner, 2026-11-23); decided details in [design-automatic-triggers.md](design-automatic-triggers.md). Planned after version 1; built on the owner's request on 2026-11-23, before the release, so both are tested together (L12, C9).
-- Profile assistance (H1 to H6, section 8): a profile from the current state, load hints, kinds and suggestions, preview, suggestions from use, compare. Requested by the owner on 2026-11-24; spec and mock first, code after the owner has seen the mock. No new configuration keys. **[assumed]** (details)
+- Profile assistance (H1 to H8, section 8): a profile from the current state, load hints, kinds and suggestions, preview, suggestions from use, compare. Requested by the owner on 2026-11-24; spec and mock first, code after the owner has seen the mock. No new configuration keys. **[assumed]** (details)
 
 ## 12. Confirmation status
 
