@@ -636,7 +636,7 @@ fn update_check(quiet: bool) -> u8 {
             info!("update: no release published yet");
             if !quiet {
                 println!(
-                    "no release is published yet; kaltstellen {} is the newest version",
+                    "no release is published for this channel yet; kaltstellen {} is the newest version",
                     update::CURRENT
                 );
             }
@@ -713,12 +713,12 @@ fn update_install(force: bool, unattended: bool) -> u8 {
         Ok(None) if force => {
             return refused(Error::new(
                 Code::UpdateRelease,
-                "no release is published yet; nothing to install",
+                "no release is published for this channel yet; nothing to install",
             ));
         }
         Ok(None) => {
             println!(
-                "no release is published yet; kaltstellen {} is the newest version",
+                "no release is published for this channel yet; kaltstellen {} is the newest version",
                 update::CURRENT
             );
             return exit::OK;

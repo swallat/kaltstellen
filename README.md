@@ -222,8 +222,9 @@ starts). By default it installs a newer version by itself, but only while
 `neutral` is active and no switch is running or waiting, so nothing you
 froze is thawed; otherwise it waits for the next time you are back on
 `neutral`. This check is the only network access kaltstellen makes: one
-HTTPS request to the GitHub API, nothing about you or your configuration is
-sent. Choose the mode with any of:
+HTTPS request to the GitHub API (a second one while no stable release is
+published, to tell that apart from a repository that is gone), nothing about
+you or your configuration is sent. Choose the mode with any of:
 
 - the `Updates` section of the main window: `Install automatically`,
   `Check and ask` (the tray menu then shows `Install update <version>…` and
@@ -236,7 +237,8 @@ A running tray takes a mode chosen in the window or on the command line over
 at once, and a mode that checks checks right away.
 
 While no release is published for your channel yet, a check says so and
-counts as "nothing newer", not as a failure.
+counts as "nothing newer", not as a failure; `kaltstellen update --force`
+then has nothing to install (`KS802`).
 
 With the check off, nothing connects unless you run `kaltstellen update`.
 A copy installed by scoop, winget or Chocolatey, or placed below Program

@@ -66,18 +66,25 @@ pub fn parse_latest(json: &[u8]) -> Result<Release, String> {
 
 /// The answer of `/releases`: the highest version that is not a draft
 /// (used while a pre-release runs, so a beta sees the next beta); `None`
-/// when there is none yet.
+/// when there is none yet (empty, or drafts only). Published releases of
+/// which none has a version tag are an error, not "none".
 pub fn parse_list(json: &[u8]) -> Result<Option<Release>, String> {
     let raws: Vec<Raw> =
         serde_json::from_slice(json).map_err(|e| format!("release information: {e}"))?;
-    Ok(raws
+    let published: Vec<Raw> = raws.into_iter().filter(|r| !r.draft).collect();
+    if published.is_empty() {
+        return Ok(None);
+    }
+    let mut last_error = String::new();
+    published
         .into_iter()
-        .filter(|r| !r.draft)
-        .filter_map(|r| r.release().ok())
+        .filter_map(|r| r.release().map_err(|e| last_error = e).ok())
         .max_by(|a, b| {
             let (x, y) = (Version::parse(&a.version), Version::parse(&b.version));
             x.cmp(&y)
-        }))
+        })
+        .map(Some)
+        .ok_or(last_error)
 }
 
 /// The executable of `version` for this architecture
@@ -151,6 +158,9 @@ mod tests {
             None
         );
         assert!(parse_list(b"{").is_err());
+        // Published, but none with a version tag: an error.
+        let junk = parse_list(br#"[{"tag_name": "nightly", "draft": false}]"#).unwrap_err();
+        assert!(junk.contains("nightly"), "{junk}");
     }
 
     #[test]

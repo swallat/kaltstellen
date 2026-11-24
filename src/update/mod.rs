@@ -170,10 +170,17 @@ pub fn latest(fetch: &dyn Fetch, source: &Source, current: &str) -> Result<Optio
     };
     let json = match fetch.get(&url, "application/vnd.github+json", METADATA_LIMIT) {
         Ok(json) => json,
-        // Only `latest` means "none yet" by 404 (a repository that is gone
-        // looks the same; the list then tells, for a pre-release). For the
-        // list, which is empty rather than missing, a 404 stays an error.
-        Err(err) if !pre && err.status == Some(404) => return Ok(None),
+        // A 404 for `latest` means "no stable release yet", but a repository
+        // that is gone (or a wrong mirror) answers the same. The list tells
+        // them apart: it exists, maybe empty, only for a repository that
+        // exists. A 404 for the list stays an error.
+        Err(err) if !pre && err.status == Some(404) => {
+            let list = format!("{}/releases?per_page=1", source.base);
+            return match fetch.get(&list, "application/vnd.github+json", METADATA_LIMIT) {
+                Ok(_) => Ok(None),
+                Err(_) => Err(Error::new(Code::UpdateCheck, err)),
+            };
+        }
         Err(err) => return Err(Error::new(Code::UpdateCheck, err)),
     };
     if pre {
@@ -394,6 +401,8 @@ mod tests {
 
     const LATEST: &str = "http://127.0.0.1:1/repos/o/r/releases/latest";
     const LIST: &str = "http://127.0.0.1:1/repos/o/r/releases?per_page=30";
+    /// Asked after a 404 for [`LATEST`]: does the repository exist?
+    const PROBE: &str = "http://127.0.0.1:1/repos/o/r/releases?per_page=1";
 
     /// Both addresses fail without an answer, as with no network.
     fn offline() -> Fake {
@@ -525,9 +534,24 @@ mod tests {
     /// "nothing newer", not a failed check.
     #[test]
     fn up1_no_release_yet_is_nothing_newer() {
-        let none = Fake(HashMap::from([(LIST.to_owned(), Ok(b"[]".to_vec()))]));
+        let none = Fake(HashMap::from([
+            (LIST.to_owned(), Ok(b"[]".to_vec())),
+            (PROBE.to_owned(), Ok(b"[]".to_vec())),
+        ]));
         assert_eq!(latest(&none, &source(), "1.0.0").unwrap(), None);
         assert_eq!(latest(&none, &source(), "1.0.0-beta.1").unwrap(), None);
+        // Only pre-releases: `latest` is 404, the list is not empty.
+        let only_beta = Fake(HashMap::from([(
+            PROBE.to_owned(),
+            Ok(br#"[{"tag_name":"v1.0.0-beta.1"}]"#.to_vec()),
+        )]));
+        assert_eq!(latest(&only_beta, &source(), "1.0.0").unwrap(), None);
+        // A repository that is gone (or a wrong mirror): 404 for both.
+        let gone = Fake(HashMap::new());
+        assert_eq!(
+            latest(&gone, &source(), "1.0.0").unwrap_err().code,
+            Code::UpdateCheck
+        );
         // A 404 for the list is not "none yet": the list exists, empty.
         let no_list = Fake(HashMap::new());
         assert_eq!(
@@ -566,10 +590,14 @@ mod tests {
             ..Default::default()
         };
         record::save(dir.path(), &rec).unwrap();
+        record::mark_failed(dir.path(), "9.9.9", 1).unwrap();
         assert_eq!(check(&none, &source(), Some(dir.path())).unwrap(), None);
         let (rec, _) = record::load(dir.path());
-        assert_eq!((rec.latest, rec.page, rec.error), (None, None, None));
         assert!(rec.last_check.is_some());
+        // A version that failed to install is still held back if it
+        // comes again.
+        assert!(rec.failed_before("9.9.9"));
+        assert_eq!((rec.latest, rec.page, rec.error), (None, None, None));
     }
 
     #[test]
