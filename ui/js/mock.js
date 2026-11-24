@@ -303,6 +303,9 @@ function handle(message) {
       if (!['config_folder', 'log', 'log_folder'].includes(m.target)) return fail(`unknown location "${m.target}"`);
       state.status = `Mock: would open ${m.target}.`;
       return { ok: true };
+    case 'reload_config':
+      state.status = 'Configuration read again.';
+      return { ok: true };
     case 'forget_last_profile':
       state.locations.last_profile = null;
       state.status = 'The offer to apply the last profile after sign-in is cleared.';

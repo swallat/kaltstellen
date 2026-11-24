@@ -375,7 +375,9 @@ The author's defaults, confirmed as built:
   key that is missing and would get its default stays out of the file;
   `[settings]` is created at the end of the file when it is missing;
   `open_location` and `forget_last_profile` are new requests (the page names
-  a target, never a path); `Reload` reads the configuration file again.
+  a target, never a path); `reload_config` (the `Reload` button) reads the configuration file again;
+  an inline `settings = { … }` table becomes a `[settings]` section when the
+  defaults are saved.
 - **GUI polish** (owner request 2026-11-24): the main window's colours follow
   the branding (primary teal `#0A7288` light, `#4CCBE3` dark), a failed entry
   is marked by a tint instead of a stripe, and states, motion and focus

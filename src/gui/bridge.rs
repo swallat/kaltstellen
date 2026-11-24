@@ -238,6 +238,9 @@ pub enum Request {
     },
     /// M6: forget the profile of the last session.
     ForgetLastProfile,
+    /// M6: read the configuration file again (edits are saved at once, so
+    /// nothing of the window is lost).
+    ReloadConfig,
     Icons {
         programs: Vec<IconProgram>,
         /// Device pixels: the page's size times its DPI scale.
@@ -762,6 +765,13 @@ impl<H: Host> Bridge<H> {
                 let path = path.ok_or_else(|| format!("{what} is not known"))?;
                 self.host.open_path(&path)?;
                 self.status = format!("Opened {what}.");
+                Ok(None)
+            }
+            Request::ReloadConfig => {
+                let fresh =
+                    Document::open(self.document.path()).map_err(|lines| lines.join("; "))?;
+                self.document = fresh;
+                self.status = "Configuration read again.".to_owned();
                 Ok(None)
             }
             Request::ForgetLastProfile => {
@@ -1724,6 +1734,26 @@ mod tests {
             assert_eq!(reply["ok"], false, "{target}");
         }
         assert_eq!(fake.opened.borrow().len(), 3);
+    }
+
+    #[test]
+    fn m6_reload_reads_a_file_changed_by_hand() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        let file = dir.path().join("config.toml");
+        std::fs::write(
+            &file,
+            format!("{CONFIG}\n[[profile]]\nname = \"by hand\"\n"),
+        )
+        .unwrap();
+        let reply = send(&mut b, json!({"v": 1, "id": 1, "type": "reload_config"}));
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(reply["state"]["profiles"][1]["name"], "by hand");
+        // A file that is not valid is refused and the window keeps what it had.
+        std::fs::write(&file, "[[profile]]\nname = ").unwrap();
+        let reply = send(&mut b, json!({"v": 1, "id": 2, "type": "reload_config"}));
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["state"]["profiles"][1]["name"], "by hand");
     }
 
     #[test]

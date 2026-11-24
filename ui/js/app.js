@@ -569,7 +569,7 @@ $('defaults-form').addEventListener('submit', async (event) => {
 $('open-config-folder').addEventListener('click', () => call('open_location', { target: 'config_folder' }));
 $('open-log').addEventListener('click', () => call('open_location', { target: 'log' }));
 $('open-log-folder').addEventListener('click', () => call('open_location', { target: 'log_folder' }));
-$('reload-config').addEventListener('click', async () => { await call('get_state'); notice('Configuration read again.', false); });
+$('reload-config').addEventListener('click', () => call('reload_config'));
 $('forget-last').addEventListener('click', () => call('forget_last_profile'));
 
 function renderUnassigned() {

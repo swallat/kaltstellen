@@ -339,11 +339,20 @@ impl Document {
     pub fn set_defaults(&mut self, defaults: &Defaults) -> Result<(), Error> {
         self.edit(|doc| {
             let existed = doc.contains_key("settings");
-            let table = doc
-                .entry("settings")
-                .or_insert(Item::Table(Table::new()))
+            let item = doc.entry("settings").or_insert(Item::Table(Table::new()));
+            // `settings = { trim = false }` is accepted by the configuration
+            // rules; it becomes a `[settings]` table by this edit.
+            if item.is_inline_table() {
+                let inline = std::mem::replace(item, Item::None);
+                *item = Item::Table(
+                    inline
+                        .into_table()
+                        .map_err(|_| "\"settings\" is not a table".to_owned())?,
+                );
+            }
+            let table = item
                 .as_table_mut()
-                .ok_or("\"settings\" is not a table")?;
+                .ok_or_else(|| "\"settings\" is not a table".to_owned())?;
             let fresh = config::Settings::default();
             put(
                 table,
@@ -1119,6 +1128,24 @@ name = "music"
             20,
             "refused edit leaves it"
         );
+    }
+
+    #[test]
+    fn m6_set_defaults_turns_an_inline_settings_table_into_a_section() {
+        let mut d = Document::from_text(
+            Path::new("C:\\cfg\\config.toml"),
+            "settings = { trim = false }\n",
+        )
+        .unwrap();
+        let defaults = Defaults {
+            default_action: Action::Ignore,
+            trim: false,
+            stop_timeout_s: 8,
+            minimize_before_suspend: true,
+        };
+        d.set_defaults(&defaults).unwrap();
+        assert_eq!(d.config().settings.default_action, Action::Ignore);
+        assert!(!d.config().settings.trim);
     }
 
     #[test]
