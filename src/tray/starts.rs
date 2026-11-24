@@ -158,32 +158,46 @@ impl StartWatch {
         }
     }
 
-    /// The starts that stayed running long enough and are worth offering,
-    /// each program once per activation: `(exe, path)`. They are also
-    /// queued for the next notification.
-    pub fn confirmed(&mut self, now: u64, ctx: &Context) -> Vec<(String, Option<String>)> {
+    /// The starts that stayed running long enough (the process did not end
+    /// within [`MIN_LIFE`]), oldest first, whatever the program is. The
+    /// other features that follow starts (a profile that reacts to them)
+    /// take these; [`offers`](Self::offers) picks the ones to announce.
+    pub fn settled(&mut self, now: u64) -> Vec<Event> {
         let old: Vec<u32> = self
             .pending
             .iter()
             .filter(|(_, e)| e.time + MIN_LIFE <= now)
             .map(|(pid, _)| *pid)
             .collect();
-        let mut found: Vec<(String, Option<String>)> = Vec::new();
         let mut events: Vec<Event> = old
             .iter()
             .filter_map(|pid| self.pending.remove(pid))
             .collect();
         events.sort_by_key(|e| e.seq);
-        for event in events {
+        events
+    }
+
+    /// Of settled starts, those worth offering, each program once per
+    /// activation: `(exe, path)`. They are also queued for the next
+    /// notification.
+    pub fn offers(&mut self, settled: &[Event], ctx: &Context) -> Vec<(String, Option<String>)> {
+        let mut found: Vec<(String, Option<String>)> = Vec::new();
+        for event in settled {
             let key = event.exe.to_lowercase();
-            if !eligible(&event, ctx) || self.offered.contains(&key) {
+            if !eligible(event, ctx) || self.offered.contains(&key) {
                 continue;
             }
             self.offered.insert(key);
             self.waiting.push(event.exe.clone());
-            found.push((event.exe, event.path));
+            found.push((event.exe.clone(), event.path.clone()));
         }
         found
+    }
+
+    /// [`settled`](Self::settled) and [`offers`](Self::offers) in one.
+    pub fn confirmed(&mut self, now: u64, ctx: &Context) -> Vec<(String, Option<String>)> {
+        let settled = self.settled(now);
+        self.offers(&settled, ctx)
     }
 
     /// The text of the next notification, when one is due. `profile` is

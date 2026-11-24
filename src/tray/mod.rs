@@ -1052,7 +1052,10 @@ impl App {
             decided: &decided,
             dismissed: dismissed.as_ref(),
         };
-        let found = self.starts.confirmed(now, &ctx);
+        // `settled` is every start that stayed running; other features that
+        // follow starts (a profile that watches) hook in here.
+        let settled = self.starts.settled(now);
+        let found = self.starts.offers(&settled, &ctx);
         if !found.is_empty() {
             match crate::unassigned::note_started(&dir, &active, &found, now) {
                 Ok(fresh) => {
