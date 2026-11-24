@@ -278,6 +278,8 @@ fn run(window: bool) -> u8 {
             notify_new: false,
             watch_reapplied: None,
             watch_due: false,
+            watch_streak: 0,
+            was_watching: false,
             images: HashMap::new(),
             notice: None,
             balloons: model::Balloons::default(),
@@ -382,6 +384,12 @@ struct App {
     /// M4c: a program of the watching profile started and the profile was
     /// not applied again yet.
     watch_due: bool,
+    /// M4c: re-applications in a row that each came soon after the last
+    /// (a program that starts again after the profile stopped it); each
+    /// doubles the wait.
+    watch_streak: u32,
+    /// M4c: the active profile watched at the last poll.
+    was_watching: bool,
     /// U4: image paths of processes named like a trigger with a path, by
     /// PID and creation time, so each is opened once (A7). A read that
     /// failed is tried again at the next polls, at most
@@ -1032,6 +1040,15 @@ impl App {
         // Questions to the helper are needed to announce new programs
         // (`notify_new`) or to follow a profile with `watch` (M4c).
         let watching = self.active_watches();
+        if watching != self.was_watching {
+            // `watch` was switched on (or the profile changed): only starts
+            // from now on count, not those since the profile was applied.
+            self.was_watching = watching;
+            self.watch_due = false;
+            if watching {
+                self.activate_starts();
+            }
+        }
         self.starts.set_enabled(self.notify_new || watching);
         if !self.starts.enabled() {
             return;
@@ -1091,7 +1108,23 @@ impl App {
         // follow starts (a profile that watches) hook in here.
         let settled = self.starts.settled(now);
         if watching {
-            self.note_watched(&settled, &decided);
+            let acting: std::collections::HashSet<String> = lock(&self.source)
+                .config()
+                .profile(&active)
+                .map(|p| {
+                    p.apps
+                        .iter()
+                        .filter(|a| {
+                            matches!(
+                                a.action,
+                                config::AppAction::Stop { .. } | config::AppAction::Suspend { .. }
+                            )
+                        })
+                        .map(|a| a.exe.to_lowercase())
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.note_watched(&settled, &acting);
             self.try_reapply();
         }
         let found = if self.notify_new {
@@ -1115,17 +1148,17 @@ impl App {
         self.announce_starts(now, &active);
     }
 
-    /// M4c: a program with an entry of the active profile (`watch = true`)
-    /// started after the profile was applied: the profile is to be applied
+    /// M4c: a program that the active profile stops or suspends
+    /// (`watch = true`; `acting` holds those entries) started after the profile was applied: the profile is to be applied
     /// again ([`try_reapply`](Self::try_reapply)).
     fn note_watched(
         &mut self,
         settled: &[crate::helper::events::Event],
-        decided: &std::collections::HashSet<String>,
+        acting: &std::collections::HashSet<String>,
     ) {
         if let Some(hit) = settled
             .iter()
-            .find(|e| e.path.is_some() && decided.contains(&e.exe.to_lowercase()))
+            .find(|e| e.path.is_some() && acting.contains(&e.exe.to_lowercase()))
         {
             info!("tray: \"{}\" started while the profile watches", hit.exe);
             self.watch_due = true;
@@ -1147,11 +1180,22 @@ impl App {
             || self.controller.is_quitting()
             || self
                 .watch_reapplied
-                .is_some_and(|t| t.elapsed() < WATCH_GAP)
+                .is_some_and(|t| t.elapsed() < WATCH_GAP * (1 << self.watch_streak))
         {
             return;
         }
         self.watch_due = false;
+        // A program that keeps coming back after being stopped must not keep
+        // the profile busy: each re-application soon after the last doubles
+        // the wait (up to 16 times the gap).
+        let soon = self
+            .watch_reapplied
+            .is_some_and(|t| t.elapsed() < WATCH_GAP * (2 << self.watch_streak));
+        self.watch_streak = if soon {
+            (self.watch_streak + 1).min(4)
+        } else {
+            0
+        };
         self.watch_reapplied = Some(Instant::now());
         let active = self.status.active.clone();
         info!("tray: applying \"{active}\" again (it watches)");
@@ -1163,6 +1207,9 @@ impl App {
 
     /// H9: the notification for programs noted meanwhile, if one is due.
     fn announce_starts(&mut self, now: u64, active: &str) {
+        if !self.notify_new {
+            return;
+        }
         if let Some((title, text)) = self.starts.announcement(now, active) {
             info!("tray: notification: {title}: {text}");
             let logged_only = std::env::var(NOTIFY_ENV).is_ok_and(|v| v.trim() == "log");
