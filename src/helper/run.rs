@@ -125,6 +125,7 @@ fn serve(stop: Stop) -> Result<()> {
         }) {
             Ok(started) => {
                 info!("observe: the process event session runs");
+                ring.set_running(true);
                 session = Some(started);
             }
             Err(err) => error!("observe does not run: {err}"),
@@ -184,11 +185,16 @@ fn serve(stop: Stop) -> Result<()> {
     let mut reported = 0;
     while !stop.wait_for(Duration::from_secs(30)) {
         if let Some(session) = session.as_mut() {
-            let lost = session.lost();
-            ring.set_lost(lost);
-            if lost > reported {
-                warn!("observe: {lost} process events lost so far");
-                reported = lost;
+            if ring.running() && !session.alive() {
+                ring.set_running(false);
+                error!("observe: the process event session has ended; the role does not run");
+            }
+            if let Some(lost) = session.lost() {
+                ring.set_lost(lost);
+                if lost > reported {
+                    warn!("observe: {lost} process events or buffers lost so far");
+                    reported = lost;
+                }
             }
         }
     }

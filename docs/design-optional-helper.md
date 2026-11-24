@@ -277,20 +277,26 @@ Hardening from the review of M4a (same day):
   `Microsoft-Windows-Kernel-Process` (keyword process start and stop only).
   A session of that name left behind by a crashed service is stopped and
   started again. If the session cannot start, the helper still answers and
-  `helper status` says `observe (process events): not running`; the reason
+  `helper status` says `observe (process events): not running` (also when
+  the session ends later, for instance stopped from outside); the reason
   is in the log (`KS1006`).
 - Event fields are read by name (TDH), not by byte offset, so event versions
   do not matter. Kept per event: number, `start`/`stop`, pid, parent pid,
   Windows session, creation time, time, file name, full path in drive form
   (`null` when the kernel path maps to no drive). No command lines, no
-  window titles. The ring holds at most 4096 events and 24 hours, only in
+  window titles. A file name is cut at 255 characters, a path longer than
+  520 is not given out (`path` is `null`). The ring holds at most 4096
+  events and 24 hours (by the clock now, also when nothing happens), only in
   memory; a restart starts empty.
 - Pipe verb `{"v":1,"cmd":"events","after":N}` (extra field `after`, only
   with `events`): the events from number `N` on that belong to **the
   caller's own Windows session** (looked up from the pipe's client process),
-  at most 200 per answer, with `next` (ask again with this) and `lost`
-  (events dropped from the ring or lost by the kernel since the helper
-  started). A caller whose session cannot be told gets nothing. A `stop`
+  at most 100 per answer, with `next` (ask again with this) and `lost`
+  (events or buffers the kernel reported lost since the helper started;
+  events that fell out of the ring show as a jump of `next` past `after`).
+  An `after` beyond what the helper has numbered means it restarted since:
+  the answer starts from the oldest event and `next` is smaller than
+  `after`, which is the reader's sign of the restart. A caller whose session cannot be told gets nothing. A `stop`
   whose event does not name its session takes it from the matching `start`
   (same pid and creation time); without a match it is not given out.
 - Replies may be up to 256 KiB; requests stay at 4096 bytes.

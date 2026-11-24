@@ -205,7 +205,8 @@ pub fn start(name: &str, sink: impl Fn(ProcessEvent) + Send + Sync + 'static) ->
         .spawn(move || {
             // SAFETY: a handle returned by OpenTraceW; blocks until the
             // session is stopped.
-            let _ = unsafe { ProcessTrace(&[trace], None, None) };
+            let status = unsafe { ProcessTrace(&[trace], None, None) };
+            log::warn!("the process event trace ended ({})", status.0);
         })
         .map_err(|e| error("cannot start the event thread", e))?;
     session.thread = Some(worker);
@@ -213,8 +214,15 @@ pub fn start(name: &str, sink: impl Fn(ProcessEvent) + Send + Sync + 'static) ->
 }
 
 impl Session {
-    /// Events the kernel or the consumer lost so far.
-    pub fn lost(&mut self) -> u32 {
+    /// Whether the session still delivers: false once the trace thread has
+    /// ended (the session was stopped from outside, or the trace failed).
+    pub fn alive(&self) -> bool {
+        self.thread.as_ref().is_some_and(|t| !t.is_finished())
+    }
+
+    /// Events and buffers the kernel reports lost so far; `None` if the
+    /// session could not be asked.
+    pub fn lost(&mut self) -> Option<u32> {
         // SAFETY: valid handle and properties block, which the call fills.
         let status = unsafe {
             ControlTraceW(
@@ -225,11 +233,11 @@ impl Session {
             )
         };
         if status != ERROR_SUCCESS {
-            return 0;
+            return None;
         }
         // SAFETY: the block holds an EVENT_TRACE_PROPERTIES the call filled.
         let props = unsafe { &*props_ptr(&mut self.properties) };
-        props.EventsLost.saturating_add(props.RealTimeBuffersLost)
+        Some(props.EventsLost.saturating_add(props.RealTimeBuffersLost))
     }
 }
 
@@ -237,7 +245,7 @@ impl Drop for Session {
     fn drop(&mut self) {
         // SAFETY: valid handle and properties block; stopping the session
         // ends ProcessTrace on the worker thread.
-        let _ = unsafe {
+        let stopped = unsafe {
             ControlTraceW(
                 self.control,
                 PCWSTR::null(),
@@ -245,8 +253,19 @@ impl Drop for Session {
                 EVENT_TRACE_CONTROL_STOP,
             )
         };
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        // A trace that could not be stopped would keep the join waiting, and
+        // the service with it; the thread then ends with the process.
+        let joined = match self.thread.take() {
+            Some(thread) if stopped == ERROR_SUCCESS || thread.is_finished() => {
+                let _ = thread.join();
+                true
+            }
+            Some(_) => false,
+            None => true,
+        };
+        if !joined {
+            // The callback may still run: the sink is left alone.
+            return;
         }
         if self.trace.Value != INVALID_TRACE {
             // SAFETY: the handle came from OpenTraceW and is closed once.

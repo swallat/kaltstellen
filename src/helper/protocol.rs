@@ -124,7 +124,7 @@ pub fn answer(line: &str, context: &Context, session: Option<u32>) -> Reply {
         pid: Some(context.pid),
         roles: Some(context.roles.clone()),
         active: Some(Roles {
-            observe: context.events.is_some(),
+            observe: context.events.as_ref().is_some_and(|ring| ring.running()),
             act: false,
             services: false,
         }),
@@ -136,7 +136,7 @@ pub fn answer(line: &str, context: &Context, session: Option<u32>) -> Reply {
     match request.cmd {
         Command::Hello | Command::Status => reply,
         Command::Events => {
-            let Some(ring) = &context.events else {
+            let Some(ring) = context.events.as_ref().filter(|ring| ring.running()) else {
                 return Reply::failure("the role observe is not running");
             };
             let Some(session) = session else {
@@ -316,6 +316,7 @@ mod tests {
         use crate::helper::events::Ring;
         use crate::win32::etw::{Kind, ProcessEvent};
         let ring = std::sync::Arc::new(Ring::new());
+        ring.set_running(true);
         for (pid, session) in [(10, 1), (11, 2)] {
             ring.push(
                 &ProcessEvent {

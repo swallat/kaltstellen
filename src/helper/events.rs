@@ -15,7 +15,12 @@ pub const CAPACITY: usize = 4096;
 /// Longest time an event is kept, in seconds (24 h, design note).
 pub const MAX_AGE_S: u64 = 24 * 60 * 60;
 /// Most events one answer carries (keeps a reply line small).
-pub const BATCH: usize = 200;
+pub const BATCH: usize = 100;
+/// Longest file name and full path kept, in characters. A reply stays far
+/// below the reader's limit with [`BATCH`] events of this size; a longer
+/// path is not given out (`null`).
+pub const MAX_EXE: usize = 255;
+pub const MAX_PATH: usize = 520;
 /// Seconds between 1601 and 1970, for `FILETIME` values.
 const UNIX_EPOCH_S: u64 = 11_644_473_600;
 
@@ -41,6 +46,13 @@ pub struct Event {
     pub path: Option<String>,
 }
 
+/// Seconds since 1970 now.
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 /// `FILETIME` (100 ns since 1601) as seconds since 1970; 0 before 1970.
 pub fn unix_seconds(filetime: u64) -> u64 {
     (filetime / 10_000_000).saturating_sub(UNIX_EPOCH_S)
@@ -64,8 +76,6 @@ pub fn win32_path(nt: &str, devices: &[(String, String)]) -> Option<String> {
 struct Inner {
     events: VecDeque<Event>,
     next: u64,
-    /// Events pushed out by the capacity or the age limit.
-    dropped: u64,
     devices: Vec<(String, String)>,
     /// `(pid, created)` -> session of the processes seen starting, so a stop
     /// that does not name its session is only given to the right user.
@@ -78,6 +88,8 @@ pub struct Ring {
     inner: Mutex<Inner>,
     /// Events the kernel reported lost (set from the session).
     lost: std::sync::atomic::AtomicU64,
+    /// Whether the event session still delivers.
+    running: std::sync::atomic::AtomicBool,
 }
 
 /// What a reader gets.
@@ -86,14 +98,25 @@ pub struct Batch {
     pub events: Vec<Event>,
     /// Ask again `after` this number.
     pub next: u64,
-    /// Events missing before `next` (dropped from the ring or lost by the
-    /// kernel) since the helper started.
+    /// Events or buffers the kernel reported lost since the helper started.
+    /// Events that fell out of the ring (count or age) are not counted: a
+    /// reader sees those as a jump of `next` past its `after`.
     pub lost: u64,
 }
 
 impl Ring {
     pub fn new() -> Ring {
         Ring::default()
+    }
+
+    /// Whether the event session delivers (false once it has ended).
+    pub fn running(&self) -> bool {
+        self.running.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_running(&self, running: bool) {
+        self.running
+            .store(running, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn set_lost(&self, lost: u32) {
@@ -104,6 +127,16 @@ impl Ring {
     /// Adds an event. `devices` is consulted for the path; the map is read
     /// again when no drive matches (a drive may have been added).
     pub fn push(&self, event: &ProcessEvent, devices: impl Fn() -> Vec<(String, String)>) {
+        self.push_at(event, devices, now());
+    }
+
+    /// [`push`](Ring::push) with the current time (seconds since 1970) given.
+    pub fn push_at(
+        &self,
+        event: &ProcessEvent,
+        devices: impl Fn() -> Vec<(String, String)>,
+        now: u64,
+    ) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut path = win32_path(&event.image, &inner.devices);
         if path.is_none() && event.kind == Kind::Start && !event.image.is_empty() {
@@ -122,6 +155,7 @@ impl Ring {
                 Some(session)
             }
             (Kind::Stop, Some(session)) => Some(session),
+            (Kind::Stop, None) if event.created == 0 => None,
             (Kind::Stop, None) => inner
                 .sessions
                 .iter()
@@ -130,10 +164,15 @@ impl Ring {
                 .map(|(_, session)| *session),
             (Kind::Start, None) => None,
         };
-        let exe = match &path {
-            Some(path) => path.rsplit('\\').next().unwrap_or(path).to_owned(),
-            None => event.image.rsplit('\\').next().unwrap_or("").to_owned(),
-        };
+        // A path too long for the reply is not given out; the name is cut.
+        let path = path.filter(|p| p.chars().count() <= MAX_PATH);
+        let exe: String = match &path {
+            Some(path) => path.rsplit('\\').next().unwrap_or(path),
+            None => event.image.rsplit('\\').next().unwrap_or(""),
+        }
+        .chars()
+        .take(MAX_EXE)
+        .collect();
         let seq = inner.next;
         inner.next += 1;
         let time = unix_seconds(event.time);
@@ -152,8 +191,8 @@ impl Ring {
             exe,
             path,
         });
-        // Capacity and age.
-        let oldest_kept = time.saturating_sub(MAX_AGE_S);
+        // Capacity and age (by the clock now, not by the newest event).
+        let oldest_kept = now.saturating_sub(MAX_AGE_S);
         while inner.events.len() > CAPACITY
             || inner
                 .events
@@ -161,7 +200,6 @@ impl Ring {
                 .is_some_and(|front| front.time < oldest_kept)
         {
             inner.events.pop_front();
-            inner.dropped += 1;
         }
     }
 
@@ -169,11 +207,24 @@ impl Ring {
     /// those of that Windows session (the reader's own); events whose
     /// session is not known are never given out.
     pub fn read(&self, after: u64, session: Option<u32>) -> Batch {
+        self.read_at(after, session, now())
+    }
+
+    /// [`read`](Ring::read) with the current time (seconds since 1970) given.
+    pub fn read_at(&self, after: u64, session: Option<u32>, now: u64) -> Batch {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        // A number from the future means the helper restarted since the
+        // reader last asked: its events are gone, start from the beginning.
+        let after = if after > inner.next { 0 } else { after };
+        let oldest_kept = now.saturating_sub(MAX_AGE_S);
         let mut events = Vec::new();
         let mut next = after;
         let mut complete = true;
-        for event in inner.events.iter().filter(|e| e.seq >= after) {
+        for event in inner
+            .events
+            .iter()
+            .filter(|e| e.seq >= after && e.time >= oldest_kept)
+        {
             if events.len() >= BATCH {
                 complete = false;
                 break;
@@ -191,7 +242,7 @@ impl Ring {
         Batch {
             events,
             next,
-            lost: inner.dropped + self.lost.load(std::sync::atomic::Ordering::Relaxed),
+            lost: self.lost.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
 }
@@ -244,49 +295,63 @@ mod tests {
         );
     }
 
+    const NOW: u64 = 1_700_000_100;
+    const T0: u64 = 1_700_000_000;
+
+    fn push(ring: &Ring, event: &ProcessEvent) {
+        ring.push_at(event, devices, NOW);
+    }
+
     #[test]
     fn a_reader_gets_only_events_of_its_own_session_and_resumes_after_next() {
         let ring = Ring::new();
-        let now = 1_700_000_000;
-        ring.push(
-            &start(10, r"\Device\HarddiskVolume3\a.exe", 1, now),
-            devices,
+        push(&ring, &start(10, r"\Device\HarddiskVolume3\a.exe", 1, T0));
+        push(&ring, &start(11, r"\Device\HarddiskVolume3\b.exe", 2, T0));
+        push(
+            &ring,
+            &start(12, r"\Device\HarddiskVolume3\c.exe", 1, T0 + 1),
         );
-        ring.push(
-            &start(11, r"\Device\HarddiskVolume3\b.exe", 2, now),
-            devices,
-        );
-        ring.push(
-            &start(12, r"\Device\HarddiskVolume3\c.exe", 1, now + 1),
-            devices,
-        );
-        let first = ring.read(0, Some(1));
+        let first = ring.read_at(0, Some(1), NOW);
         let names: Vec<_> = first.events.iter().map(|e| e.exe.as_str()).collect();
         assert_eq!(names, ["a.exe", "c.exe"]);
         assert_eq!(first.next, 3);
         assert_eq!(first.events[0].path.as_deref(), Some(r"C:\a.exe"));
         // Up to date: nothing more, and the next number does not move back.
-        let again = ring.read(first.next, Some(1));
+        let again = ring.read_at(first.next, Some(1), NOW);
         assert!(again.events.is_empty());
         assert_eq!(again.next, 3);
         // Without a known session nothing is given out.
-        assert!(ring.read(0, None).events.is_empty());
+        assert!(ring.read_at(0, None, NOW).events.is_empty());
+    }
+
+    #[test]
+    fn a_number_from_before_a_restart_starts_again_from_the_beginning() {
+        let ring = Ring::new();
+        push(&ring, &start(10, r"\Device\HarddiskVolume3\a.exe", 1, T0));
+        let batch = ring.read_at(5000, Some(1), NOW);
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(batch.next, 1, "next below `after` tells of the restart");
+        assert_eq!(ring.read_at(u64::MAX, Some(1), NOW).events.len(), 1);
     }
 
     #[test]
     fn a_stop_without_a_session_takes_it_from_the_start() {
         let ring = Ring::new();
-        let begin = start(10, r"\Device\HarddiskVolume3\a.exe", 5, 1_700_000_000);
-        ring.push(&begin, devices);
+        let begin = start(10, r"\Device\HarddiskVolume3\a.exe", 5, T0);
+        push(&ring, &begin);
         let mut end = begin.clone();
         end.kind = Kind::Stop;
         end.session = None;
         end.image = String::new();
-        ring.push(&end, devices);
+        push(&ring, &end);
         let mut stranger = end.clone();
         stranger.pid = 99;
-        ring.push(&stranger, devices);
-        let batch = ring.read(0, Some(5));
+        push(&ring, &stranger);
+        // Without a creation time the pid alone proves nothing.
+        let mut unknown = end.clone();
+        unknown.created = 0;
+        push(&ring, &unknown);
+        let batch = ring.read_at(0, Some(5), NOW);
         assert_eq!(batch.events.len(), 2);
         assert_eq!(batch.events[1].kind, "stop");
     }
@@ -294,19 +359,42 @@ mod tests {
     #[test]
     fn the_ring_is_bounded_by_count_and_by_age() {
         let ring = Ring::new();
-        let now = 1_700_000_000;
         for i in 0..(CAPACITY as u32 + 10) {
-            ring.push(&start(i, r"\Device\HarddiskVolume3\a.exe", 1, now), devices);
+            push(&ring, &start(i, r"\Device\HarddiskVolume3\a.exe", 1, T0));
         }
-        let batch = ring.read(0, Some(1));
-        assert_eq!(batch.lost, 10);
+        let batch = ring.read_at(0, Some(1), NOW);
         assert_eq!(batch.events.first().unwrap().seq, 10);
-        // A much later event pushes out everything older than a day.
-        ring.push(
-            &start(1, r"\Device\HarddiskVolume3\a.exe", 1, now + MAX_AGE_S + 5),
+        // A day later the old events are not given out, even without a
+        // new event, and the next push removes them.
+        let later = NOW + MAX_AGE_S;
+        assert!(ring.read_at(0, Some(1), later).events.is_empty());
+        ring.push_at(
+            &start(1, r"\Device\HarddiskVolume3\a.exe", 1, later),
             devices,
+            later,
         );
-        let all: usize = ring.read(0, Some(1)).events.len();
-        assert_eq!(all, 1);
+        assert_eq!(ring.read_at(0, Some(1), later).events.len(), 1);
+    }
+
+    #[test]
+    fn long_names_and_paths_stay_small() {
+        let ring = Ring::new();
+        let long = format!(r"\Device\HarddiskVolume3\{}\a.exe", "x".repeat(600));
+        push(&ring, &start(10, &long, 1, T0));
+        let name = "n".repeat(400);
+        push(
+            &ring,
+            &start(11, &format!(r"\Device\HarddiskVolume3\{name}.exe"), 1, T0),
+        );
+        let events = ring.read_at(0, Some(1), NOW).events;
+        assert_eq!(
+            events[0].path, None,
+            "a path of 600 characters is not given out"
+        );
+        assert_eq!(events[0].exe, "a.exe");
+        assert!(events[1].exe.chars().count() <= MAX_EXE);
+        // The worst reply stays far below the reader's limit.
+        let worst = serde_json::to_string(&events[1]).unwrap().len() * BATCH;
+        assert!(worst < crate::helper::protocol::MAX_REPLY, "{worst}");
     }
 }
