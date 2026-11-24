@@ -9,6 +9,7 @@
 //! - [`process`] and [`win32`] are the only modules allowed to contain
 //!   `unsafe` (spec Q4).
 //! - [`config`]: TOML configuration and its validation (C1 to C7).
+//! - [`compare`]: compare two profiles (H6).
 //! - [`engine`]: switch planner and executor (W1 to W6).
 //! - [`state`]: state file and recovery (S1 to S10).
 //! - [`cli`]: command-line interface (U2, E2).
@@ -26,6 +27,7 @@
 
 pub mod autostart;
 pub mod cli;
+pub mod compare;
 pub mod config;
 pub mod engine;
 pub mod error;
@@ -39,6 +41,7 @@ pub mod process;
 pub mod program_info;
 pub mod protection;
 pub mod settings;
+pub mod snapshot;
 pub mod state;
 pub mod tray;
 pub mod unassigned;

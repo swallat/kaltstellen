@@ -70,8 +70,19 @@ enum Command {
         #[arg(long)]
         force: bool,
         /// With a tray running: return once the tray has queued the request
-        #[arg(long)]
+        #[arg(long, conflicts_with = "dry_run")]
         no_wait: bool,
+        /// Show what the switch would do and change nothing (H4)
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Show how two profiles differ: programs only one has, other actions
+    /// or options, hotkey, triggers and priority
+    Compare {
+        /// First profile
+        a: String,
+        /// Second profile
+        b: String,
     },
     /// Show the active profile and what kaltstellen has put on ice
     Status {
@@ -176,7 +187,15 @@ pub fn main() -> ExitCode {
             profile,
             force,
             no_wait,
-        } => switch(&profile, force, !no_wait),
+            dry_run,
+        } => {
+            if dry_run {
+                preview(&profile, force)
+            } else {
+                switch(&profile, force, !no_wait)
+            }
+        }
+        Command::Compare { a, b } => compare(&a, &b),
         Command::Status { unassigned } => {
             let code = status();
             if unassigned && code == exit::OK {
@@ -440,6 +459,64 @@ fn switch(target: &str, force: bool, wait: bool) -> u8 {
         interrupts.finished();
     }
     print_finished(&finished)
+}
+
+/// `kaltstellen switch PROFILE --dry-run` (H4): what the switch would do,
+/// in the order of W1. Takes no lock and asks no tray; the state is read
+/// without touching it. Exit code 0 when nothing would go wrong, 1 when
+/// the switch would report problems, 2 for an invalid configuration, 4 for
+/// an unknown profile.
+fn preview(target: &str, force: bool) -> u8 {
+    let config = match config::for_switch(paths::config_file().as_deref(), target) {
+        Ok((config, notes)) => {
+            for note in notes {
+                eprintln!("{note}");
+            }
+            config
+        }
+        Err(lines) => {
+            for line in lines {
+                eprintln!("{line}");
+            }
+            return exit::CONFIG_INVALID;
+        }
+    };
+    let state = store()
+        .ok()
+        .and_then(|store| store.peek())
+        .unwrap_or_default();
+    match engine::preview(
+        &config,
+        target,
+        &state,
+        engine::Options { force },
+        &Vec::new,
+    ) {
+        Ok(plan) => {
+            for line in plan.lines() {
+                println!("{line}");
+            }
+            info!(
+                "preview of \"{}\": {} steps, {} problems",
+                plan.profile,
+                plan.items.len(),
+                plan.problems.len()
+            );
+            if plan.problems.is_empty() {
+                exit::OK
+            } else {
+                exit::ERRORS
+            }
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            if err.code == Code::UnknownProfile {
+                exit::UNKNOWN_PROFILE
+            } else {
+                exit::ERRORS
+            }
+        }
+    }
 }
 
 /// L2 from the command line: the tray of this data directory resumes what
@@ -946,6 +1023,41 @@ fn print_status(state: &State) {
     }
 }
 
+/// `kaltstellen compare A B` (H6): prints the differences; exit code 0 also
+/// when the profiles differ, 4 for an unknown profile, 2 for an invalid
+/// configuration.
+fn compare(a: &str, b: &str) -> u8 {
+    let Some(file) = paths::config_file() else {
+        eprintln!("error: no configuration directory (APPDATA unset)");
+        return exit::CONFIG_INVALID;
+    };
+    let loaded = match config::load(&file) {
+        Ok(loaded) => loaded,
+        Err(rejected) => {
+            for line in config::rejected_lines(&file, &rejected) {
+                eprintln!("{line}");
+            }
+            return exit::CONFIG_INVALID;
+        }
+    };
+    let find = |name: &str| loaded.config.profile(name);
+    let (Some(first), Some(second)) = (find(a), find(b)) else {
+        for name in [a, b] {
+            if find(name).is_none() {
+                eprintln!(
+                    "error: {}: no profile named \"{name}\"",
+                    Code::UnknownProfile
+                );
+            }
+        }
+        return exit::UNKNOWN_PROFILE;
+    };
+    for line in crate::compare::compare(first, second).lines(&first.name, &second.name) {
+        println!("{line}");
+    }
+    exit::OK
+}
+
 /// Prints problems as `file:line: message`, the form editors can jump to.
 fn check_config(file: Option<PathBuf>) -> u8 {
     let Some(file) = file.or_else(paths::config_file) else {
@@ -1084,6 +1196,7 @@ fn run(command: Command) -> Result<bool> {
         Command::Resume { name } => for_each(&name, "resumed", Target::resume),
         Command::CheckConfig { .. }
         | Command::Switch { .. }
+        | Command::Compare { .. }
         | Command::Status { .. }
         | Command::Recover { .. }
         | Command::Quit

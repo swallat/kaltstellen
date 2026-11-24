@@ -53,6 +53,9 @@ differ, this note wins.
   entry `Background helper` in `Settings` with the state and the same
   actions (each starts an elevated process with a UAC prompt; the window
   itself stays unelevated).
+- The folder `%ProgramData%\kaltstellen\` gets an explicit ACL at install
+  (administrators and SYSTEM full control, the owner read only), so
+  `helper-state.json` and `helper.log` cannot be changed by users.
 - Policy file `%ProgramData%\kaltstellen\helper.toml` (ACL: administrators and
   SYSTEM write, the owner reads): the roles that are on, the allow list of
   services (older note) and the allow list of elevated programs (act).
@@ -99,9 +102,13 @@ differ, this note wins.
   unelevated, as now: graceful close, minimise, freeze, start. New
   programs reported by *observe* are matched against the active profile and
   handled by the tray in the same way as in a switch (W1 order for that
-  program, W7), on request of the owner only when the profile has
-  `watch = true` **[decided]** (a new optional profile key, default off; nothing is
-  automatic otherwise).
+  program, W7), only when the profile has `watch = true` **[decided]** (a new optional
+  boolean profile key, to be added to spec section 5 and C3 when this is
+  accepted; default off). With `watch` on, a new matching program is handled
+  without a click: that is the owner's exception to W6 and to the
+  "nothing without a click" rule of H, limited to profiles that set the key
+  and to machines with the helper. H5 (transitions only) is unchanged for
+  everyone else; with the helper it may use the real events (above).
 - The helper acts only for what the tray cannot (P7): elevated programs.
   Requests: `suspend`, `resume`, `terminate` for a PID with its creation
   time. The helper refuses unless the program is on the **allow list of
@@ -111,7 +118,7 @@ differ, this note wins.
   warn list without the administrator's entry, and its creation time
   matches (S6).
 - A graceful close and minimising cannot reach a window in the owner's
-  session from a service (session isolation and UIPI): for elevated programs
+  session from a service (session 0 isolation; UIPI concerns the unelevated tray only, P7): for elevated programs
   `stop` means `terminate` after `stop_timeout_s`, with `on_timeout = keep`
   leaving it running. This is said in the entry dialog.
 - Safety: everything the helper froze is recorded in
@@ -130,7 +137,9 @@ differ, this note wins.
 ## Trust between tray and helper
 
 - As in the older note: pipe `\\.\pipe\kaltstellen-helper`, DACL for the
-  owner's SID recorded at install, first instance, no remote clients, the
+  owner's SID recorded at install (passed by the unelevated caller to the
+  elevated installer, so an administrator's credentials entered at the UAC
+  prompt do not record the wrong account), first instance, no remote clients, the
   tray verifies the server's PID against the service.
 - **The path of the client is not a defence.** A process of the same user
   can run any file, and a portable copy must be able to use the helper. The

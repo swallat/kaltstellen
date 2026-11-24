@@ -209,6 +209,7 @@ dialog {
   box-shadow: var(--shadow-dialog);
 }
 dialog.wide { width: min(42rem, calc(100vw - 2rem)); }
+dialog.xwide { width: min(60rem, calc(100vw - 2rem)); }
 dialog::backdrop { background: rgb(14 22 32 / 0.5); }
 dialog h2 { margin-bottom: var(--space-1); }
 dialog form { display: grid; gap: var(--space-3); }
@@ -239,3 +240,18 @@ dialog label { font-weight: 600; font-size: 0.875rem; }
 @keyframes dialog-in { from { opacity: 0; transform: translateY(0.5rem) scale(0.985); } }
 @keyframes backdrop-in { from { opacity: 0; } }
 @keyframes detail-in { from { opacity: 0; transform: translateY(0.25rem); } }
+
+/* H6: compare two profiles. */
+.compare-head { display: flex; align-items: center; gap: var(--space-2); font-weight: 600; }
+.diff-tag { display: inline-block; padding: 0 var(--space-2); border-radius: 999px; font-size: 0.75rem; font-weight: 600; border: 1px solid var(--color-line); white-space: nowrap; }
+.diff-tag.only_a { border-color: var(--color-primary); color: var(--color-primary); }
+.diff-tag.only_b { border-color: var(--color-accent); color: var(--color-accent); }
+.table td.diff-cell { text-align: left; white-space: normal; font-size: 0.875rem; }
+
+/* H1: profile from the current state */
+.compare-head { flex-wrap: wrap; }
+label.inline { display: inline-flex; align-items: center; gap: var(--space-1); font-weight: 400; }
+.snap-group h3 { margin: var(--space-3) 0 var(--space-1); font-size: 1rem; }
+#snapshot-groups { max-height: 55vh; }
+#snapshot-name-row { display: grid; gap: var(--space-1); }
+.snap-group th:last-child, .snap-group td:last-child { text-align: left; }

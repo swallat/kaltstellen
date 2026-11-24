@@ -5,7 +5,8 @@ Guided beta test of kaltstellen on the owner's machine (docs/beta-test.md).
 .DESCRIPTION
 Installs a kaltstellen release (or a local build), backs up the real
 configuration, data folder and the start-at-sign-in value, writes a test
-configuration built from the programs listed in beta-test.json, and walks
+configuration built from test programs the script brings itself (or the
+programs listed in an optional beta-test.json), and walks
 through the tests of docs/beta-test.md one step at a time: it prepares each
 step through the kaltstellen command line, prints what to do, checks what a
 script can check (log lines, `kaltstellen status`, frozen threads, window
@@ -80,7 +81,7 @@ messages and end it, as Windows would. Tests the bookkeeping only.
 For t20: restart (shutdown /r) instead of shutting down.
 
 .PARAMETER NoEdit
-setup: do not open a new beta-test.json in Notepad.
+setup: kept for older command lines; setup no longer opens Notepad.
 
 .PARAMETER FreezeMinutes
 t13: how long the programs stay frozen (default 10).
@@ -89,7 +90,8 @@ t13: how long the programs stay frozen (default 10).
 t19: seconds of memory samples after each switch (default 20).
 
 .PARAMETER ProgramList
-Program list to use instead of <backup root>\beta-test.json.
+Program list to use instead of <backup root>\beta-test.json. Without either
+file the test programs the script brings are used.
 
 .PARAMETER Root
 Backup root instead of %LOCALAPPDATA%\kaltstellen-beta-backup (tests).
@@ -546,7 +548,7 @@ function Confirm-Yes([string]$Question) {
 }
 
 function Show-FreezeWarning {
-    Write-Note '   This step freezes or closes programs from beta-test.json: save your work in them first.'
+    Write-Note '   This step freezes or closes the test programs (or the programs of your beta-test.json): save your work in them first.'
     Write-Note "   Way out: answer r at any prompt, or in another terminal: $(Get-WayOutCommand)"
 }
 
@@ -951,7 +953,11 @@ function Get-FreezeReport($Programs) {
 function Get-BeatFile($Program) { Join-Path (Join-Path $script:TestDir 'beats') ($Program.exe + '.beat') }
 
 function Get-Beat($Program) {
-    try { [int64]([IO.File]::ReadAllText((Get-BeatFile $Program)).Trim()) } catch { 0 }
+    # The writer replaces the file every 100 ms: a read that collides is tried again.
+    for ($i = 0; $i -lt 5; $i++) {
+        try { return [int64]([IO.File]::ReadAllText((Get-BeatFile $Program)).Trim()) } catch { Start-Sleep -Milliseconds 20 }
+    }
+    0
 }
 
 function Register-Started($Process, $Program) {
@@ -1086,11 +1092,63 @@ function Get-RunValue([string]$Key) {
 # runs until it is ended, so the trigger test never touches a program of yours.
 $script:BuiltinTrigger = 'ks-beta-trigger.exe'
 
+# The test programs the script brings: one executable, compiled from
+# beta-test-programs.cs at setup and copied to these names (what each does is
+# chosen by --role, see the source). "behavior" is what the step "stop" expects
+# of a program of the stop list: it closes ('closes'), refuses and stays
+# ('stays', on_timeout keep) or is ended by kaltstellen ('killed').
+$script:BuiltinSource = 'beta-test-programs.cs'
+$script:BuiltinExe = 'ks-beta-prog.exe'
+$script:BuiltinPrograms = @{
+    suspend = @(
+        @{ exe = 'ks-beta-freeze1.exe'; role = 'beat' }
+        @{ exe = 'ks-beta-freeze2.exe'; role = 'beat' }
+    )
+    stop = @(
+        @{ exe = 'ks-beta-stop.exe'; role = 'beat'; behavior = 'closes'; on_timeout = 'keep' }
+        @{ exe = 'ks-beta-stubborn.exe'; role = 'stubborn'; behavior = 'stays'; on_timeout = 'keep' }
+        @{ exe = 'ks-beta-stubborn-kill.exe'; role = 'stubborn'; behavior = 'killed'; on_timeout = 'kill' }
+    )
+    large = @{ exe = 'ks-beta-large.exe'; role = 'beat'; args = @('--alloc-mb', '300') }
+    tray_program = @{ exe = 'ks-beta-tray.exe'; role = 'tray' }
+}
+
+# The list used when there is no beta-test.json: everything built in.
+$script:DefaultProgramList = '{ "suspend": "builtin", "stop": "builtin", "trigger": "builtin", "large": "builtin", "tray_program": "builtin" }'
+
+# A program of the built-in set as the lists use it. Its file exists after
+# setup compiled it; the heartbeat file is named by Start-Program.
+function Get-BuiltinProgram($Spec, [string]$TestDir, [string]$ListRole) {
+    $roleArgs = @('--role', $Spec.role, '--title', [IO.Path]::GetFileNameWithoutExtension($Spec.exe), '--beat', '{heartbeat}')
+    [pscustomobject]@{
+        exe = $Spec.exe; path = (Join-Path $TestDir $Spec.exe)
+        args = @($roleArgs + @($Spec.args | Where-Object { $null -ne $_ }))
+        disposable = $true; hidden = $false
+        restart = $true
+        on_timeout = $(if ($Spec.on_timeout) { $Spec.on_timeout } else { 'keep' })
+        behavior = $Spec.behavior
+        role = $ListRole; compiled = $true
+    }
+}
+
 function Read-ProgramList([string]$Path, [string]$TestDir, [switch]$NoFail) {
     $errors = New-Object System.Collections.Generic.List[string]
-    try { $j = ConvertFrom-JsonText (Get-Content -LiteralPath $Path -Raw -Encoding UTF8) }
-    catch { throw "$Path is not valid JSON: $($_.Exception.Message)" }
+    if ($Path) {
+        try { $j = ConvertFrom-JsonText (Get-Content -LiteralPath $Path -Raw -Encoding UTF8) }
+        catch { throw "$Path is not valid JSON: $($_.Exception.Message)" }
+    } else {
+        $Path = 'the built-in program list'
+        $j = ConvertFrom-JsonText $script:DefaultProgramList
+    }
     $seen = @{}
+    # "builtin" in place of a program (large, tray_program) or a list (suspend, stop).
+    $builtinOf = {
+        param($value, [string]$key, [string]$role)
+        if ($value -isnot [string]) { return $null }
+        if ($value -ne 'builtin') { $errors.Add("$key`: 'builtin' or program entries, not '$value'"); return , @() }
+        $specs = @($script:BuiltinPrograms[$key])
+        , @(foreach ($sp in $specs) { Get-BuiltinProgram $sp $TestDir $role })
+    }
     $norm = {
         param($p, $role)
         if ($null -eq $p) { return $null }
@@ -1112,8 +1170,10 @@ function Read-ProgramList([string]$Path, [string]$TestDir, [switch]$NoFail) {
             role = $role
         }
     }
-    $suspend = @(Get-List $j.suspend | ForEach-Object { & $norm $_ 'suspend' } | Where-Object { $_ })
-    $stop = @(Get-List $j.stop | ForEach-Object { & $norm $_ 'stop' } | Where-Object { $_ })
+    $b = & $builtinOf $j.suspend 'suspend' 'suspend'
+    $suspend = if ($null -ne $b) { @($b) } else { @(Get-List $j.suspend | ForEach-Object { & $norm $_ 'suspend' } | Where-Object { $_ }) }
+    $b = & $builtinOf $j.stop 'stop' 'stop'
+    $stop = if ($null -ne $b) { @($b) } else { @(Get-List $j.stop | ForEach-Object { & $norm $_ 'stop' } | Where-Object { $_ }) }
     if (-not $suspend.Count) { $errors.Add('suspend: list at least one program that may be frozen') }
     foreach ($p in $suspend + $stop) {
         $k = $p.exe.ToLowerInvariant()
@@ -1129,11 +1189,13 @@ function Read-ProgramList([string]$Path, [string]$TestDir, [switch]$NoFail) {
         $errors.Add("trigger: 'builtin' or an object with exe and path, not '$($j.trigger)'"); $trigger = $null
     } else { $trigger = & $norm $j.trigger 'trigger' }
     if ($trigger -and $seen.ContainsKey($trigger.exe.ToLowerInvariant())) { $errors.Add("trigger $($trigger.exe) must not be frozen or stopped (it is in $($seen[$trigger.exe.ToLowerInvariant()]))") }
-    $large = & $norm $j.large 'large'
+    $b = & $builtinOf $j.large 'large' 'large'
+    $large = if ($null -ne $b) { $b[0] } else { & $norm $j.large 'large' }
     if ($large -and $seen[$large.exe.ToLowerInvariant()] -eq 'stop') { $errors.Add("large $($large.exe) is in stop; it must be a program that may be frozen") }
     if ($large -and $trigger -and $large.exe -ieq $trigger.exe) { $errors.Add('large and trigger must be different programs') }
     $elevated = & $norm $j.elevated 'elevated'
-    $tray = & $norm $j.tray_program 'tray_program'
+    $b = & $builtinOf $j.tray_program 'tray_program' 'tray_program'
+    $tray = if ($null -ne $b) { $b[0] } else { & $norm $j.tray_program 'tray_program' }
     if ($tray -and $seen.ContainsKey($tray.exe.ToLowerInvariant())) { $errors.Add("tray_program $($tray.exe) must not be in a profile (it is in $($seen[$tray.exe.ToLowerInvariant()]))") }
     $hotkey = if ($j.hotkey) { [string]$j.hotkey } else { 'Ctrl+Shift+Alt+F9' }
     $altgr = if ($j.altgr_hotkey) { [string]$j.altgr_hotkey } else { 'Ctrl+Alt+7' }
@@ -1226,6 +1288,25 @@ function New-TestConfig($P, [switch]$TriggerSelfTest) {
     & $prof 'beta-altgr' 'Ctrl+Alt with a digit: refused, AltGr keeps typing (T17).' @("hotkey = $(ConvertTo-TomlString $P.altgr_hotkey)")
     $sb.ToString()
 
+}
+
+# Compiles the test programs with the C# compiler of the .NET Framework that
+# ships with Windows (no SDK needed) and copies the result to the names the
+# lists use. Called when the lists name any of them.
+function New-BuiltinPrograms([string]$Dir, $Programs) {
+    $wanted = @(@($Programs.suspend) + @($Programs.stop) + @($Programs.large) + @($Programs.tray_program) | Where-Object { $_ -and $_.compiled })
+    if (-not $wanted.Count) { return }
+    $source = Join-Path $PSScriptRoot $script:BuiltinSource
+    if (-not (Test-Path -LiteralPath $source)) { throw "$script:BuiltinSource is missing next to the script ($source); copy the whole scripts folder, or list your own programs in beta-test.json" }
+    $csc = @(Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'; Join-Path $env:SystemRoot 'Microsoft.NET\Framework\v4.0.30319\csc.exe') | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $csc) { throw 'the C# compiler of the .NET Framework (csc.exe, v4.0.30319) was not found; list your own programs in beta-test.json instead of the built-in ones' }
+    New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+    $out = Join-Path $Dir $script:BuiltinExe
+    $log = & $csc /nologo /target:winexe /optimize+ /platform:anycpu /reference:System.Windows.Forms.dll /reference:System.Drawing.dll "/out:$out" $source 2>&1
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $out)) { throw "the test programs did not compile (csc exit code $LASTEXITCODE):`n  $(($log | ForEach-Object { "$_" }) -join "`n  ")" }
+    foreach ($p in $wanted) { Copy-Item -LiteralPath $out -Destination (Join-Path $Dir $p.exe) -Force }
+    Remove-Item -LiteralPath $out -Force
+    Write-Good "  $($wanted.Count) test program(s) built: $(($wanted | ForEach-Object { $_.exe }) -join ', ')"
 }
 
 function New-SampleFiles([string]$Dir) {
@@ -1393,25 +1474,18 @@ function Invoke-Setup {
     $source = if ($Exe) { [IO.Path]::GetFullPath($Exe) } else { "https://github.com/$($script:Repo)/releases/download/v$Version/kaltstellen-$Version-windows-$arch.exe" }
     if ($Exe -and -not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "-Exe: file not found: $source" }
 
-    # The program list first: nothing changes while it is not usable.
+    # The program list first: nothing changes while it is not usable. Without
+    # a beta-test.json (and without -ProgramList) the test programs the script
+    # brings are used.
     $list = if ($ProgramList) { [IO.Path]::GetFullPath($ProgramList) } else { Join-Path $script:BackupRoot 'beta-test.json' }
-    if (-not (Test-Path -LiteralPath $list)) {
-        if ($DryRun) { Write-Info "[dry run] would copy beta-test.example.json to $list for editing" }
-        else {
-            New-Item -ItemType Directory -Force -Path (Split-Path $list) | Out-Null
-            Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'beta-test.example.json') -Destination $list
-            Write-Note "Created $list from the example. List the programs the test may freeze or stop there."
-            if (-not $NoEdit -and -not $script:IsUnattended) {
-                Start-Process notepad.exe -ArgumentList (Quote-Arg $list)
-                $null = Read-Host 'Edit and save the file, then press Enter'
-            } else {
-                Write-Note 'Edit it, then run setup again.'
-                return
-            }
-        }
+    if ($ProgramList -and -not (Test-Path -LiteralPath $list)) { throw "-ProgramList: file not found: $list" }
+    $useList = Test-Path -LiteralPath $list
+    $listFile = if ($useList) { $list } else { '' }
+    try { $programs = Read-ProgramList -Path $listFile -TestDir (Join-Path $tempRoot 'test') }
+    catch {
+        if ($useList -and -not $ProgramList -and $_.Exception.Message -match 'placeholder') { throw "$($_.Exception.Message)`n  Delete $list to use the test programs the script brings, or list your own programs there." }
+        throw
     }
-    $programs = $null
-    if (Test-Path -LiteralPath $list) { $programs = Read-ProgramList $list -TestDir (Join-Path $tempRoot 'test') }
 
     $running = Get-RunningKaltstellen
     $runKey = if ($Sandbox) { "$regRoot\Run" } else { $script:RealRunKey }
@@ -1426,7 +1500,7 @@ function Invoke-Setup {
     Write-Info "  Run value:       HKCU\$runKey\kaltstellen$(if (-not $Sandbox) { " (now: $(if ($runBefore.present) { $runBefore.data } else { 'absent' }); restored at teardown)" })"
     Write-Info "  test files:      $tempRoot"
     Write-Info "  backup, results: $sessionDir"
-    Write-Info "  program list:    $list"
+    Write-Info "  program list:    $(if ($useList) { $list } else { 'none (beta-test.json is optional): the test programs the script brings' })"
     if ($programs) {
         Write-Info "    suspend: $(($programs.suspend | ForEach-Object { $_.exe }) -join ', ')"
         Write-Info "    stop:    $(if ($programs.stop.Count) { ($programs.stop | ForEach-Object { $_.exe }) -join ', ' } else { '(none)' })"
@@ -1538,11 +1612,12 @@ function Invoke-Setup {
         # 3. Program list, sample files, test configuration.
         Write-Title 'Test configuration'
         $plist = Join-Path $sessionDir 'programs.json'
-        Copy-Item -LiteralPath $list -Destination $plist
+        if ($useList) { Copy-Item -LiteralPath $list -Destination $plist } else { Write-Utf8 $plist $script:DefaultProgramList }
         Set-State 'programs_file' $plist
         $script:Programs = $programs
         New-Item -ItemType Directory -Force -Path $script:TestDir | Out-Null
         New-SampleFiles $script:TestDir
+        New-BuiltinPrograms $script:TestDir $programs
         if ($Sandbox) { New-Item -ItemType Directory -Force -Path $configDir, $dataDir | Out-Null }
         else {
             if (Test-Path -LiteralPath $configDir) { Clear-Folder $configDir } else { New-Item -ItemType Directory -Path $configDir | Out-Null }
@@ -1760,11 +1835,11 @@ function Test-WindowHeader {
     # The Run value exactly as it is now goes back after the step, whatever happens.
     $savedRun = Get-RunValue (Get-RunKey)
     try {
-    Invoke-Step window header-autostart '"Start at sign-in" in the header follows the command line (step 11)' -Prepare {
+    Invoke-Step window settings-autostart '"Start at sign-in" in Settings, General, follows the command line (step 11)' -Prepare {
         $r = Invoke-Ks autostart $(if ($wasOn) { 'off' } else { 'on' })
         [ordered]@{ autostart_before = $before.text; switched = $r.Text }
     } -Say @(
-        "The script switched start at sign-in $(if ($wasOn) { 'off' } else { 'on' }) with ""kaltstellen autostart"". Click into the window: the header switch ""Start at sign-in"" follows."
+        "The script switched start at sign-in $(if ($wasOn) { 'off' } else { 'on' }) with ""kaltstellen autostart"". Open Settings (sidebar foot), General, and click into the window: the switch ""Start at sign-in"" follows."
     ) -Check {
         param($since)
         $now = Get-AutostartState
@@ -1772,7 +1847,7 @@ function Test-WindowHeader {
         $after = Get-RunValue (Get-RunKey)
         $restored = ($after.present -eq $savedRun.present) -and ($after.data -eq $savedRun.data)
         @{ ok = ($now.state -eq $(if ($wasOn) { 'off' } else { 'on' }) -and $restored); m = [ordered]@{ during = $now.text; restored = $restored } }
-    } -Ask 'The header switch followed (it is back as before now; click into the window again)?'
+    } -Ask 'The switch in Settings followed (it is back as before now; click into the window again)?'
     } finally { $null = Restore-RunValue $savedRun (Get-RunKey) }
 
     if (-not (Test-KsSupports automation)) {
@@ -1803,6 +1878,61 @@ function Test-WindowHeader {
             @{ ok = ($a.Text -match 'no profile has triggers'); m = [ordered]@{ automation = $a.Text } }
         } -Ask 'Disabled, and the hint says why?'
     } finally { Write-Utf8 $cfg $original }
+}
+
+# The Settings view (sidebar foot): every setting of the tray menu and the
+# files in one place. The script changes nothing but what a step names and
+# puts it back afterwards.
+function Test-WindowSettings {
+    $null = Open-Gui
+    $cfg = Join-Path $script:ConfigDir 'config.toml'
+    $settingsFile = Join-Path $script:ConfigDir 'settings.json'
+    Invoke-Step window settings-view 'Settings view: sections and scrolling (13a)' -Human -Say @(
+        'Choose "Settings" at the foot of the sidebar: the page shows General, Defaults, Profiles, Updates, Files and About.',
+        'Click each section in the list on the left: the page scrolls to it without jumping; About, the last one, can be scrolled back up with the mouse wheel.',
+        'Profiles lists the beta-* profiles and a click opens one; the header still shows "Automatic switching".'
+    ) -Ask 'Sections, scrolling and the profile list as described?' -AskNote
+
+    $original = [IO.File]::ReadAllText($cfg)
+    try {
+        Invoke-Step window settings-defaults 'Defaults are saved into config.toml (13a)' -Human -Say @(
+            'Settings, Defaults: set "Stop timeout" to 12 seconds and press Save: the status line says it was saved.',
+            'An out-of-range value (0, or more than 300) is refused with a reason and nothing is written.'
+        ) -Check {
+            param($since)
+            $text = [IO.File]::ReadAllText($cfg)
+            $cc = Invoke-Ks check-config
+            $saved = $text -match '(?m)^\s*stop_timeout_s\s*=\s*12\b'
+            @{ ok = ($saved -and $text.Contains('# beta-test: generated') -and $cc.Code -eq 0); m = [ordered]@{ stop_timeout_12 = $saved; comments_kept = $text.Contains('# beta-test: generated'); check_config_exit = $cc.Code } }
+        } -Ask 'Saved, the range check works?'
+    } finally { Write-Utf8 $cfg $original }
+
+    $updateBefore = (Read-JsonFile $settingsFile).update
+    try {
+        Invoke-Step window settings-updates 'Updates section: version and mode (13a)' -Human -Say @(
+            'Settings, Updates: the installed version is shown and the mode reads "Check and ask" (set for the test). Choose "Off".',
+            '"Check now" contacts GitHub (your choice): "Checking...", then the result. It is not needed for this step.'
+        ) -Check {
+            param($since)
+            $v = (Read-JsonFile $settingsFile).update
+            @{ ok = ($v -eq 'off'); m = [ordered]@{ update_in_settings_json = "$v" } }
+        } -Ask 'Version, mode and "Check now" as described?'
+    } finally { Set-SettingsValue 'update' $(if ($updateBefore) { $updateBefore } else { 'manual' }) }
+
+    Invoke-Step window settings-files 'Files section and "Forget last profile" (13a)' -Human -Freeze -Prepare {
+        $null = Request-Running $script:Programs.suspend
+        $null = Switch-Profile 'beta-freeze'
+        $null = Switch-Profile neutral
+        $script:Ctx.last_profile = (Read-JsonFile $settingsFile).last_profile
+        [ordered]@{ last_profile_before = "$($script:Ctx.last_profile)" }
+    } -Say @(
+        'Settings, Files: the three paths are those of the test (the temporary folder in a sandbox). "Open config folder" and "Open log file" open Explorer / the editor; close them again.',
+        '"Reload" says the file was read again. "Forget last profile": press it; the status line confirms.'
+    ) -Check {
+        param($since)
+        $now = (Read-JsonFile $settingsFile).last_profile
+        @{ ok = $(if ($script:Ctx.last_profile) { -not $now } else { $null }); m = [ordered]@{ last_profile_after = "$now" } }
+    } -Ask 'Paths, Open, Reload and Forget as described?' -AskNote
 }
 
 function Test-Window {
@@ -1846,10 +1976,11 @@ function Test-Window {
 
     Test-WindowHeader
 
-    Invoke-Step window misc 'Context menu, updates section (steps 13, 13a)' -Human -Say @(
-        'Right click in the page: no browser context menu; Ctrl+P, F5, Ctrl+F do nothing.',
-        'Updates (sidebar): the installed version is shown, Mode reads "Check and ask" (set for the test). "Check now" contacts GitHub (your choice): "Checking...", then the result.'
+    Invoke-Step window misc 'Context menu (step 13)' -Human -Say @(
+        'Right click in the page: no browser context menu; Ctrl+P, F5, Ctrl+F do nothing.'
     ) -Ask 'All as described?' -AskNote
+
+    Test-WindowSettings
 
     Invoke-Step window icons 'Program icons (13b)' -Human -Robot {} -Say @(
         'Next to each program in a profile, in "Add program" and in the unassigned list its icon appears, sharp at every scaling; programs without an icon get a grey square; rows do not move.'
@@ -2115,13 +2246,71 @@ function Test-Unassigned {
         'Window, profile beta-freeze: the program is listed as "new". "Add to profile" adds it and it leaves the list; "Dismiss" removes another one from this profile''s list only.'
     ) -Check {
         param($since)
-        $u = Invoke-Ks status --unassigned
+        $listed = { $r = Invoke-Ks status --unassigned; [bool]($r.Output | Where-Object { $_ -match [regex]::Escape($tp.exe) -and $_ -match '\(new\)' }) }
         $ok = $null
-        if ($tp) { $ok = [bool]($u.Output | Where-Object { $_ -match [regex]::Escape($tp.exe) -and $_ -match '\(new\)' }) }
+        # The tray icon of a new program takes a while to be noticed (longer on ARM64).
+        if ($tp) { $ok = [bool](Wait-Until 40 $listed 1000) }
+        $u = Invoke-Ks status --unassigned
         @{ ok = $ok; m = [ordered]@{ unassigned = (($u.Output | Select-Object -First 10) -join ' | ') } }
     } -Ask 'Menu item, "new" marker, "Add to profile" and "Dismiss" as described?' -AskNote
     Set-Neutral
     Close-Gui
+}
+
+# The test programs the script brings: they run, beat, answer, close or
+# refuse to close as designed. Everything else in the run builds on this.
+function Test-Programs {
+    $compiled = @(@($script:Programs.suspend) + @($script:Programs.stop) + @($script:Programs.large) + @($script:Programs.tray_program) | Where-Object { $_ -and $_.compiled })
+    if (-not $compiled.Count) { Add-Skip programs start 'the program list names no built-in test programs'; return }
+    $null = Start-Tray
+    Set-Neutral
+    foreach ($p in $compiled) { $null = Close-Program $p -Wait }
+    Invoke-Step programs start 'The test programs start, beat and answer' -Prepare {
+        $null = Request-Running $compiled 2000
+        $m = [ordered]@{}
+        foreach ($p in $compiled) { $m[$p.exe] = $(if ((Get-ProgramProcesses $p.exe).Count) { 'running' } else { 'not running' }) }
+        $m
+    } -Check {
+        param($since)
+        $m = [ordered]@{}; $ok = $true
+        foreach ($p in $compiled) {
+            $b0 = Get-Beat $p
+            $moved = [bool](Wait-Until 5 { (Get-Beat $p) -ne $b0 } 100)
+            $answer = $null
+            if ($p.role -ne 'tray_program') {
+                # The window appears a moment after the process (slower on ARM64).
+                # A box: the condition runs in a scope of its own.
+                $box = @{ answer = -1 }
+                $null = Wait-Until 20 {
+                    $w = Get-MainWindows $p | Select-Object -First 1
+                    if ($w) { $box.answer = [KsBetaV3.Native]::Ping($w.Handle, 2000) }
+                    $box.answer -ge 0
+                } 300
+                $answer = $box.answer
+            }
+            $m[$p.exe] = "beat $(if ($moved) { 'rises' } else { 'does not move' })$(if ($null -ne $answer) { ", window answers in $answer ms" })"
+            if (-not $moved -or ($null -ne $answer -and $answer -lt 0)) { $ok = $false }
+        }
+        @{ ok = $ok; m = $m }
+    }
+    $closing = @($compiled | Where-Object { $_.behavior })
+    if ($closing.Count) {
+        Invoke-Step programs close 'A close request closes the program, except the stubborn ones' -Prepare {
+            foreach ($p in $closing) { foreach ($q in Get-StartedProcesses $p) { $null = $q.CloseMainWindow() } }
+            Start-Sleep -Seconds 3
+            $null
+        } -Check {
+            param($since)
+            $m = [ordered]@{}; $ok = $true
+            foreach ($p in $closing) {
+                $alive = (Get-ProgramProcesses $p.exe).Count -gt 0
+                $m[$p.exe] = $(if ($alive) { 'stays' } else { 'closed' })
+                if ($alive -ne ($p.behavior -eq 'stays' -or $p.behavior -eq 'killed')) { $ok = $false }
+            }
+            @{ ok = $ok; m = $m }
+        }
+    }
+    foreach ($p in $compiled) { $null = Close-Program $p -Wait }
 }
 
 function Test-Stop {
@@ -2136,7 +2325,16 @@ function Test-Stop {
         param($since)
         $m = [ordered]@{}
         $ok = $true
-        foreach ($p in $running) { $alive = (Get-ProgramProcesses $p.exe).Count; $m[$p.exe] = $(if ($alive) { 'still running' } else { 'closed' }); if ($alive -and $p.on_timeout -ne 'keep') { $ok = $false } }
+        $null = Wait-Log 'switch to "beta-stop" finished' $since 30
+        foreach ($p in $running) {
+            $alive = (Get-ProgramProcesses $p.exe).Count
+            $m[$p.exe] = $(if ($alive) { 'still running' } else { 'closed' })
+            # The test programs have a known behaviour; programs of your own
+            # may stay open only with on_timeout = "keep".
+            if ($p.behavior -in 'closes', 'killed') { if ($alive) { $ok = $false } }
+            elseif ($p.behavior -eq 'stays') { if (-not $alive) { $ok = $false } }
+            elseif ($alive -and $p.on_timeout -ne 'keep') { $ok = $false }
+        }
         $m.status = ((Invoke-Ks status).Output -join ' | ')
         $stayed = @($m.Values | Where-Object { $_ -eq 'still running' }).Count
         @{ ok = $ok; m = $m; note = $(if ($stayed) { 'with on_timeout = "keep" a program that asks to save stays open and is reported (KS108)' }) }
@@ -2179,7 +2377,7 @@ function Test-Triggers {
 
 function Test-TriggersSteps {
     $tr = $script:Programs.trigger
-    if (-not $tr) { Add-Skip triggers all 'no trigger program in beta-test.json'; return }
+    if (-not $tr) { Add-Skip triggers all 'the program list has no trigger'; return }
     $first = Get-First
     Invoke-Step triggers check-config 'check-config names the trigger and refuses it as a frozen entry (step 1)' -Check {
         param($since)
@@ -2525,7 +2723,7 @@ function Measure-Trim([string]$ProfileName, $Large) {
 
 function Test-T19 {
     $large = $script:Programs.large
-    if (-not $large) { Add-Skip t19 trim 'no "large" program in beta-test.json'; return }
+    if (-not $large) { Add-Skip t19 trim 'the program list has no "large" program'; return }
     $null = Start-Tray
     Set-Neutral
     # A fixture that was trimmed before keeps its memory out of RAM: start it afresh.
@@ -2837,6 +3035,7 @@ function Complete-PendingSession {
 }
 
 $script:Catalog = [ordered]@{
+    'programs'     = @{ title = 'Built-in test programs (self-check)'; ref = 'beta-test.ps1'; fn = 'Test-Programs' }
     'tray'         = @{ title = 'Tray icon and menu'; ref = 'beta-test 1.1'; fn = 'Test-Tray' }
     'signin'       = @{ title = 'Start at sign-in question'; ref = 'beta-test 1.2'; fn = 'Test-Signin' }
     'window'       = @{ title = 'Main window'; ref = 'beta-test 1.3, manual-checks "Main window"'; fn = 'Test-Window' }

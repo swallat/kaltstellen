@@ -290,6 +290,32 @@ impl Host for RealHost {
         views
     }
 
+    fn snapshot(&self, entries: &[crate::config::App]) -> crate::snapshot::Groups {
+        let state = Store::new(&self.data).peek().unwrap_or_default();
+        let (seen, problem) = crate::unassigned::load(&self.data);
+        if let Some(problem) = problem {
+            warn!("{problem}");
+        }
+        crate::snapshot::assemble(
+            &crate::snapshot::running_now(),
+            &crate::snapshot::held_of(&state),
+            &seen,
+            entries,
+        )
+    }
+
+    fn preview(&self, config: &Config, profile: &str) -> Result<crate::engine::Plan, String> {
+        let state = Store::new(&self.data).peek().unwrap_or_default();
+        crate::engine::preview(
+            config,
+            profile,
+            &state,
+            crate::engine::Options::default(),
+            &Vec::new,
+        )
+        .map_err(|err| err.to_string())
+    }
+
     fn tray_status(&self) -> Result<Option<crate::tray::protocol::TrayStatus>, String> {
         // M5: the tray keeps the error state (L9); without a tray there is
         // none, and the status line alone reports a switch. U4: the tray
