@@ -96,9 +96,13 @@ fn script(ps: &Path, args: &[&str]) -> String {
 
 /// The real Run value with its kind ("String|..." or "ExpandString|..."),
 /// empty when there is none; read through PowerShell, which names the kind.
+/// A missing Run key is the same as a key without the value: on a fresh
+/// machine something outside the sandbox (WebView2 or Edge, first sign-in
+/// setup) may create the key while this test runs. `OpenSubKey` returns
+/// nothing only for a missing key; any other error still shows as text.
 fn run_value(ps: &Path) -> String {
     let read = format!(
-        "$k = Get-Item 'HKCU:\\{RUN_KEY}'; if ($null -ne $k.GetValue('{VALUE}')) {{ \"$($k.GetValueKind('{VALUE}'))|$($k.GetValue('{VALUE}', '', 'DoNotExpandEnvironmentNames'))\" }}"
+        "$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('{RUN_KEY}'); if ($k -and $null -ne $k.GetValue('{VALUE}')) {{ \"$($k.GetValueKind('{VALUE}'))|$($k.GetValue('{VALUE}', '', 'DoNotExpandEnvironmentNames'))\" }}"
     );
     let mut c = command(ps);
     c.args(["-NoProfile", "-NonInteractive", "-Command", &read]);
