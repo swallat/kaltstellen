@@ -1006,6 +1006,7 @@ mod tests {
                 apps,
                 triggers: Vec::new(),
                 priority: 0,
+                watch: false,
             }],
         }
     }

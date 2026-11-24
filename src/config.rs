@@ -63,6 +63,10 @@ pub struct Profile {
     /// U4: decides between two profiles whose triggers run at once; higher
     /// wins. Default `0`.
     pub priority: i32,
+    /// M4c: while this profile is active and the optional background helper
+    /// runs, a program of this profile that starts later is handled at once
+    /// as in a switch (default off).
+    pub watch: bool,
 }
 
 /// U4: a trigger program, by executable name and optionally its full path
@@ -346,6 +350,7 @@ struct RawProfile {
     app: Vec<RawApp>,
     trigger: Option<Vec<Spanned<String>>>,
     priority: Option<Spanned<i64>>,
+    watch: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -453,6 +458,7 @@ impl Check<'_> {
                 apps,
                 triggers,
                 priority,
+                watch: raw.watch.unwrap_or(false),
             });
         }
         Config { settings, profiles }
@@ -1174,6 +1180,23 @@ name = "a"
         assert_eq!(rejected.code, Code::ConfigInvalid);
         let lines: Vec<_> = rejected.issues.iter().map(|i| i.line.unwrap()).collect();
         assert_eq!(lines, vec![2, 5, 7]);
+    }
+
+    #[test]
+    fn m4c_watch_is_read_and_defaults_to_off() {
+        let config = ok(r#"
+[[profile]]
+name = "focus"
+watch = true
+
+[[profile]]
+name = "plain"
+"#)
+        .config;
+        assert!(config.profile("focus").unwrap().watch);
+        assert!(!config.profile("plain").unwrap().watch);
+        let (line, _) = rejected("[[profile]]\nname = \"x\"\nwatch = \"yes\"\n");
+        assert_eq!(line, 3);
     }
 
     #[test]

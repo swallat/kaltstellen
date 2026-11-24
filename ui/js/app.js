@@ -501,6 +501,7 @@ function renderDetail() {
     if (draft && draft.invalid === field.id) field.setAttribute('aria-invalid', 'true');
     else field.removeAttribute('aria-invalid');
   }
+  $('watch').checked = !!profile.watch;
   $('apply').disabled = state.applying;
   $('preview-apply').disabled = state.applying;
   $('apply').textContent = state.applying ? 'Applying…' : 'Apply profile';
@@ -641,6 +642,13 @@ $('open-log').addEventListener('click', () => call('open_location', { target: 'l
 $('open-log-folder').addEventListener('click', () => call('open_location', { target: 'log_folder' }));
 $('reload-config').addEventListener('click', () => call('reload_config'));
 $('forget-last').addEventListener('click', () => call('forget_last_profile'));
+$('watch').addEventListener('change', async (event) => {
+  if (!current()) return;
+  const on = event.target.checked;
+  const reply = await call('set_watch', { profile: current().name, on });
+  // A refused change leaves the switch as the file has it.
+  if (!reply.ok) event.target.checked = !on;
+});
 $('learn-setting').addEventListener('change', async (event) => {
   await call('set_learn', { on: event.target.checked });
   await loadSuggestions();

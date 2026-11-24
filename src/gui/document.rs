@@ -209,6 +209,7 @@ impl Document {
             copy.remove("hotkey");
             copy.remove("trigger");
             copy.remove("priority");
+            copy.remove("watch");
             // Placed at the end of the file, not next to the original: the
             // entries keep the positions of the original's entries
             // otherwise, and would be written under the original. The
@@ -429,6 +430,19 @@ impl Document {
                 table.remove("priority");
             } else {
                 set_keep(table, "priority", priority);
+            }
+            Ok(())
+        })
+    }
+
+    /// M4c: sets `watch` of a profile; `false` (the default) removes the key.
+    pub fn set_watch(&mut self, profile: &str, on: bool) -> Result<(), Error> {
+        self.edit(|doc| {
+            let table = profile_mut(doc, profile)?;
+            if on {
+                set_keep(table, "watch", true);
+            } else {
+                table.remove("watch");
             }
             Ok(())
         })
@@ -945,6 +959,25 @@ hotkey = "Ctrl+Shift+Alt+F1"
         );
         d.set_hotkey("music", None).unwrap();
         assert_eq!(d.config().profiles[1].hotkey, None);
+    }
+
+    #[test]
+    fn m4c_watch_is_set_and_removed_and_keeps_the_file_otherwise() {
+        let mut d = Document::from_text(
+            Path::new("c.toml"),
+            "# keep\n[[profile]]\nname = \"focus\" # note\n",
+        )
+        .unwrap();
+        d.set_watch("focus", true).unwrap();
+        assert!(d.config().profiles[0].watch);
+        assert!(d.text().contains("# keep") && d.text().contains("# note"));
+        // A copy does not take it.
+        d.copy_profile("focus", "second").unwrap();
+        assert!(!d.config().profile("second").unwrap().watch);
+        d.set_watch("focus", false).unwrap();
+        assert!(!d.config().profiles[0].watch);
+        assert!(!d.text().contains("watch"));
+        assert!(d.set_watch("missing", true).is_err());
     }
 
     #[test]
