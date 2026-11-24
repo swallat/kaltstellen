@@ -382,3 +382,11 @@ Nothing here is covered by CI because it installs a real service.
    policy and log are gone, and both folders if nothing else is in them.
 9. The tray, the window and every command work unchanged throughout, with
    the helper installed, stopped and removed.
+
+Result of the first run on the VM (2026-11-24, build 0f05fd9, as a standard
+user, UAC answered with an administrator's credentials): steps 1 to 5, 7 and
+8 passed; a standard user reads the service state and gets the pipe's answer.
+Not yet covered: step 6 (a second account), the declined prompt (`KS1005`),
+step 9 for the tray and window, and an install over an older build. The first
+uninstall left the protected copy behind (the service process still held it);
+the file is now removed with retries.
