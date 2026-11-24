@@ -69,7 +69,7 @@ belong to it and puts the others on ice, so they stop costing CPU and RAM.
 ## Quality requirements
 
 - **Q1** Idle footprint of the tray app: a few MB of RAM, no measurable CPU.
-- **Q2** Single executable, no installer and no runtime needed.
+- **Q2** Single executable, no runtime needed; a per-user setup around it for people (owner, 2026-11-24).
 - **Q3** Runs without admin rights; features that need elevation (services,
   elevated processes) say so instead of failing silently.
 - **Q4** All `unsafe` Win32 code is confined to one module.

@@ -282,6 +282,39 @@ for the next beta:
 
 Note whether SmartScreen warns when the new tray starts.
 
+## 5. Setup (from beta.2)
+
+From `v1.0.0-beta.2` each release also has
+`kaltstellen-<version>-windows-<arch>-setup.exe` (spec Q2). Do this after
+section 4, on the copy that updated itself, or on a machine without
+kaltstellen:
+
+1. **Double-click** the bare `kaltstellen.exe`: the main window opens and
+   the tray icon appears (no help text flashing by). Another double-click
+   brings the open window to the front (or opens it again) and starts no
+   second tray icon.
+2. **Install over a running tray**: with a profile active that freezes
+   something, run the setup and keep its folder
+   (`%LOCALAPPDATA%\Programs\kaltstellen`, the folder of the copy above).
+   Before files are copied the tray ends and the frozen program runs again;
+   no administrator prompt; at the end "Start kaltstellen now" brings the
+   tray back. Windows' list of installed apps shows `kaltstellen` with the
+   version; the Start menu has `kaltstellen`.
+3. **First installation** (on a machine without it, or after step 5): the
+   page "Select Additional Tasks" offers "Start kaltstellen when I sign in"
+   (checked). The tray started afterwards does not ask about start at
+   sign-in again; `kaltstellen autostart` says what you chose.
+4. **Update after the setup**: once a newer beta is out, the self-update
+   works as in section 4, and the list of installed apps then shows the new
+   version.
+5. **Uninstall** in Windows' settings: the tray ends, frozen programs run
+   again, start at sign-in is off, the Start menu entry and the folder are
+   gone. The question about profiles and data: answer No once (they stay,
+   a new installation finds them) and, on a later round, Yes (both folders
+   are gone).
+
+Note what SmartScreen says for the setup.
+
 ## What to report
 
 Per finding: the step, what happened, what was expected, the log lines
@@ -290,7 +323,8 @@ around it, the version (`kaltstellen --version`) and the Windows version
 
 ## Uninstall
 
-Switch to `Neutral` (stopped programs come back), then `Quit`,
+Installed with the setup (from beta.2): uninstall it in Windows' settings,
+as in section 5, step 5. Otherwise: switch to `Neutral` (stopped programs come back), then `Quit`,
 `kaltstellen autostart off`, and delete the folder with the executable
 (with `kaltstellen.old.exe` after an update). If wanted, also delete
 `%APPDATA%\kaltstellen` (configuration) and `%LOCALAPPDATA%\kaltstellen`

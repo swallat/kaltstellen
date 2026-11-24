@@ -25,16 +25,23 @@ use crate::error::{Code, Error, Result};
 /// shortcut, Run key). Returns whether it detached. The console window then
 /// closes; it may have been visible for a moment.
 pub fn detach_if_own() -> bool {
-    let mut pids = [0u32; 4];
-    // SAFETY: the buffer is valid for its whole length.
-    let count = unsafe { GetConsoleProcessList(&mut pids) };
-    if count != 1 {
-        // 0: no console at all; more: a terminal or another program shares it.
+    if !is_own() {
         return false;
     }
     // SAFETY: plain call without arguments. Rust's standard streams treat
     // the now invalid handles as closed and drop further output.
     unsafe { FreeConsole() }.is_ok()
+}
+
+/// Whether this process is the only one attached to its console: Windows
+/// created the console for it alone (a double-click in Explorer, a shortcut,
+/// the Run key), not a terminal it was started from.
+pub fn is_own() -> bool {
+    let mut pids = [0u32; 4];
+    // SAFETY: the buffer is valid for its whole length.
+    let count = unsafe { GetConsoleProcessList(&mut pids) };
+    // 0: no console at all; more: a terminal or another program shares it.
+    count == 1
 }
 
 /// UP1: stops this process's standard handles from being inherited by

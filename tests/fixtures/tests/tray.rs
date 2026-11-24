@@ -804,12 +804,16 @@ fn autostart_from_the_command_line_uses_the_injected_key_and_not_the_menu() {
 
     let (code, out, _) = t.run(&["autostart"]);
     assert_eq!((code, out.trim()), (0, "start at sign-in: off"));
+    // Only showing it is no answer to the tray's question (L8).
+    assert!(!t.settings().contains("\"autostart_asked\": true"));
     let (code, out, _) = t.run(&["autostart", "on"]);
     assert_eq!((code, out.trim()), (0, "start at sign-in: on"));
     assert_eq!(
         registry::read(&t.run_key(), VALUE).unwrap(),
         Some(expected.clone())
     );
+    // Choosing it is: a tray started afterwards (by the setup) does not ask.
+    assert!(t.settings().contains("\"autostart_asked\": true"));
     let (code, out, _) = t.run(&["autostart", "off"]);
     assert_eq!((code, out.trim()), (0, "start at sign-in: off"));
     assert_eq!(registry::read(&t.run_key(), VALUE).unwrap(), None);
@@ -1038,6 +1042,63 @@ fn wp10_open_kaltstellen_starts_the_main_window_as_its_own_process() {
         .all(|p| *p != pid)));
     assert_eq!(t.quit(), Some(0));
     // The WebView2 user data in the test folder is released a little later.
+    remove_dir_retry(t.dir.path());
+}
+
+/// A double-click in Explorer: no arguments and a console of its own. The
+/// main window opens and this process runs the tray, instead of printing
+/// the help into a window that closes at once. From a terminal (a shared
+/// console, or none, as in the other tests) it stays the help.
+#[test]
+fn a_double_click_opens_the_main_window_and_the_tray() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    let mut t = Tray::new();
+    t.config("[[profile]]\nname = \"focus\"\n");
+    // The environment of a test tray, but no `tray` argument.
+    let without_arguments = |flags: u32| {
+        let mut command = Command::new(kaltstellen_exe());
+        for (key, value) in t.command().get_envs() {
+            if let Some(value) = value {
+                command.env(key, value);
+            }
+        }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(flags);
+        command
+    };
+    // No console of its own (here: none at all): the help, nothing started.
+    let status = without_arguments(DETACHED_PROCESS).status().unwrap();
+    assert_ne!(status.code(), Some(0));
+    assert!(t.log().is_empty(), "{}", t.log());
+
+    t.child = Some(without_arguments(CREATE_NEW_CONSOLE).spawn().unwrap());
+    t.wait_log("tray: recover finished", 1);
+    t.wait_log("tray: started without a terminal; console released", 1);
+    t.wait_log("tray: main window started (pid ", 1);
+    let pid: u32 = t
+        .log()
+        .split("tray: main window started (pid ")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .and_then(|n| n.parse().ok())
+        .expect("pid in the log");
+    let _cleanup = KillPid(pid);
+    let mut window = None;
+    assert!(wait_for(LONG, || {
+        window = window_of(pid, kaltstellen::win32::webview::CLASS);
+        window.is_some_and(|w| unsafe { IsWindowVisible(w) }.as_bool())
+    }));
+    // SAFETY: posting to a window of another process.
+    unsafe { PostMessageW(window, WM_CLOSE, WPARAM(0), LPARAM(0)) }.unwrap();
+    assert!(wait_for(LONG, || pids_of("kaltstellen.exe")
+        .iter()
+        .all(|p| *p != pid)));
+    assert_eq!(t.quit(), Some(0));
     remove_dir_retry(t.dir.path());
 }
 

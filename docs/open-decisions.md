@@ -243,6 +243,29 @@ actions only", section 12):
     request, only while no stable release exists. `update --force` without
     a release is `KS802`; published releases of which none has a version
     tag are `KS802` too, not "none".
+27. **Setup details** (spec Q2; the owner decided on 2026-11-24 on an
+    Inno Setup per-user setup next to the bare executable, and that
+    uninstalling asks about the data, keeping by default):
+    - the task "Start kaltstellen when I sign in" is checked by default
+      and applies on a first installation only; an upgrade keeps what was
+      chosen since. `kaltstellen autostart on|off` now also counts as the
+      answer to the tray's one-time question (L8);
+    - before copying files the setup runs `kaltstellen quit` with the new
+      executable and stops only when that reports exit code 5 (the tray
+      neither answered nor ended); the Restart Manager is off, since it
+      would close the tray without resuming;
+    - uninstalling runs `quit`, `recover` and `autostart off`, and removes
+      `kaltstellen.old*.exe`, `.new.exe`, `.failed.exe`; `/REMOVEDATA`
+      deletes the data without asking;
+    - English and German pages; an x86_64 setup also installs on ARM64
+      (emulated), the aarch64 setup only there;
+    - after a self-update the version in the list of installed apps
+      follows, if the entry's `InstallLocation` is the updated folder.
+28. **Double-click** (spec Q2): without arguments and with a console of
+    its own (`GetConsoleProcessList` = 1: Explorer, a shortcut without
+    arguments), `kaltstellen` opens the main window and runs the tray; a
+    running tray stays and the window comes to the front. From a terminal,
+    or without a console, it prints the help as before.
 
 Everything else the owner has not decided yet is deferred (below).
 

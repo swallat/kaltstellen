@@ -159,6 +159,16 @@ enum OnOff {
 }
 
 pub fn main() -> ExitCode {
+    // A double-click on the executable: no arguments and a console of its
+    // own. The help would flash by in a window that closes at once, so it
+    // opens the main window and runs the tray (which lets go of the
+    // console; one already running stays, this one ends) [assumed].
+    if std::env::args_os().len() == 1 && crate::win32::console::is_own() {
+        init_logging();
+        info!("started without arguments and without a terminal: main window and tray");
+        crate::tray::open_window();
+        return ExitCode::from(crate::tray::main());
+    }
     let cli = Cli::parse();
     init_logging();
     let code = match cli.command {
@@ -773,6 +783,16 @@ fn update_install(force: bool, unattended: bool) -> u8 {
         Ok(done) => {
             info!("update: installed {}", done.version);
             println!("updated to version {}", done.version);
+            // Installed by the setup: Windows' list of apps shows the new
+            // version too.
+            if let Some(dir) = exe.parent() {
+                let key = update::uninstall_entry::key();
+                match update::uninstall_entry::follow_update(&key, dir, &done.version) {
+                    Ok(true) => info!("update: uninstall entry now says {}", done.version),
+                    Ok(false) => {}
+                    Err(err) => warn!("update: {err}"),
+                }
+            }
             if done.tray_restarted {
                 println!(
                     "the tray runs the new version; its menu offers the profile that was active"

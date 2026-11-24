@@ -99,7 +99,7 @@ impl Endpoints {
 /// Starts `kaltstellen gui` as a process of its own, without a console
 /// window (spec section 8). It inherits the environment, so a test tray
 /// opens a test window.
-fn open_window() {
+pub(crate) fn open_window() {
     use std::os::windows::process::CommandExt;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     let started = std::env::current_exe().and_then(|exe| {
