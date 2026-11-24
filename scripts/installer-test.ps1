@@ -27,7 +27,9 @@ The setup to test (scripts/installer.ps1 writes it).
 
 .PARAMETER OnThisMachine
 Run outside CI. The uninstall entry and the Start menu shortcut of this user
-are created and removed again.
+are created and removed again. The setup closes every open kaltstellen main
+window (it finds them by window class), also one of another copy; the
+window saves on every edit, so nothing is lost.
 
 .PARAMETER SkipWindow
 Leave out the main window in step 2 (no WebView2 runtime).

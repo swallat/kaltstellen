@@ -110,7 +110,7 @@ Filename: "{app}\kaltstellen.exe"; Parameters: "autostart off"; Flags: runhidden
 Filename: "{app}\kaltstellen.exe"; Parameters: "tray"; Description: "{cm:LaunchTray}"; Flags: postinstall nowait skipifsilent
 
 [UninstallRun]
-; The tray was quit in InitializeUninstall (which stops when it does not
+; The tray was quit after the confirmation (usAppMutexCheck, which stops when it does not
 ; end). recover catches what a crashed tray left frozen; then the Run value
 ; goes.
 Filename: "{app}\kaltstellen.exe"; Parameters: "recover"; Flags: runhidden waituntilterminated; RunOnceId: "recover"
@@ -221,12 +221,15 @@ begin
     Exec(ExpandConstant('{app}\kaltstellen.exe'), 'tray', '', SW_HIDE, ewNoWait, Code);
 end;
 
-function InitializeUninstall: Boolean;
+{ After the user confirmed the uninstall (usAppMutexCheck comes after the
+  question, before anything is removed): the window closes and the tray
+  ends. When that fails the uninstall stops, so the program is never
+  removed under a tray that still holds programs frozen. }
+procedure EndTrayForUninstall;
 var
   Why: String;
   Running: Boolean;
 begin
-  Result := True;
   Why := '';
   if not CloseMainWindow then
     Why := CustomMessage('WindowStillOpen')
@@ -234,12 +237,9 @@ begin
     Why := QuitTray(ExpandConstant('{app}\kaltstellen.exe'), Running);
   if Why <> '' then
   begin
-    { Not uninstalled under a tray that still holds programs frozen. }
     if not UninstallSilent then
-      MsgBox(Why, mbError, MB_OK)
-    else
-      Log(Why);
-    Result := False;
+      MsgBox(Why, mbError, MB_OK);
+    RaiseException(Why);
   end;
 end;
 
@@ -300,6 +300,8 @@ var
   ConfigDir, DataDir: String;
   Remove: Boolean;
 begin
+  if CurUninstallStep = usAppMutexCheck then
+    EndTrayForUninstall;
   if CurUninstallStep <> usPostUninstall then
     Exit;
   ConfigDir := KaltstellenDir('KALTSTELLEN_CONFIG_DIR', '{userappdata}');

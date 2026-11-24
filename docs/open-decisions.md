@@ -256,7 +256,9 @@ actions only", section 12):
       reports exit code 5 (the tray neither answered nor ended). The
       Restart Manager is off, since it would close the tray without
       resuming. A silent upgrade starts the tray again if one ran;
-    - uninstalling does the same first and stops when it fails, so it
+    - uninstalling does the same once the user confirmed it (Inno's step
+      `usAppMutexCheck`, before anything is removed; No changes nothing)
+      and stops when it fails, so it
       never removes the program under a tray that holds programs frozen;
       then `recover` and `autostart off`, and it removes
       `kaltstellen.old*.exe`, `.new.exe`, `.failed.exe`;

@@ -128,8 +128,10 @@ pub fn main() -> u8 {
 
 /// A double-click on the executable: the tray, and the main window as well,
 /// whether this process becomes the tray or one is already running. The
-/// window opens only once the tray's own part is settled, so a failed start
-/// leaves no window without a tray.
+/// window opens only once this process owns the tray instance and its pipe
+/// is up (or another tray runs); a tray that cannot start at all opens no
+/// window. If only the pipe fails, the window opens and says the tray does
+/// not answer.
 pub fn main_and_window() -> u8 {
     run(true)
 }
