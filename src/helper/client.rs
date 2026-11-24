@@ -20,6 +20,15 @@ pub fn ask(command: Command) -> Result<Option<Reply>> {
 
 /// [`ask`] with the `after` of an `events` request.
 pub fn ask_after(command: Command, after: Option<u64>) -> Result<Option<Reply>> {
+    ask_full(command, after, None)
+}
+
+/// [`ask`] for `network` with the window in seconds.
+pub fn ask_network(seconds: Option<u32>) -> Result<Option<Reply>> {
+    ask_full(Command::Network, None, seconds)
+}
+
+fn ask_full(command: Command, after: Option<u64>, seconds: Option<u32>) -> Result<Option<Reply>> {
     let Some(mut conn) = pipe::connect_peer(PIPE_NAME, Duration::from_secs(1), Peer::Helper)?
     else {
         return Ok(None);
@@ -37,6 +46,7 @@ pub fn ask_after(command: Command, after: Option<u64>) -> Result<Option<Reply>> 
         v: protocol::VERSION,
         cmd: command,
         after,
+        seconds,
     };
     let reply = pipe::with_deadline(DEADLINE, || -> Result<Option<String>> {
         protocol::write_line(&mut conn, &request)?;

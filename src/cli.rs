@@ -194,6 +194,13 @@ enum HelperAction {
     },
     /// Show whether the helper is installed and running
     Status,
+    /// Print bytes sent and received per process of this session over the
+    /// last seconds (needs the running helper), as JSON lines
+    Traffic {
+        /// Window in seconds, 1 to 600
+        #[arg(long, default_value_t = 10)]
+        seconds: u32,
+    },
     /// Print the process start and stop events of this session that the
     /// running helper has seen (needs the role observe), as JSON lines
     Events {
@@ -993,6 +1000,19 @@ fn helper(action: HelperAction) -> u8 {
             }
             exit::OK
         }
+        HelperAction::Traffic { seconds } => match client::ask_network(Some(seconds)) {
+            Ok(Some(reply)) => {
+                for usage in reply.traffic.iter().flatten() {
+                    println!("{}", serde_json::to_string(usage).unwrap_or_default());
+                }
+                exit::OK
+            }
+            Ok(None) => {
+                eprintln!("the helper is not running (no pipe)");
+                exit::ERRORS
+            }
+            Err(err) => refused(err),
+        },
         HelperAction::Events { after } => {
             match client::ask_after(protocol::Command::Events, Some(after)) {
                 Ok(Some(reply)) => {

@@ -343,6 +343,12 @@ pub fn describe(
         Ok(Some(reply)) => {
             let version = reply.version.as_deref().unwrap_or("?");
             lines.push(format!("pipe {PIPE_NAME}: answers, version {version}"));
+            if let Some(network) = reply.network {
+                lines.push(format!(
+                    "network counters: {}",
+                    if network { "running" } else { "not running" }
+                ));
+            }
             if let Some(active) = &reply.active {
                 lines.push(format!(
                     "observe (process events): {}",
