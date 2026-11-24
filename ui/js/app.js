@@ -94,6 +94,7 @@ function render() {
   $('automation-wrap').title = hint;
   $('automation-hint').textContent = hint;
   $('automation-setting-hint').textContent = hint || AUTOMATION_HELP;
+  $('learn-setting').checked = state.learn !== false;
   if (localStatus) setStatus(localStatus.text, localStatus.isError);
   else setStatus(state.status);
   renderUpdate();
@@ -589,6 +590,82 @@ $('open-log').addEventListener('click', () => call('open_location', { target: 'l
 $('open-log-folder').addEventListener('click', () => call('open_location', { target: 'log_folder' }));
 $('reload-config').addEventListener('click', () => call('reload_config'));
 $('forget-last').addEventListener('click', () => call('forget_last_profile'));
+$('learn-setting').addEventListener('change', async (event) => {
+  await call('set_learn', { on: event.target.checked });
+  await loadSuggestions();
+});
+$('forget-learned').addEventListener('click', async () => {
+  if (await confirmDialog('Forget what was learned', 'Delete the counters behind the suggestions? Entries you added stay.', 'Forget')) {
+    await call('forget_learned');
+    await loadSuggestions();
+  }
+});
+
+// Suggestions from use (H5) ---------------------------------------------------
+
+let suggestions = [];
+
+const suggestionVerb = { stop: 'Stop', suspend: 'Freeze', start: 'Keep running (start)' };
+
+function renderSuggestions() {
+  const items = suggestions.map((s) => el('li', { class: 'suggestion' },
+    el('div', {},
+      el('span', { class: 'exe', text: s.exe }),
+      el('span', { class: 'tag', text: suggestionVerb[s.action] || s.action }),
+      el('p', { class: 'hint', text: s.reason })),
+    el('div', { class: 'commands' },
+      el('button', { type: 'button', class: 'button small', 'aria-label': `Add entry for ${s.exe}`, onclick: () => acceptSuggestion(s), text: s.entry === null ? 'Add entry' : 'Change entry' }),
+      el('button', { type: 'button', class: 'button small', 'aria-label': `Not now for ${s.exe}`, onclick: () => hideSuggestion(s), text: 'Not now' }),
+      el('button', { type: 'button', class: 'button small', 'aria-label': `Never suggest ${s.exe}`, onclick: () => neverSuggest(s), text: 'Never for this program' }))));
+  $('suggestions').replaceChildren(...items);
+  $('suggestions-title').textContent = `Suggestions (${suggestions.length})`;
+  $('suggestions-card').hidden = suggestions.length === 0;
+}
+
+async function loadSuggestions() {
+  const profile = current();
+  suggestions = [];
+  if (profile && state.learn) {
+    const reply = await call('suggestions', { profile: profile.name }, { quiet: true });
+    if (current()?.name !== profile.name) return;
+    suggestions = reply.ok ? reply.data.filter((s) => !hiddenSuggestions.has(`${profile.name}/${s.exe}`.toLowerCase())) : [];
+  }
+  renderSuggestions();
+}
+
+// "Not now" hides a suggestion until the window is opened again.
+const hiddenSuggestions = new Set();
+
+function hideSuggestion(s) {
+  hiddenSuggestions.add(`${current().name}/${s.exe}`.toLowerCase());
+  suggestions = suggestions.filter((x) => x !== s);
+  renderSuggestions();
+}
+
+async function neverSuggest(s) {
+  await call('suggestion_done', { profile: current().name, exe: s.exe, never: true });
+  await loadSuggestions();
+}
+
+async function acceptSuggestion(s) {
+  const profile = current();
+  let reply;
+  if (s.entry === null) {
+    reply = await call('add_entries', { profile: profile.name, entries: [{ exe: s.exe, path: s.path, action: s.action, confirmed: false }] });
+  } else {
+    // Another action has other options: the entry starts with the defaults
+    // of the new one, the program and its confirmation stay.
+    const old = profile.entries[s.entry];
+    reply = await call('update_entry', {
+      profile: profile.name,
+      index: s.entry,
+      entry: { exe: old.exe, path: old.path, action: s.action, args: [], cwd: null, on_timeout: 'kill', restart_on_neutral: false, trim: null, confirmed: old.confirmed },
+    });
+  }
+  if (reply.ok) await call('suggestion_done', { profile: profile.name, exe: s.exe, never: false });
+  await loadSuggestions();
+  await loadUnassigned();
+}
 
 function renderUnassigned() {
   const rows = unassigned.map((u) => el('tr', {},
@@ -615,6 +692,7 @@ async function loadUnassigned() {
     unassigned = reply.ok ? reply.data : [];
   }
   renderUnassigned();
+  await loadSuggestions();
 }
 
 

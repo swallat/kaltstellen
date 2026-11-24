@@ -78,6 +78,14 @@
           <p class="hint" id="triggers-help">Within about 5 s after one of these programs starts, this profile is applied automatically; 5 to 10 s after the last one ended, the profile from before comes back. A program name or a full path, one per line. When triggers of two profiles run, the higher priority wins.</p>
         </form>
 
+        <section class="card" id="suggestions-card" aria-labelledby="suggestions-title" hidden>
+          <div class="section-head">
+            <h3 id="suggestions-title">Suggestions</h3>
+          </div>
+          <p class="hint">What you did by hand after this profile was applied, seen again and again. Only a proposal: nothing changes until you add it.</p>
+          <ul class="suggestions" id="suggestions"></ul>
+        </section>
+
         <div class="section-head">
           <h3>Programs</h3>
           <button type="button" class="button" id="add-program">Add program…</button>
@@ -128,6 +136,11 @@
                 <div><label class="label" for="automation-setting">Automatic switching</label>
                   <p class="hint" id="automation-setting-hint">Applies a profile when one of its trigger programs starts, and goes back when the last one has ended. Off pauses all triggers.</p></div>
                 <input type="checkbox" class="switch" id="automation-setting" role="switch" aria-describedby="automation-setting-hint">
+              </div>
+              <div class="row" id="learn-row">
+                <div><label class="label" for="learn-setting">Suggestions from use</label>
+                  <p class="hint" id="learn-setting-hint">Compares the running programs when a profile was applied with the ones when you switch next, and proposes entries for what you keep doing by hand. Nothing runs in between; no window titles or command lines are kept. Off records nothing.</p></div>
+                <input type="checkbox" class="switch" id="learn-setting" role="switch" aria-describedby="learn-setting-hint">
               </div>
             </div>
           </section>
@@ -236,6 +249,11 @@
                   <p class="mono" id="file-settings"></p>
                   <p class="hint" id="last-profile-hint">Update mode, paused automatic switching and the profile that was active when you signed out.</p></div>
                 <button type="button" class="button small" id="forget-last">Forget last profile</button>
+              </div>
+              <div class="row">
+                <div><p class="label">Learned from use <span class="where">usage.json</span></p>
+                  <p class="hint">Counters per profile and program, local only.</p></div>
+                <button type="button" class="button small" id="forget-learned">Forget what was learned</button>
               </div>
               <div class="row">
                 <div><p class="label">Log <span class="where">kaltstellen.log</span></p>
