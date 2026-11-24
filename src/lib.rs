@@ -14,6 +14,8 @@
 //! - [`cli`]: command-line interface (U2, E2).
 //! - [`tray`]: tray app logic (U1, L1, L2, W3): queue, menu model, worker.
 //! - [`hotkey`]: hotkey syntax (C7).
+//! - [`program_info`]: what a program is (version resource, signature;
+//!   M2, N1), from local sources only.
 //! - [`update`]: updates from GitHub Releases (UP1).
 //! - [`error`], [`logging`], [`paths`]: shared infrastructure.
 
@@ -34,6 +36,7 @@ pub mod logging;
 pub mod paths;
 #[allow(unsafe_code)]
 pub mod process;
+pub mod program_info;
 pub mod protection;
 pub mod settings;
 pub mod state;

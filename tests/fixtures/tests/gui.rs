@@ -268,6 +268,11 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
             {{"exe": "notepad.exe", "path": {notepad}}},
             {{"exe": "ks-no-such-program.exe"}}
         ]}},
+        {{"type": "program_info", "programs": [
+            {{"exe": "notepad.exe", "path": {notepad}}},
+            {{"exe": "ks-wv-a.exe"}},
+            {{"exe": "ks-no-such-program.exe"}}
+        ]}},
         {{"type": "set_triggers", "profile": "play", "triggers": ["ks-wv-sim.exe"], "priority": 2}},
         {{"type": "set_triggers", "profile": "play", "triggers": ["ks-wv-a.exe"], "priority": 0}}
     ]"#
@@ -304,7 +309,7 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
     assert_eq!(
         ok,
         vec![
-            true, true, false, true, false, true, false, true, true, true, false
+            true, true, false, true, false, true, false, true, true, true, true, false
         ],
         "{results}"
     );
@@ -331,6 +336,26 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
         "{results}"
     );
     assert!(results[8]["data"][1].is_null(), "{results}");
+    // M2: what the programs are, through the real host and its reader
+    // thread: a catalog-signed system program, the unsigned fixture (no
+    // version resource) found as a running process, and nothing for a name
+    // that neither runs nor has a path. The page asked again on the
+    // `program_info` event.
+    let about = &results[9];
+    assert_eq!(about["data"][0]["pending"], false, "{about}");
+    assert_eq!(about["data"][0]["signature"], "valid", "{about}");
+    assert!(
+        about["data"][0]["publisher"]
+            .as_str()
+            .is_some_and(|p| p.starts_with("Microsoft")),
+        "{about}"
+    );
+    assert!(about["data"][0]["description"].is_string(), "{about}");
+    assert_eq!(about["data"][1]["signature"], "unsigned", "{about}");
+    assert!(about["data"][1]["publisher"].is_null(), "{about}");
+    assert!(about["data"][1]["description"].is_null(), "{about}");
+    assert!(about["data"][2].is_null(), "{about}");
+    assert!(about["events"].as_u64().unwrap() >= 1, "{about}");
 
     let config = world.config();
     assert!(config.starts_with("# Owner's notes stay."), "{config}");
@@ -349,7 +374,7 @@ fn wp10_the_page_drives_the_bridge_edits_the_file_and_applies_against_a_fixture(
         "{config}"
     );
     assert!(
-        results[10]["error"].as_str().unwrap().contains("freezes"),
+        results[11]["error"].as_str().unwrap().contains("freezes"),
         "{results}"
     );
     kaltstellen::config::parse(&config).expect("still valid");

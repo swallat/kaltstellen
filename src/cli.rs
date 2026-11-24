@@ -14,6 +14,7 @@ use crate::exit;
 use crate::logging;
 use crate::paths;
 use crate::process::{Access, Snapshot, Target};
+use crate::program_info;
 use crate::protection::{self, Protection};
 use crate::state::{Lock, State, Store};
 use crate::tray::protocol::{self, Body, Finished};
@@ -36,7 +37,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// List running processes, optionally only those containing FILTER
-    List { filter: Option<String> },
+    List {
+        filter: Option<String>,
+        /// Also show what each program is: description and publisher (from
+        /// its file only; checking signatures takes a moment)
+        #[arg(long)]
+        info: bool,
+    },
     /// Freeze all processes with the given executable name
     Suspend {
         /// Executable name, e.g. "notepad" or "notepad.exe"
@@ -791,16 +798,55 @@ fn status_unassigned() -> u8 {
         }
     };
     let list = crate::unassigned::refresh(&data, &config, &active);
+    // M2, N1: what each program is, from the file of its running process,
+    // else the path the icon registry gave.
+    let wanted: Vec<crate::gui::icons::Wanted> = list
+        .iter()
+        .map(|u| crate::gui::icons::Wanted {
+            exe: u.exe.clone(),
+            path: u.path.as_ref().map(PathBuf::from),
+        })
+        .collect();
+    let running = Snapshot::take()
+        .map(|s| crate::gui::icons::running_paths(&s, &wanted))
+        .unwrap_or_default();
+    let files: Vec<Option<PathBuf>> = wanted
+        .iter()
+        .map(|w| crate::gui::icons::file_of(w, &running))
+        .collect();
+    let about = program_info::read_many(files.iter().flatten().map(PathBuf::as_path));
     println!("unassigned in \"{active}\": {}", list.len());
-    for item in list {
+    for (item, file) in list.into_iter().zip(&files) {
+        let text = file
+            .as_deref()
+            .and_then(|f| program_info::summary_of(&about, f));
         println!(
-            "  {}{}{}",
+            "  {}{}{}{}",
             item.exe,
             if item.new { " (new)" } else { "" },
-            item.path.map_or(String::new(), |p| format!(", {p}"))
+            item.path.map_or(String::new(), |p| format!(", {p}")),
+            after_name(text)
         );
     }
     exit::OK
+}
+
+/// M2: the description and publisher after a program in `list --info` and
+/// `status --unassigned`, two spaces after what was there before, so the
+/// existing columns stay as they were; nothing when nothing is known.
+fn after_name(text: Option<String>) -> String {
+    text.map_or_else(String::new, |t| format!("  {t}"))
+}
+
+/// The image path of a process, if it can be opened with query rights.
+fn image_of(p: &crate::process::ProcessInfo) -> Option<PathBuf> {
+    if p.pid == 0 {
+        return None;
+    }
+    match Target::open(p, Access::Query) {
+        Ok(Some(target)) => target.image_path().ok(),
+        _ => None,
+    }
 }
 
 /// One frozen process for `status`: its own executable name, and the entry
@@ -933,22 +979,47 @@ fn init_logging() {
 /// Returns `Ok(false)` if the command ran but did not fully succeed.
 fn run(command: Command) -> Result<bool> {
     match command {
-        Command::List { filter } => {
+        Command::List { filter, info } => {
             let filter = filter.map(|f| f.to_lowercase());
             let snapshot = Snapshot::take()?;
-            let mut processes = snapshot.processes().to_vec();
+            let mut processes: Vec<_> = snapshot
+                .processes()
+                .iter()
+                .filter(|p| {
+                    filter
+                        .as_ref()
+                        .is_none_or(|f| p.name.to_lowercase().contains(f))
+                })
+                .cloned()
+                .collect();
             processes.sort_by_key(|p| (p.name.to_lowercase(), p.pid));
+            // M2: with `--info`, what each program is, after its name, where
+            // its file can be read (processes of other users usually cannot
+            // be opened). Without it nothing is opened or read, so the list
+            // stays fast and as it was `[assumed]`.
+            let images: Vec<Option<PathBuf>> = if info {
+                processes.iter().map(image_of).collect()
+            } else {
+                vec![None; processes.len()]
+            };
+            let about = if info {
+                program_info::read_many(images.iter().flatten().map(PathBuf::as_path))
+            } else {
+                std::collections::HashMap::new()
+            };
             println!("{:>8} {:>8} {:>7}  NAME", "PID", "PARENT", "SESSION");
-            for p in processes {
-                if filter
-                    .as_ref()
-                    .is_none_or(|f| p.name.to_lowercase().contains(f))
-                {
-                    println!(
-                        "{:>8} {:>8} {:>7}  {}",
-                        p.pid, p.parent_pid, p.session_id, p.name
-                    );
-                }
+            for (p, image) in processes.iter().zip(&images) {
+                let text = image
+                    .as_deref()
+                    .and_then(|i| program_info::summary_of(&about, i));
+                println!(
+                    "{:>8} {:>8} {:>7}  {}{}",
+                    p.pid,
+                    p.parent_pid,
+                    p.session_id,
+                    p.name,
+                    after_name(text)
+                );
             }
             Ok(true)
         }

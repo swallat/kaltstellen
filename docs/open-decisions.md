@@ -48,6 +48,66 @@ which the owner asked for on 2026-11-23 (spec section 8):
    so a USB hard disk counts as local; a symbolic link or junction on a
    local disk that points to a share is followed.
 
+Choices made while building "what a program is" (M2, N1, command line),
+which the owner asked for on 2026-11-23 with local sources only (spec M2):
+
+1. **Where it is read**: in the window by one background thread, version
+   resources of a batch first, then signatures one file after the other;
+   the page gets `pending` and a `program_info` event when there is more,
+   so the window never waits. On the command line on up to 8 threads.
+2. **Size limit**: files over 1 GiB are not hashed for the signature
+   (`not checked`); measured about 0.4 s for 238 MiB and 0.5 to 1.5 s for
+   369 MiB on the owner's machine.
+3. **Cache**: per window, by file, at most 1024 files; when full, the
+   finished entries looked up longest ago go (down to 768), entries still
+   being read stay. A file is read again when its size or modification
+   time changes. The page keeps finished answers only until the state is
+   refreshed (focus), another profile is shown or `Add a program` opens,
+   so an updated program and the file behind a running name are looked up
+   afresh. If the reader thread fails, what it was to read shows as "not
+   checked" instead of staying pending; it ends when the window closes.
+4. **Which string table**: the tables of `\VarFileInfo\Translation` in
+   order, then `040904B0`, `040904E4`, `04090000`, `000004B0`; each field
+   from the first table that has it.
+5. **Text from files**: control characters, bidirectional marks and
+   overrides (also U+061C) and invisible format characters (U+200B to
+   U+200D, U+2060 to U+2064, U+FEFF) removed, whitespace collapsed, at
+   most 200 characters (also protects the terminal from escape sequences).
+6. **Signature check**: an own signature first, then every Windows catalog
+   that lists the file's SHA-256 hash, then (only if none does) SHA-1; no
+   revocation check, URL retrieval from the local cache only. No network
+   access is requested, but that it causes none is not proven: Windows'
+   automatic update of its root and disallowed certificate lists has no
+   WinTrust flag; manual check 13e verifies it. Three verdicts for a
+   signature that is there: valid (publisher shown); **not verifiable
+   here** for results that mean "cannot be decided from local data"
+   (`CERT_E_UNTRUSTEDROOT`, `CERT_E_CHAINING`,
+   `CRYPT_E_NO_REVOCATION_CHECK`, `CRYPT_E_REVOCATION_OFFLINE`,
+   `CRYPT_E_SECURITY_SETTINGS`, whose text says that a local security
+   setting blocks the check), shown neutrally, since offline or unknown
+   roots are no sign of tampering. The trade-off: a program signed with a
+   self-made certificate (its own root, `CERT_E_UNTRUSTEDROOT`), as an
+   impostor would use, is also shown neutrally as "not verifiable here"
+   rather than as a warning; its claimed publisher is never shown, and the
+   company it names appears as unverified text. **Not valid** for everything
+   else (changed file, expired, revoked, distrusted, test certificate,
+   unknown errors). "No signature" only when `WinVerifyTrust` and the
+   last error both say so (Microsoft's sample).
+7. **What is shown**: the description (else the product) and the
+   publisher only for a valid signature; the company the file names only
+   where no valid signature names a publisher; `unsigned` and `signature
+   not verifiable here` in italics and muted, `⚠ signature not valid` in
+   the warning colour; everything in a tooltip. Nothing while the file is
+   unknown.
+8. **Command line**: `kaltstellen list` stays as it was (fast, nothing
+   read); `kaltstellen list --info` and `kaltstellen status --unassigned`
+   (a short list, where what a program is matters) add two spaces after
+   what each line had before, then `<description>, signed by
+   <publisher>`, `<description> (<company>), unsigned`, `signature not
+   valid: <reason>` or `signature cannot be verified from local data:
+   <reason>`; nothing when nothing is known. `list --info` takes about 0.1
+   to 3.5 s on the owner's machine instead of under 0.1 s.
+
 Choices made while building the automatic triggers (U4) on the owner's
 request on 2026-11-23, which
 [design-automatic-triggers.md](design-automatic-triggers.md) does not

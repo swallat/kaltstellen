@@ -1062,6 +1062,29 @@ fn t22_n1_unassigned_programs_status_and_tray_menu() {
     };
     let (_, out, _) = t.run(&["status", "--unassigned"]);
     assert!(out.contains("  ks-n1-win.exe (new)"), "{out}");
+    // M2, N1: what it is, from its file: the fixture has no version
+    // resource and no signature. The same after its name in `list --info`;
+    // plain `list` stays as it was.
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("  ks-n1-win.exe (new)") && l.ends_with("  unsigned")),
+        "{out}"
+    );
+    let (code, out, _) = t.run(&["list", "ks-n1-win"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("     PID   PARENT SESSION  NAME"), "{out}");
+    assert!(
+        out.lines().count() > 1 && out.lines().skip(1).all(|l| l.ends_with("  ks-n1-win.exe")),
+        "{out}"
+    );
+    let (code, out, _) = t.run(&["list", "--info", "ks-n1-win"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("     PID   PARENT SESSION  NAME"), "{out}");
+    assert!(
+        out.lines()
+            .any(|l| l.contains("  ks-n1-win.exe  ") && l.ends_with("unsigned")),
+        "{out}"
+    );
     let seen = fs::read_to_string(t.data().join("seen.json")).unwrap();
     assert!(seen.contains("ks-n1-win.exe"));
 

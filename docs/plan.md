@@ -187,3 +187,11 @@ name. Purpose: find out which real apps tolerate being frozen.
   ones (`drop_files`, paths read by the host from WebView2). Details chosen
   without the owner are under "Open" in `docs/open-decisions.md`; the real
   drop from Explorer is a manual check (`docs/manual-checks.md` 13c, 13d).
+- What a program is (2026-11-23, owner request; branch `program-info`):
+  description, product, company and version from the version resource and
+  the publisher of a valid Authenticode signature (own or Windows
+  catalog), local sources only, in the three program lists of the main
+  window (`program_info`, read in the background) and after each program
+  in `list --info` and `status --unassigned`. Details chosen without the owner
+  are under "Open" in `docs/open-decisions.md`; the look is a manual check
+  (`docs/manual-checks.md` 13e).

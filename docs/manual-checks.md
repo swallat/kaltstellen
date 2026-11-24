@@ -148,6 +148,56 @@ main session made them; they show the views below in light and dark.
     Drop a link or selected text from a browser: nothing happens. Start
     the window elevated (`Run as administrator`) and drag from the normal
     Explorer: Windows refuses the drop (UIPI); that is expected.
+13e. What a program is (M2, N1, owner request 2026-11-23, local sources
+    only): in a profile, in `Add a program` and in the unassigned list,
+    each program gets a small muted line under its name: the file
+    description (else the product name), then `·` and the verified
+    publisher in the primary colour with a check mark (`✓ Microsoft
+    Windows` for `notepad.exe`, which is catalog-signed); for an unsigned
+    program the company the file names, if any, and an italic `unsigned`;
+    for a program whose signature does not verify (copy a signed program
+    such as `msedge.exe` to a local folder and change one byte in the
+    middle with a hex editor, then add that copy by path) `⚠ signature not
+    valid` in the warning colour. Hovering the line shows description,
+    product, company, version and the signature (with the reason when it
+    is not valid, `through a Windows catalog` for catalog-signed files)
+    and says that only the publisher is verified. A program without a
+    version resource shows only `unsigned` (the test fixtures); a program
+    on a network drive or not running without a path shows no line at
+    all. The descriptions appear almost at once, the publishers a moment
+    later, starting with the first rows (a large program such as a 400 MB
+    Electron app takes up to about 1 s); the window stays responsive
+    while it checks, including scrolling and opening dialogs. The log has
+    `gui: program info for N programs (… known, … pending) in … ms`,
+    `gui: version resources of N files in … ms` and `gui: N signatures in
+    … ms, … waiting`. A program signed with a certificate whose root this
+    computer does not know (a self-signed test signature made with
+    `New-SelfSignedCertificate` and `Set-AuthenticodeSignature` in
+    PowerShell, without importing the certificate) shows an italic, muted `signature not verifiable here`,
+    not the warning colour; its tooltip says this is no sign of a change.
+    Check in light and dark mode.
+    No network access (the check requests none; Windows' own update of its
+    root certificate lists has no switch, so this is checked by hand):
+    a. In an elevated console, empty the URL cache of the certificate
+       engine (`certutil -urlcache * delete`) and turn on logging of
+       outgoing connections (`auditpol /set /subcategory:"Filtering
+       Platform Connection" /success:enable`).
+    b. Note the time, open the window and `Add a program`, wait until all
+       publishers are shown, and run `kaltstellen list --info` and
+       `kaltstellen status --unassigned`.
+    c. Event Viewer, Windows Logs, Security, events 5156 since that time:
+       none with application `kaltstellen.exe`. Note any connection of
+       `svchost.exe` (CryptSvc) at that time: that would be Windows
+       updating its certificate lists on its own. Turn the logging off
+       again (`/success:disable`). Also with Wi-Fi off or the cable
+       pulled the lists fill as fast as before, with the same results or
+       at most `signature not verifiable here` for chains Windows had
+       not cached.
+    In a console: plain `kaltstellen list` looks as before (no text after
+    the names, as fast as before); `kaltstellen list --info note` shows
+    `Notepad, signed by Microsoft Windows` after `Notepad.exe`;
+    `kaltstellen status --unassigned` shows the same kind of text after
+    each program.
 14. With the window open and minimised, choose `Open kaltstellen…` again
     (or run `kaltstellen gui`): the same window comes back to the front, no
     second window opens.

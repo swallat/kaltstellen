@@ -219,7 +219,8 @@ Use the beta for a few days with real profiles. Note anything surprising.
    from Explorer.
 4. **Program descriptions** (manual-checks, the section for this feature):
    the description, product and publisher shown for programs in the main
-   window, `kaltstellen list` and `kaltstellen status --unassigned`.
+   window, `kaltstellen list --info` and `kaltstellen status --unassigned`
+   (manual-checks 13e, including the check that no connection is made).
 5. **Hotkeys** ("Hotkeys", steps 1 to 3; T17): a real key press, held keys,
    a taken hotkey, AltGr.
 6. **Unassigned programs** (T22): a real program with a tray icon.
