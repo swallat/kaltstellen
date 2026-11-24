@@ -1072,7 +1072,7 @@ async function openSnapshot(mode, template) {
   if (template) {
     const count = snapApplyTemplate(template);
     $('snapshot-title').textContent = `New profile from the ${template.name} template`;
-    snap.note = `The ${template.name} template set ${count} ${count === 1 ? 'program' : 'programs'}. Check every row; nothing is created before you confirm.`;
+    snap.note = `The ${template.name} template set ${count} ${count === 1 ? 'row' : 'rows'} (${snap.touched} to freeze or stop, the rest left as they are). Check every row; nothing is created before you confirm.`;
     renderSnapshot();
   }
   openDialog($('snapshot-dialog'));
@@ -1089,7 +1089,7 @@ function snapTemplateRows(template) {
   const rules = new Map(template.rules.map((r) => [r.kind, r.action]));
   const out = [];
   for (const row of [...snap.data.running, ...snap.data.seen]) {
-    if (!row.kind || !row.kind.known || row.protection !== 'none') continue;
+    if (!row.kind || !row.kind.known || row.protection !== 'none' || row.elevated) continue;
     const action = rules.get(row.kind.id);
     if (!action) continue;
     if (!snapOptions(row).some(([v]) => v === action)) continue;
@@ -1100,11 +1100,14 @@ function snapTemplateRows(template) {
 
 function snapApplyTemplate(template) {
   let count = 0;
+  let touched = 0;
   for (const [row, action] of snapTemplateRows(template)) {
     if (snap.data.running.includes(row) && row.background) continue;
     snap.choices.set(snapKey(row), { action, confirmed: false });
     count += 1;
+    if (action !== 'ignore') touched += 1;
   }
+  snap.touched = touched;
   return count;
 }
 $('snapshot-dialog').addEventListener('close', () => { if (snap) snap.token = null; });
@@ -1130,10 +1133,12 @@ $('snapshot-suggestions').addEventListener('click', () => {
   renderSnapshot();
 });
 $('snapshot-clear').addEventListener('click', () => {
+  snap.note = null;
   snap.choices.clear();
   renderSnapshot();
 });
 $('snapshot-everything').addEventListener('click', () => {
+  snap.note = null;
   snapEverything();
   renderSnapshot();
 });
@@ -1486,6 +1491,7 @@ $('new-template').addEventListener('click', async () => {
     notice(templates.error);
     return;
   }
+  if (!groups.ok) $('template-error').textContent = groups.error;
   snap = { mode: 'new', profile: null, data: groups.ok ? groups.data : null, choices: new Map(), load: new Map(), token: null };
   $('template-list').replaceChildren(...templates.data.map((t) => {
     const words = t.rules.map((r) => `${r.label}: ${TEMPLATE_VERB[r.action]}`).join('; ');
