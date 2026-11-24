@@ -955,7 +955,6 @@ fn print_status(state: &State) {
     }
 }
 
-/// Prints problems as `file:line: message`, the form editors can jump to.
 /// `kaltstellen compare A B` (H6): prints the differences; exit code 0 also
 /// when the profiles differ, 4 for an unknown profile, 2 for an invalid
 /// configuration.
@@ -991,6 +990,7 @@ fn compare(a: &str, b: &str) -> u8 {
     exit::OK
 }
 
+/// Prints problems as `file:line: message`, the form editors can jump to.
 fn check_config(file: Option<PathBuf>) -> u8 {
     let Some(file) = file.or_else(paths::config_file) else {
         eprintln!("error: no configuration directory (APPDATA unset); name a file");

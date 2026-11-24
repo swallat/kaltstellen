@@ -627,7 +627,8 @@ let showIdentical = false;
 
 function sameProgram(entry, row) {
   if (entry.exe.toLowerCase() !== row.exe.toLowerCase()) return false;
-  if (entry.path && row.path) return entry.path.toLowerCase() === row.path.toLowerCase();
+  const norm = (path) => path.replaceAll('/', '\\').toLowerCase();
+  if (entry.path && row.path) return norm(entry.path) === norm(row.path);
   return true;
 }
 
@@ -698,6 +699,7 @@ async function takeOver(row) {
   const here = current();
   const other = profileNamed($('compare-with').value);
   const from = other.entries.find((e) => sameProgram(e, row));
+  if (!from) return;
   const edit = {
     exe: from.exe, path: from.path, action: from.action, args: from.args, cwd: from.cwd,
     on_timeout: from.on_timeout, restart_on_neutral: from.restart_on_neutral,
@@ -708,7 +710,7 @@ async function takeOver(row) {
   if (index >= 0) {
     reply = await call('update_entry', { profile: here.name, index, entry: edit });
   } else {
-    reply = await call('add_entry', { profile: here.name, exe: from.exe, path: from.path, confirmed: from.confirmed });
+    reply = await call('add_entry', { profile: here.name, exe: from.exe, path: from.path, confirmed: from.confirmed || from.protection === 'warn' });
     if (reply.ok) {
       index = current().entries.length - 1;
       reply = await call('update_entry', { profile: here.name, index, entry: edit });
