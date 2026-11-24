@@ -287,8 +287,8 @@ compare). The owner asked for them; everything below is **[assumed]** until
 the owner has seen the mock (`profile-assist-mock/mock.html` in the project
 files) and, later, the real window.
 
-1. **H5 learning without a watcher** (put to the owner as a single question,
-   2026-11-24; the spec follows the recommended answer): (a) compare only at
+1. **H5 learning without a watcher** **[decided]** (owner, 2026-11-24: (a),
+   compare only at transitions): (a) compare only at
    transitions, using lists the tool reads anyway (recommended); (b) in
    addition one single snapshot about 10 minutes after applying, from a
    one-shot timer in the tray (better data, but a new timer and a softer
