@@ -16,10 +16,16 @@ body {
   background: var(--color-bg);
 }
 
-h1, h2, h3 { margin: 0; line-height: 1.25; }
-h2 { font-size: 1.25rem; }
-h3 { font-size: 1rem; }
+h1, h2, h3 { margin: 0; line-height: 1.25; text-wrap: balance; }
+h2 { font-size: 1.375rem; font-weight: 650; letter-spacing: -0.01em; }
+h3 { font-size: 1rem; font-weight: 650; }
 p { margin: 0; }
+
+/* Browser surfaces take the palette too. */
+::selection { background: color-mix(in srgb, var(--color-primary) 30%, transparent); }
+input, textarea { caret-color: var(--color-primary); }
+* { scrollbar-color: var(--color-line) transparent; }
+.table td, .table th, .num, input[type="number"] { font-variant-numeric: tabular-nums; }
 
 .visually-hidden {
   position: absolute; width: 1px; height: 1px; overflow: hidden;
@@ -62,14 +68,15 @@ p { margin: 0; }
   background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
 .profile-list button:hover { background: var(--color-row-hover); }
-.profile-list button[aria-current="true"] { background: var(--color-selected); font-weight: 600; }
+.profile-list button[aria-current="true"] { background: var(--color-selected); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 35%, transparent); }
+.profile-list button[aria-current="true"] .name { font-weight: 650; }
 .profile-list .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag {
   flex: none; padding: 0 var(--space-2); border-radius: 999px; font-size: 0.75rem; font-weight: 600;
   background: var(--color-accent); color: var(--color-surface);
 }
 .tag.new { background: var(--color-primary); color: var(--color-on-primary); }
-.hint { color: var(--color-muted); font-size: 0.8125rem; }
+.hint { color: var(--color-muted); font-size: 0.8125rem; max-width: var(--measure); }
 .sidebar > .hint { overflow-wrap: anywhere; }
 .updates {
   display: grid; gap: var(--space-2); margin-top: auto;
@@ -104,7 +111,8 @@ p { margin: 0; }
   .triggers .hint { grid-column: 1 / -1; }
 }
 
-.section-head { display: flex; align-items: center; justify-content: space-between; margin-top: var(--space-2); }
+.section-head { display: flex; align-items: center; justify-content: space-between; margin-top: var(--space-4); }
+.section-head + .hint { margin-top: calc(var(--space-2) * -1); }
 
 /* Controls */
 .button {
@@ -114,15 +122,17 @@ p { margin: 0; }
   background: var(--color-surface); color: var(--color-text); font: inherit; cursor: pointer;
   white-space: nowrap;
 }
-.button:hover { border-color: var(--color-primary); }
+.button:hover { border-color: var(--color-primary); background: var(--color-row-hover); }
+.button:active:not(:disabled) { transform: translateY(1px); }
 .button.small { min-height: 1.75rem; padding: 0 var(--space-2); font-size: 0.8125rem; }
 .button.primary { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-on-primary); font-weight: 600; }
+.button.primary:hover { background: color-mix(in srgb, var(--color-primary) 88%, var(--color-text)); }
 .button.danger { color: var(--color-error); }
-.button.danger:hover { border-color: var(--color-error); }
+.button.danger:hover { border-color: var(--color-error); background: var(--color-error-bg); }
 .button:disabled { opacity: 0.55; cursor: default; }
 .link {
   border: 0; padding: 0; background: none; color: var(--color-primary); font: inherit;
-  text-decoration: underline; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 0.2em; cursor: pointer;
 }
 
 input, select, textarea {
@@ -130,14 +140,18 @@ input, select, textarea {
   border: 1px solid var(--color-line); border-radius: var(--radius);
   background: var(--color-bg); color: var(--color-text); font: inherit;
 }
+input:hover:not(:disabled), select:hover:not(:disabled), textarea:hover:not(:disabled) { border-color: color-mix(in srgb, var(--color-primary) 55%, var(--color-line)); }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offset: 0; border-color: var(--color-focus); }
 textarea { resize: vertical; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.875rem; }
 input[aria-invalid="true"] { border-color: var(--color-error); }
 input[type="checkbox"] { min-height: auto; width: 1rem; height: 1rem; accent-color: var(--color-primary); }
 
 /* Tables */
-.table { width: 100%; border-collapse: collapse; background: var(--color-surface); border: 1px solid var(--color-line); border-radius: var(--radius); }
+.table { width: 100%; border-collapse: separate; border-spacing: 0; overflow: hidden; background: var(--color-surface); border: 1px solid var(--color-line); border-radius: var(--radius); }
 .table th, .table td { padding: var(--space-2) var(--space-3); text-align: left; vertical-align: middle; border-bottom: 1px solid var(--color-line); }
-.table th { font-size: 0.8125rem; font-weight: 600; color: var(--color-muted); }
+.table th { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--color-muted); background: color-mix(in srgb, var(--color-row-hover) 60%, var(--color-surface)); }
+.table th:first-child { border-top-left-radius: var(--radius); }
+.table th:last-child { border-top-right-radius: var(--radius); }
 .table tbody tr:last-child td { border-bottom: 0; }
 .table tbody tr:hover { background: var(--color-row-hover); }
 .table td:last-child { text-align: right; white-space: nowrap; }
@@ -166,7 +180,8 @@ input[type="checkbox"] { min-height: auto; width: 1rem; height: 1rem; accent-col
 .action.suspend { border-color: var(--color-primary); color: var(--color-primary); }
 .action.stop { border-color: var(--color-accent); color: var(--color-accent); }
 /* M5: errors of the last switch on their entry. */
-.table tbody tr.failed { box-shadow: inset 3px 0 0 var(--color-error); }
+.table tbody tr.failed { background: color-mix(in srgb, var(--color-error-bg) 55%, var(--color-surface)); }
+.table tbody tr.failed:hover { background: var(--color-error-bg); }
 .failure {
   display: flex; align-items: center; gap: var(--space-1); width: fit-content; margin-top: var(--space-1);
   padding: 0 var(--space-2) 0 var(--space-1); border-radius: 999px;
@@ -182,19 +197,20 @@ input[type="checkbox"] { min-height: auto; width: 1rem; height: 1rem; accent-col
 .protection.warn { color: var(--color-accent); }
 
 /* Status bar */
-.statusbar { padding: var(--space-2) var(--space-4); border-top: 1px solid var(--color-line); background: var(--color-surface); font-size: 0.875rem; }
+.statusbar { padding: var(--space-1) var(--space-4); min-height: 1.75rem; border-top: 1px solid var(--color-line); background: var(--color-surface); color: var(--color-muted); font-size: 0.8125rem; }
 .statusbar p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.statusbar .error-text { color: var(--color-error); }
+.statusbar .error-text { color: var(--color-error); font-weight: 600; }
 
 /* Dialogs */
 dialog {
   width: min(28rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem);
   padding: var(--space-6); border: 1px solid var(--color-line); border-radius: calc(var(--radius) * 2);
   background: var(--color-surface); color: var(--color-text);
-  box-shadow: 0 1rem 3rem rgb(0 0 0 / 0.25);
+  box-shadow: var(--shadow-dialog);
 }
 dialog.wide { width: min(42rem, calc(100vw - 2rem)); }
-dialog::backdrop { background: rgb(14 22 32 / 0.45); }
+dialog::backdrop { background: rgb(14 22 32 / 0.5); }
+dialog h2 { margin-bottom: var(--space-1); }
 dialog form { display: grid; gap: var(--space-3); }
 dialog label { font-weight: 600; font-size: 0.875rem; }
 .grid { display: grid; grid-template-columns: max-content 1fr; align-items: center; gap: var(--space-2) var(--space-3); }
@@ -215,5 +231,11 @@ dialog label { font-weight: 600; font-size: 0.875rem; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .button, .profile-list button { transition: background-color 120ms, border-color 120ms; }
+  .button, .profile-list button, input, select, textarea { transition: background-color 150ms var(--ease-out), border-color 150ms var(--ease-out), transform 100ms var(--ease-out); }
+  dialog[open] { animation: dialog-in 180ms var(--ease-out); }
+  dialog[open]::backdrop { animation: backdrop-in 180ms var(--ease-out); }
+  .detail > section:not([hidden]), .detail > .settings:not([hidden]) { animation: detail-in 160ms var(--ease-out); }
 }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(0.5rem) scale(0.985); } }
+@keyframes backdrop-in { from { opacity: 0; } }
+@keyframes detail-in { from { opacity: 0; transform: translateY(0.25rem); } }
