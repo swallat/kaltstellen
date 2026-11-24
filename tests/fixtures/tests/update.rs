@@ -115,7 +115,7 @@ fn github_gated(version: &str, served: &[u8], summed: &[u8], gate: Option<Receiv
     // that points at it.
     let files = serve_gated(routes, gate.map(|g| (".exe", g)));
     let latest = format!(
-        r#"{{"tag_name":"v{version}","html_url":"{files}/page","draft":false,"prerelease":false,
+        r#"{{"tag_name":"v{version}","html_url":"{files}/page","draft":false,
             "assets":[{{"name":"{name}","browser_download_url":"{files}/dl/{name}"}},
                       {{"name":"checksums.txt","browser_download_url":"{files}/dl/checksums.txt"}}]}}"#
     );
