@@ -642,8 +642,12 @@ $('open-log').addEventListener('click', () => call('open_location', { target: 'l
 $('open-log-folder').addEventListener('click', () => call('open_location', { target: 'log_folder' }));
 $('reload-config').addEventListener('click', () => call('reload_config'));
 $('forget-last').addEventListener('click', () => call('forget_last_profile'));
-$('watch').addEventListener('change', (event) => {
-  if (current()) call('set_watch', { profile: current().name, on: event.target.checked });
+$('watch').addEventListener('change', async (event) => {
+  if (!current()) return;
+  const on = event.target.checked;
+  const reply = await call('set_watch', { profile: current().name, on });
+  // A refused change leaves the switch as the file has it.
+  if (!reply.ok) event.target.checked = !on;
 });
 $('learn-setting').addEventListener('change', async (event) => {
   await call('set_learn', { on: event.target.checked });

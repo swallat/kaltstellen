@@ -209,6 +209,7 @@ impl Document {
             copy.remove("hotkey");
             copy.remove("trigger");
             copy.remove("priority");
+            copy.remove("watch");
             // Placed at the end of the file, not next to the original: the
             // entries keep the positions of the original's entries
             // otherwise, and would be written under the original. The
@@ -970,6 +971,9 @@ hotkey = "Ctrl+Shift+Alt+F1"
         d.set_watch("focus", true).unwrap();
         assert!(d.config().profiles[0].watch);
         assert!(d.text().contains("# keep") && d.text().contains("# note"));
+        // A copy does not take it.
+        d.copy_profile("focus", "second").unwrap();
+        assert!(!d.config().profile("second").unwrap().watch);
         d.set_watch("focus", false).unwrap();
         assert!(!d.config().profiles[0].watch);
         assert!(!d.text().contains("watch"));
