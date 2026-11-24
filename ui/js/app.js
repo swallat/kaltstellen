@@ -761,6 +761,17 @@ const loadScore = (load) => (load && !load.frozen ? (load.cpu || 0) * 1e9 + (loa
 /** Measures all listed programs: two samples about 1.5 s apart (no timer,
  * only when the dialog opens or the owner asks). */
 async function measureSnapshot() {
+  // One measurement at a time: the bridge keeps one first sample.
+  if (snap.busy) return;
+  snap.busy = true;
+  try {
+    await runMeasurement();
+  } finally {
+    snap.busy = false;
+  }
+}
+
+async function runMeasurement() {
   const token = {};
   snap.token = token;
   snap.load = new Map();

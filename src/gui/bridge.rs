@@ -1162,7 +1162,10 @@ impl<H: Host> Bridge<H> {
                 )
             }
             Request::MeasureStart => {
-                self.measuring = Some((std::time::Instant::now(), self.host.sample()));
+                // The clock starts when the sample is in, so the time the
+                // reading itself takes is not part of the interval.
+                let sample = self.host.sample();
+                self.measuring = Some((std::time::Instant::now(), sample));
                 Ok(None)
             }
             Request::Measure { programs } => {
@@ -1173,11 +1176,11 @@ impl<H: Host> Bridge<H> {
                 let Some((started, before)) = self.measuring.take() else {
                     return Err("measure_start has not been sent".to_owned());
                 };
-                let elapsed = started.elapsed();
-                if elapsed < MIN_MEASURE {
+                if started.elapsed() < MIN_MEASURE {
                     return Err("measured too soon after measure_start".to_owned());
                 }
                 let after = self.host.sample();
+                let elapsed = started.elapsed();
                 let rows: Vec<Value> = programs
                     .iter()
                     .map(|exe| load_json(exe, &crate::load::measure(&before, &after, elapsed, exe)))
