@@ -194,6 +194,13 @@ enum HelperAction {
     },
     /// Show whether the helper is installed and running
     Status,
+    /// Print the process start and stop events of this session that the
+    /// running helper has seen (needs the role observe), as JSON lines
+    Events {
+        /// First event number wanted (0: the oldest it still has)
+        #[arg(long, default_value_t = 0)]
+        after: u64,
+    },
     /// The service itself (started by Windows, not by hand)
     #[command(hide = true)]
     Run,
@@ -985,6 +992,26 @@ fn helper(action: HelperAction) -> u8 {
                 println!("{line}");
             }
             exit::OK
+        }
+        HelperAction::Events { after } => {
+            match client::ask_after(protocol::Command::Events, Some(after)) {
+                Ok(Some(reply)) => {
+                    for event in reply.events.iter().flatten() {
+                        println!("{}", serde_json::to_string(event).unwrap_or_default());
+                    }
+                    eprintln!(
+                        "next: {}, lost: {}",
+                        reply.next.unwrap_or(after),
+                        reply.lost.unwrap_or(0)
+                    );
+                    exit::OK
+                }
+                Ok(None) => {
+                    eprintln!("the helper is not running (no pipe)");
+                    exit::ERRORS
+                }
+                Err(err) => refused(err),
+            }
         }
         HelperAction::Install {
             owner_sid,

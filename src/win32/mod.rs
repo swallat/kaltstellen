@@ -10,6 +10,7 @@
 
 pub mod console;
 pub mod dialog;
+pub mod etw;
 pub mod fileinfo;
 pub mod hash;
 pub mod http;

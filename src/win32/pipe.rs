@@ -110,6 +110,14 @@ pub fn current_session() -> u32 {
     session
 }
 
+/// The Windows session a process runs in, `None` if it cannot be told.
+pub fn session_of(pid: u32) -> Option<u32> {
+    let mut session = 0;
+    // SAFETY: valid out pointer.
+    unsafe { ProcessIdToSessionId(pid, &mut session) }.ok()?;
+    Some(session)
+}
+
 /// A security descriptor owned by this value.
 struct Descriptor(PSECURITY_DESCRIPTOR);
 
