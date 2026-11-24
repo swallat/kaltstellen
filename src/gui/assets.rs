@@ -32,7 +32,7 @@ const FILES: &[(&str, &[u8], &str)] = &[
         include_bytes!("../../ui/js/bridge.js"),
         "text/javascript; charset=utf-8",
     ),
-    // The ice cube logo (branding/logos/09-eiswuerfel-warm-avatar.svg).
+    // The window-and-icicles logo (branding/logo/symbol-dunkel.svg).
     (
         "img/logo.svg",
         include_bytes!("../../ui/img/logo.svg"),

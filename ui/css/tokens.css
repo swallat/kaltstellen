@@ -1,27 +1,33 @@
-/* Design tokens from branding/README.md (scheme A "Gletscher", primary teal as in the logo).
+/* Design tokens from branding/README.md (Indigo, Mint and Orange: violet window, mint ice, orange action).
    Light values first, dark values for prefers-color-scheme: dark and for
    the forced themes [data-theme] used by the browser preview. */
 
 :root {
-  --brand-deep: #12324B;
-  --brand-teal: #1593AF;
-  --brand-orange: #FF8A1F;
+  --brand-indigo: #3322B8;
+  --brand-violet: #7A66FF;
+  --brand-mint: #7FF7DC;
+  --brand-night: #0F0C33;
+  --brand-orange: #FF7A1A;
 
-  --color-bg: #F5F8FB;
+  --color-bg: #F3F2FF;
   --color-surface: #FFFFFF;
-  --color-line: #D3DDE7;
-  --color-text: #10202E;
-  --color-muted: #4D6072;
-  --color-primary: #0A7288;
+  --color-line: #D5D1F5;
+  --color-text: #17123F;
+  --color-muted: #575294;
+  --color-primary: #3322B8;
   --color-on-primary: #FFFFFF;
-  --color-accent: #B54300;
-  --color-error: #C81E4A;
-  --color-error-bg: #FBE9EE;
-  --color-warn-bg: #FFF1E3;
-  --color-focus: #0A7288;
-  --color-row-hover: #EBF3F6;
-  --color-selected: #DDEEF2;
-  --color-topbar: var(--brand-deep);
+  --color-accent: #A83E00;
+  --color-action: #FF7A1A;
+  --color-on-action: #1B0B00;
+  --color-frost: #0A6F5C;
+  --color-frost-bg: #D5FAF1;
+  --color-error: #C21F4B;
+  --color-error-bg: #FFE0E8;
+  --color-warn-bg: #FFE6D2;
+  --color-focus: #3322B8;
+  --color-row-hover: #ECEAFF;
+  --color-selected: #DDD9FB;
+  --color-topbar: var(--brand-night);
   --color-on-topbar: #E8F0F7;
 
   --font: system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif;
@@ -35,46 +41,54 @@
   --sidebar: 15rem;
   --measure: 62ch;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --shadow-dialog: 0 0.25rem 0.5rem rgb(14 22 32 / 0.12), 0 1.5rem 3rem rgb(14 22 32 / 0.28);
+  --shadow-dialog: 0 0.25rem 0.5rem rgb(15 12 51 / 0.12), 0 1.5rem 3rem rgb(15 12 51 / 0.28);
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --color-bg: #0E1620;
-    --color-surface: #17222E;
-    --color-line: #2C3B4B;
-    --color-text: #E8F0F7;
-    --color-muted: #9DB0C2;
-    --color-primary: #4CCBE3;
-    --color-on-primary: #0E1620;
-    --color-accent: #FF8A1F;
-    --color-error: #FF7A9A;
-    --color-error-bg: #3A1824;
-    --color-warn-bg: #3A2614;
-    --color-focus: #4CCBE3;
-    --color-row-hover: #1B2A37;
-    --color-selected: #17333F;
-    --color-topbar: #0A1824;
+    --color-bg: #0B0926;
+    --color-surface: #131039;
+    --color-line: #2C2774;
+    --color-text: #F0EFFF;
+    --color-muted: #A9A5DD;
+    --color-primary: #A99BFF;
+    --color-on-primary: #0B0926;
+    --color-accent: #FFA45C;
+    --color-action: #FF7A1A;
+    --color-on-action: #1B0B00;
+    --color-frost: #7FF7DC;
+    --color-frost-bg: rgb(127 247 220 / 0.13);
+    --color-error: #FF6B8A;
+    --color-error-bg: rgb(255 107 138 / 0.14);
+    --color-warn-bg: rgb(255 122 26 / 0.14);
+    --color-focus: #FFA45C;
+    --color-row-hover: #1B1750;
+    --color-selected: #241F66;
+    --color-topbar: #07051C;
     color-scheme: dark;
   }
 }
 
 :root[data-theme="dark"] {
-  --color-bg: #0E1620;
-  --color-surface: #17222E;
-  --color-line: #2C3B4B;
-  --color-text: #E8F0F7;
-  --color-muted: #9DB0C2;
-  --color-primary: #4CCBE3;
-  --color-on-primary: #0E1620;
-  --color-accent: #FF8A1F;
-  --color-error: #FF7A9A;
-  --color-error-bg: #3A1824;
-  --color-warn-bg: #3A2614;
-  --color-focus: #4CCBE3;
-  --color-row-hover: #1B2A37;
-  --color-selected: #17333F;
-  --color-topbar: #0A1824;
+  --color-bg: #0B0926;
+  --color-surface: #131039;
+  --color-line: #2C2774;
+  --color-text: #F0EFFF;
+  --color-muted: #A9A5DD;
+  --color-primary: #A99BFF;
+  --color-on-primary: #0B0926;
+  --color-accent: #FFA45C;
+  --color-action: #FF7A1A;
+  --color-on-action: #1B0B00;
+  --color-frost: #7FF7DC;
+  --color-frost-bg: rgb(127 247 220 / 0.13);
+  --color-error: #FF6B8A;
+  --color-error-bg: rgb(255 107 138 / 0.14);
+  --color-warn-bg: rgb(255 122 26 / 0.14);
+  --color-focus: #FFA45C;
+  --color-row-hover: #1B1750;
+  --color-selected: #241F66;
+  --color-topbar: #07051C;
   color-scheme: dark;
 }

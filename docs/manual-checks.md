@@ -15,7 +15,7 @@ Afterwards remove `%TEMP%\ks-manual` and `HKCU\Software\kaltstellen-manual`.
 ## Tray icon and menu
 
 1. Copy `config.example.toml` to the test configuration folder, start
-   `kaltstellen tray` from a terminal. Expect a blue tile with a white K in
+   `kaltstellen tray` from a terminal. Expect a grey window with mint icicles in
    the notification area (possibly in the overflow area), sharp at 100 %,
    150 % and 200 % scaling and on a second monitor with another scaling.
 2. Hover: the tooltip reads `kaltstellen: neutral`.
@@ -23,15 +23,15 @@ Afterwards remove `%TEMP%\ks-manual` and `HKCU\Software\kaltstellen-manual`.
    profiles, `Neutral` (checked), `Open kaltstellen…`, `Quit`, and no
    settings: no `Start at sign-in`, no `Automatic switching`, no `Updates:`
    lines (they are in the main window, Settings). Clicking elsewhere closes it.
-4. Choose a profile whose programs are not running: the icon turns orange,
+4. Choose a profile whose programs are not running: the icon turns violet,
    the tooltip names the profile, the profile is checked.
 5. Make a switch fail (a `start` entry whose `path` does not exist yet):
-   the icon turns red with an exclamation mark and the menu shows the error
+   the icon turns orange with a warning triangle and the menu shows the error
    line; opening and closing the menu changes nothing. Now put the program
    at that path and start it by hand: within about 30 s (or when the menu
-   opens) the error disappears and the icon is orange again, without a
+   opens) the error disappears and the icon is violet again, without a
    switch.
-6. Break the configuration file (an unknown key): the icon turns red and the
+6. Break the configuration file (an unknown key): the icon turns orange with a warning triangle and the
    menu shows `Configuration invalid: …`; fix the file and open the menu
    again: the error is gone.
 7. Restart Explorer (Task Manager, Windows Explorer, Restart): the icon comes
@@ -52,7 +52,7 @@ Afterwards remove `%TEMP%\ks-manual` and `HKCU\Software\kaltstellen-manual`.
 
 ## Hotkeys (T17)
 
-1. Give a test profile `hotkey = "Ctrl+Shift+Alt+F9"`, start the tray, press the keys: the profile is applied (icon orange), once per press even when held down.
+1. Give a test profile `hotkey = "Ctrl+Shift+Alt+F9"`, start the tray, press the keys: the profile is applied (icon violet), once per press even when held down.
 2. Start a second program that takes the same hotkey first (for example a second test tray with another data folder and the same hotkey), then the first tray: the menu lists `Hotkey not available: …`; the profile still works from the menu.
 3. With a German layout and `hotkey = "Ctrl+Alt+7"` in a profile, type AltGr+7 in an editor while the tray runs: `{` must still appear.
 
@@ -247,7 +247,7 @@ trigger = ["notepad.exe"]
    refuses it (`… is a program that this profile freezes`); remove it again.
 2. Start the tray and open the main window: `Automatic switching` in the
    header is enabled and checked. The tray menu has no such item.
-3. Start Notepad. Within about 5 s the profile is applied (orange icon, the
+3. Start Notepad. Within about 5 s the profile is applied (violet icon, the
    tooltip ends in `(by trigger)`), and a notification appears:
    `kaltstellen: trigger test`, `notepad.exe started: switched to trigger
    test. Click here: Back to neutral`. The menu shows `Applied by trigger
