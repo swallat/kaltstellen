@@ -265,3 +265,7 @@ Hardening from the review of M4a (same day):
   open from the start of the elevated step, but a file swapped before the UAC
   prompt is answered cannot be told from the real one (the prompt shows the
   path only).
+
+## Settings entry (built after M4a)
+
+`Settings` > `Background helper` shows the service state and the pipe answer (`helper_status`, same facts as `kaltstellen helper status`) and starts `helper install` / `helper uninstall` in a console of its own (`--from-window` keeps that console readable). The window never elevates itself and sends no account name; the elevated step is the command line's `runas` relaunch (see above).

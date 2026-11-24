@@ -443,6 +443,14 @@ function handle(message) {
       if (!state.update.available) return fail('no newer version is known; check first');
       state.status = `Installing ${state.update.available} in a separate window…`;
       return { ok: true };
+    case 'helper_status':
+      return { ok: true, data: { state: 'not_installed', answers: false, version: null, roles: [], notes: [] } };
+    case 'helper_install':
+      state.status = 'Installing the background helper in a separate window…';
+      return { ok: true };
+    case 'helper_uninstall':
+      state.status = 'Removing the background helper in a separate window…';
+      return { ok: true };
     case 'set_automation':
       if (typeof m.on !== 'boolean') return fail('malformed request: on');
       state.automation.on = m.on;

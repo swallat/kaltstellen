@@ -117,6 +117,7 @@
           <button type="button" data-section="defaults" aria-current="false">Program defaults</button>
           <button type="button" data-section="profiles" aria-current="false">Profiles</button>
           <button type="button" data-section="updates" aria-current="false">Updates</button>
+          <button type="button" data-section="helper" aria-current="false">Background helper</button>
           <button type="button" data-section="files" aria-current="false">Files and data</button>
           <button type="button" data-section="about" aria-current="false">About</button>
         </nav>
@@ -227,6 +228,26 @@
                 <span class="status-pill warn">Locked</span>
               </div>
             </div>
+          </section>
+
+          <section class="group" id="helper" aria-labelledby="g-helper">
+            <header>
+              <h3 id="g-helper">Background helper</h3>
+              <p>Optional. kaltstellen works completely without it, also as a portable copy. Installing it needs administrator rights once; the window itself stays unelevated.</p>
+            </header>
+            <div class="rows">
+              <div class="row">
+                <div><p class="label">Helper service <span class="status-pill" id="helper-pill"></span></p>
+                  <p class="hint" id="helper-state" aria-live="polite"></p>
+                  <ul class="hint" id="helper-notes"></ul></div>
+                <div class="actions">
+                  <button type="button" class="button small" id="helper-refresh">Refresh</button>
+                  <button type="button" class="button small primary" id="helper-install">Install</button>
+                  <button type="button" class="button small" id="helper-uninstall" hidden>Remove</button>
+                </div>
+              </div>
+            </div>
+            <p class="hint">Install and Remove open a console window and then Windows asks for administrator rights. Use Refresh when that window is closed.</p>
           </section>
 
           <section class="group" id="files" aria-labelledby="g-files">

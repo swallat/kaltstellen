@@ -530,6 +530,23 @@ impl Host for RealHost {
         Ok(())
     }
 
+    fn helper_summary(&self) -> crate::helper::setup::Summary {
+        crate::helper::setup::summary()
+    }
+
+    fn open_helper(&self, install: bool) -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        let exe = std::env::current_exe().map_err(|e| format!("own path: {e}"))?;
+        let verb = if install { "install" } else { "uninstall" };
+        Command::new(exe)
+            .args(["helper", verb, "--from-window"])
+            .creation_flags(CREATE_NEW_CONSOLE)
+            .spawn()
+            .map(|child| info!("window: helper {verb} started (pid {})", child.id()))
+            .map_err(|e| format!("cannot start the {verb} step: {e}"))
+    }
+
     fn apply(&self, profile: &str) {
         let exe = std::env::current_exe();
         let results = self.results.clone();

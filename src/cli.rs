@@ -180,11 +180,17 @@ enum HelperAction {
         /// Enter at the end so the window stays readable
         #[arg(long, hide = true)]
         relaunched: bool,
+        /// Started from the window's settings in a console of its own: keep
+        /// that console readable at the end, as `--relaunched` does
+        #[arg(long, hide = true)]
+        from_window: bool,
     },
     /// Stop and remove the helper and its files (asks for administrator rights)
     Uninstall {
         #[arg(long, hide = true)]
         relaunched: bool,
+        #[arg(long, hide = true)]
+        from_window: bool,
     },
     /// Show whether the helper is installed and running
     Status,
@@ -983,6 +989,7 @@ fn helper(action: HelperAction) -> u8 {
         HelperAction::Install {
             owner_sid,
             relaunched,
+            from_window,
         } => {
             let code = if service::is_elevated() {
                 let sid = match owner_sid.map_or_else(pipe::current_user_sid, Ok) {
@@ -1000,12 +1007,15 @@ fn helper(action: HelperAction) -> u8 {
             } else {
                 relaunch_elevated(|sid| format!("helper install --owner-sid {sid}"), owner_sid)
             };
-            if relaunched {
+            if relaunched || from_window {
                 finish_console(code);
             }
             code
         }
-        HelperAction::Uninstall { relaunched } => {
+        HelperAction::Uninstall {
+            relaunched,
+            from_window,
+        } => {
             let code = if service::is_elevated() {
                 match setup::uninstall() {
                     Ok(true) => {
@@ -1021,7 +1031,7 @@ fn helper(action: HelperAction) -> u8 {
             } else {
                 relaunch_elevated(|_| "helper uninstall".to_owned(), None)
             };
-            if relaunched {
+            if relaunched || from_window {
                 finish_console(code);
             }
             code

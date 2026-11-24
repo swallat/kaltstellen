@@ -359,6 +359,99 @@ pub fn describe(
     lines
 }
 
+/// What the window's settings show about the helper: the same facts as
+/// `helper status`, as data.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Summary {
+    /// `not_installed`, `stopped`, `starting`, `running`, `stopping`,
+    /// `other` or `unknown` (the service state could not be read).
+    pub state: &'static str,
+    /// Whether the pipe answered as the helper.
+    pub answers: bool,
+    /// Version of the running helper.
+    pub version: Option<String>,
+    /// Roles switched on in the policy file.
+    pub roles: Vec<&'static str>,
+    /// Anything the page should say besides the state: why the state is
+    /// unknown, an outdated helper, a pipe that is not the helper.
+    pub notes: Vec<String>,
+}
+
+/// [`Summary`] of a [`Report`] and the answer of the pipe.
+pub fn summarize(
+    report: &Report,
+    answer: &std::result::Result<Option<super::protocol::Reply>, Error>,
+) -> Summary {
+    let mut notes = Vec::new();
+    let state = match (&report.service, &report.service_error) {
+        (None, Some(reason)) => {
+            notes.push(format!("the service state cannot be read: {reason}"));
+            "unknown"
+        }
+        (None, None) => "not_installed",
+        (Some(info), _) => match info.state {
+            State::Stopped => "stopped",
+            State::Starting => "starting",
+            State::Running => "running",
+            State::Stopping => "stopping",
+            State::Other => "other",
+        },
+    };
+    let roles = match &report.policy {
+        Ok(policy) => [
+            (policy.roles.observe, "observe"),
+            (policy.roles.act, "act"),
+            (policy.roles.services, "services"),
+        ]
+        .iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, name)| *name)
+        .collect(),
+        Err(reason) => {
+            if report.service.is_some() {
+                notes.push(format!("policy: {reason}"));
+            }
+            Vec::new()
+        }
+    };
+    let (answers, version) = match answer {
+        Ok(Some(reply)) => {
+            let version = reply.version.clone();
+            if let Some(note) = super::client::version_note(version.as_deref().unwrap_or("?")) {
+                notes.push(note);
+            }
+            (true, version)
+        }
+        Ok(None) => (false, None),
+        Err(err) => {
+            notes.push(err.to_string());
+            (false, None)
+        }
+    };
+    Summary {
+        state,
+        answers,
+        version,
+        roles,
+        notes,
+    }
+}
+
+/// The current [`Summary`]: reads the service state and asks the pipe.
+pub fn summary() -> Summary {
+    match report() {
+        Ok(report) => {
+            let answer = super::client::ask(super::protocol::Command::Status);
+            summarize(&report, &answer)
+        }
+        Err(err) => Summary {
+            state: "unknown",
+            notes: vec![err.to_string()],
+            ..Summary::default()
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

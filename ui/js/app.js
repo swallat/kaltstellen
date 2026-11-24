@@ -136,6 +136,38 @@ function renderUpdate() {
   install.textContent = u.available ? `Install ${u.available}` : 'Install';
 }
 
+/** M4: the optional background helper (service state, asked on demand). */
+const HELPER_STATES = {
+  not_installed: ['Not installed', 'Not installed. Everything works without it.'],
+  stopped: ['Stopped', 'Installed, but the service is stopped.'],
+  starting: ['Starting', 'The service is starting.'],
+  running: ['Running', 'Installed and running.'],
+  stopping: ['Stopping', 'The service is stopping.'],
+  other: ['Other state', 'The service is in a state this window does not know.'],
+  unknown: ['Unknown', 'The state of the service could not be read.'],
+};
+
+function renderHelper(info) {
+  const [pill, text] = HELPER_STATES[info.state] || HELPER_STATES.unknown;
+  const installed = !['not_installed', 'unknown'].includes(info.state);
+  $('helper-pill').textContent = pill;
+  $('helper-pill').classList.toggle('warn', info.state === 'unknown' || info.state === 'stopped' || (installed && !info.answers));
+  const parts = [text];
+  if (info.answers) parts.push(`Answers on its pipe${info.version ? `, version ${info.version}` : ''}.`);
+  else if (installed) parts.push('It does not answer on its pipe.');
+  parts.push(info.roles.length ? `Roles switched on: ${info.roles.join(', ')}.` : '');
+  $('helper-state').textContent = parts.filter(Boolean).join(' ');
+  $('helper-notes').replaceChildren(...info.notes.map((note) => el('li', { text: note })));
+  $('helper-install').textContent = installed ? 'Update' : 'Install';
+  $('helper-uninstall').hidden = !installed;
+}
+
+async function loadHelper() {
+  const reply = await request('helper_status');
+  if (reply.ok) renderHelper(reply.data);
+  else renderHelper({ state: 'unknown', answers: false, version: null, roles: [], notes: [reply.error] });
+}
+
 function renderProfiles() {
   const list = $('profile-list');
   list.replaceChildren(...state.profiles.map((profile) => {
@@ -554,6 +586,7 @@ addEventListener('scroll', () => {
 function showSettings(section = null) {
   view = 'settings';
   render();
+  loadHelper();
   // Scroll the content area only. scrollIntoView would also scroll the
   // window itself (the body is hidden, but still scrollable by script),
   // which pushed the header out of sight with nothing to scroll back.
@@ -1525,6 +1558,9 @@ $('autostart').addEventListener('change', (event) => call('set_autostart', { on:
 $('automation').addEventListener('change', (event) => call('set_automation', { on: event.target.checked }));
 $('check-updates').addEventListener('click', () => call('check_updates'));
 $('install-update').addEventListener('click', () => call('install_update'));
+$('helper-refresh').addEventListener('click', loadHelper);
+$('helper-install').addEventListener('click', () => call('helper_install'));
+$('helper-uninstall').addEventListener('click', () => call('helper_uninstall'));
 
 /** M5: back in the window, the state is asked for again, so markers of
  * errors that resolved meanwhile go (and the active profile is current).
@@ -1533,6 +1569,7 @@ let lastRefresh = 0;
 addEventListener('focus', async () => {
   if (!state || document.querySelector('dialog[open]') || Date.now() - lastRefresh < 2000) return;
   lastRefresh = Date.now();
+  if (view === 'settings') loadHelper();
   const reply = await request('get_state');
   if (reply.ok && !document.querySelector('dialog[open]')) {
     forgetAbout();

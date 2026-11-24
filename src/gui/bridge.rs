@@ -76,6 +76,13 @@ pub trait Host {
     /// Opens the visible update (a console window running `kaltstellen
     /// update`), as the tray's `Install update…` does.
     fn install_update(&self) -> Result<(), String>;
+    /// M4: what the optional background helper is doing now (reads the
+    /// service state and asks its pipe; takes a moment when nothing
+    /// answers).
+    fn helper_summary(&self) -> crate::helper::setup::Summary;
+    /// M4: opens the visible console that installs (or updates) or removes
+    /// the helper; that asks Windows for administrator rights itself.
+    fn open_helper(&self, install: bool) -> Result<(), String>;
     /// M2: the icon of each program as a PNG `data:` URL, `None` where
     /// there is none, in the order asked.
     fn icons(&self, wanted: &[Wanted], size: u32) -> Vec<Option<String>>;
@@ -296,6 +303,12 @@ pub enum Request {
     },
     CheckUpdates,
     InstallUpdate,
+    /// M4: the state of the optional background helper.
+    HelperStatus,
+    /// M4: install or update the helper (console window and a UAC prompt).
+    HelperInstall,
+    /// M4: remove the helper (console window and a UAC prompt).
+    HelperUninstall,
     /// M6: the `[settings]` of the configuration file.
     SetDefaults {
         default_action: String,
@@ -1407,6 +1420,22 @@ impl<H: Host> Bridge<H> {
                 self.status = format!("Installing {version} in a separate window…");
                 Ok(None)
             }
+            Request::HelperStatus => {
+                let summary = self.host.helper_summary();
+                Ok(Some(
+                    serde_json::to_value(summary).map_err(|e| e.to_string())?,
+                ))
+            }
+            Request::HelperInstall => {
+                self.host.open_helper(true)?;
+                self.status = "Installing the background helper in a separate window…".to_owned();
+                Ok(None)
+            }
+            Request::HelperUninstall => {
+                self.host.open_helper(false)?;
+                self.status = "Removing the background helper in a separate window…".to_owned();
+                Ok(None)
+            }
             Request::Icons { programs, size } => {
                 if programs.len() > MAX_ICONS {
                     return Err(format!("at most {MAX_ICONS} icons per request"));
@@ -1554,6 +1583,8 @@ mod tests {
         update: Rc<RefCell<UpdateInfo>>,
         checks: Rc<RefCell<usize>>,
         installs: Rc<RefCell<usize>>,
+        /// M4: what `open_helper` was asked (`true` install, `false` remove).
+        helper_opened: Rc<RefCell<Vec<bool>>>,
         last_switch: Rc<RefCell<Option<LastSwitch>>>,
         tray_silent: Rc<std::cell::Cell<bool>>,
         /// No tray runs (`tray_status` is `Ok(None)`).
@@ -1785,6 +1816,16 @@ mod tests {
         }
         fn install_update(&self) -> Result<(), String> {
             *self.installs.borrow_mut() += 1;
+            Ok(())
+        }
+        fn helper_summary(&self) -> crate::helper::setup::Summary {
+            crate::helper::setup::Summary {
+                state: "not_installed",
+                ..Default::default()
+            }
+        }
+        fn open_helper(&self, install: bool) -> Result<(), String> {
+            self.helper_opened.borrow_mut().push(install);
             Ok(())
         }
         fn icons(&self, wanted: &[Wanted], size: u32) -> Vec<Option<String>> {
@@ -2971,5 +3012,24 @@ mod tests {
         assert_eq!(reply["ok"], true, "{reply}");
         let text = std::fs::read_to_string(&file).unwrap();
         assert!(text.contains("games") && !text.contains("music"), "{text}");
+    }
+    #[test]
+    fn the_helper_settings_read_its_state_and_open_the_console() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, fake) = bridge(&dir);
+        let status = send(&mut b, json!({"v": 1, "id": 1, "type": "helper_status"}));
+        assert_eq!(status["ok"], true);
+        assert_eq!(status["data"]["state"], "not_installed");
+        assert_eq!(status["data"]["answers"], false);
+        let install = send(&mut b, json!({"v": 1, "id": 2, "type": "helper_install"}));
+        assert_eq!(install["ok"], true);
+        let remove = send(&mut b, json!({"v": 1, "id": 3, "type": "helper_uninstall"}));
+        assert_eq!(remove["ok"], true);
+        assert_eq!(*fake.helper_opened.borrow(), vec![true, false]);
+        let extra = send(
+            &mut b,
+            json!({"v": 1, "id": 4, "type": "helper_install", "owner": "S-1-5-18"}),
+        );
+        assert_eq!(extra["ok"], false, "the page cannot name an owner");
     }
 }
