@@ -437,9 +437,10 @@ mod tests {
     #[test]
     fn up1_check_records_success_and_failure() {
         let dir = tempfile::tempdir().unwrap();
-        // `check` asks for this build's own version: a development build
-        // (`1.2.1-dev.5+hash`) counts as a pre-release and reads the list,
-        // a release build reads `latest`. Serve both.
+        // `check` asks for this build's own version: a build on a
+        // pre-release tag (`1.0.0-beta.1+hash`) reads the list, any other
+        // (also a development build, `1.2.1-dev.5+hash`) reads `latest`.
+        // Serve both.
         let fake = Fake(HashMap::from([
             (
                 "http://127.0.0.1:1/repos/o/r/releases/latest".to_owned(),

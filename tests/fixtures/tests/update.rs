@@ -115,14 +115,19 @@ fn github_gated(version: &str, served: &[u8], summed: &[u8], gate: Option<Receiv
     // that points at it.
     let files = serve_gated(routes, gate.map(|g| (".exe", g)));
     let latest = format!(
-        r#"{{"tag_name":"v{version}","html_url":"{files}/page","draft":false,"prerelease":false,
+        r#"{{"tag_name":"v{version}","html_url":"{files}/page","draft":false,
             "assets":[{{"name":"{name}","browser_download_url":"{files}/dl/{name}"}},
                       {{"name":"checksums.txt","browser_download_url":"{files}/dl/checksums.txt"}}]}}"#
     );
-    let api = serve(HashMap::from([(
-        "/repos/o/r/releases/latest".to_owned(),
-        latest.into_bytes(),
-    )]));
+    // A pre-release build (the tagged beta the release workflow tests)
+    // asks for the list of recent releases instead of the latest one.
+    let api = serve(HashMap::from([
+        (
+            "/repos/o/r/releases?per_page=30".to_owned(),
+            format!("[{latest}]").into_bytes(),
+        ),
+        ("/repos/o/r/releases/latest".to_owned(), latest.into_bytes()),
+    ]));
     format!("{api}/repos/o/r")
 }
 
