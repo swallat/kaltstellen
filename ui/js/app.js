@@ -1659,7 +1659,9 @@ async function openAdd() {
   const running = reply.ok ? reply.data : [];
   const rows = running.map((p) => el('tr', {},
     el('td', {}, el('div', { class: 'program' }, programIcon(p.exe, null),
-      el('span', { class: 'names' }, el('span', { class: 'exe', text: p.exe }), programAbout(p.exe, null)))),
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: p.exe }), programAbout(p.exe, null),
+        p.kind && p.kind.known ? el('span', { class: 'hint', text: `probably ${p.kind.label}` }) : null,
+        p.suggestion ? el('span', { class: 'hint', text: `Suggested: ${snapActionLabel[p.suggestion.action]} (${p.suggestion.reason})` }) : null))),
     el('td', { class: 'num', text: megabytes(p.private_bytes) }),
     el('td', { class: `protection ${p.protection}`, text: protectionText[p.protection] }),
     el('td', {}, el('button', {
