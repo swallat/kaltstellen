@@ -71,6 +71,7 @@ impl World {
             apps,
             triggers: Vec::new(),
             priority: 0,
+            watch: false,
         });
     }
 
