@@ -251,4 +251,17 @@ Hardening from the review of M4a (same day):
 - The service reports `running` only once the policy is read and the pipe is
   bound, tries again for about a minute if the pipe name is taken, and is
   restarted also after an error exit.
-- The owner SID must be one account, not a group everybody is in.
+- The owner SID must be one account (`S-1-5-21-…` with a RID of 1000 or
+  more, or an Entra ID account), not a group or a built-in account.
+- The data folder gets its access list before anything else is put in it,
+  and files in it that SYSTEM or the administrators do not own are removed
+  (a user owns what they created whatever its access list says). A
+  `helper.toml` that exists but cannot be read stops the install instead of
+  being replaced.
+- Stopping waits for a starting service; deleting copes with a service that
+  is already marked for deletion; `helper status` also works where the
+  service state cannot be read, and says so.
+- Known and accepted: the source of the copy is the running image and held
+  open from the start of the elevated step, but a file swapped before the UAC
+  prompt is answered cannot be told from the real one (the prompt shows the
+  path only).

@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{
     CloseHandle, ERROR_CANCELLED, ERROR_FAILED_SERVICE_CONTROLLER_CONNECT,
     ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_CANNOT_ACCEPT_CTRL, ERROR_SERVICE_DOES_NOT_EXIST,
-    ERROR_SERVICE_NOT_ACTIVE, HANDLE, HLOCAL, LocalFree, WAIT_OBJECT_0,
+    ERROR_SERVICE_MARKED_FOR_DELETE, ERROR_SERVICE_NOT_ACTIVE, HANDLE, HLOCAL, LocalFree,
+    WAIT_OBJECT_0,
 };
 use windows::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SE_FILE_OBJECT,
@@ -180,14 +181,20 @@ pub fn running_image() -> Result<PathBuf> {
 /// is not trusted: its creator keeps the right to change its access list.
 pub fn folder_is_trusted(path: &Path) -> Result<bool> {
     use std::os::windows::fs::MetadataExt;
-    use windows::Win32::Security::Authorization::{ConvertSidToStringSidW, GetNamedSecurityInfoW};
-    use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, PSID};
     const REPARSE_POINT: u32 = 0x400;
     let meta = std::fs::symlink_metadata(path)
         .map_err(|e| service_error(&format!("cannot read {}", path.display()), e))?;
     if !meta.is_dir() || meta.file_attributes() & REPARSE_POINT != 0 {
         return Ok(false);
     }
+    owner_is_trusted(path)
+}
+
+/// Is `path` (a file or folder) owned by SYSTEM or the administrators? A
+/// file a standard user created stays theirs whatever its access list says.
+pub fn owner_is_trusted(path: &Path) -> Result<bool> {
+    use windows::Win32::Security::Authorization::{ConvertSidToStringSidW, GetNamedSecurityInfoW};
+    use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, PSID};
     let wpath = wide_path(path);
     // SAFETY: NUL-terminated path; the descriptor (which the owner SID
     // points into) is freed after the SID was turned into text.
@@ -360,7 +367,10 @@ pub fn query(name: &str) -> Result<Option<Info>> {
 }
 
 fn wait_for(service: &Scm, wanted: State, what: &str) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // The service may try for about a minute to take its pipe (a squatted
+    // name) before it is up.
+    let limit = if wanted == State::Running { 90 } else { 30 };
+    let deadline = Instant::now() + Duration::from_secs(limit);
     loop {
         let state = status_of(service)?.state;
         if state == wanted {
@@ -374,21 +384,39 @@ fn wait_for(service: &Scm, wanted: State, what: &str) -> Result<()> {
             ));
         }
         if Instant::now() >= deadline {
-            return Err(service_error(what, "timed out after 30 s"));
+            return Err(service_error(what, format!("timed out after {limit} s")));
         }
         std::thread::sleep(Duration::from_millis(200));
     }
 }
 
 fn stop_service(service: &Scm) -> Result<()> {
-    let mut status = SERVICE_STATUS::default();
-    // SAFETY: valid handle and out pointer.
-    match unsafe { ControlService(service.0, SERVICE_CONTROL_STOP, &mut status) } {
-        Ok(()) => {}
-        Err(e) if e.code() == ERROR_SERVICE_NOT_ACTIVE.to_hresult() => return Ok(()),
-        // Already stopping (or starting): wait for it below.
-        Err(e) if e.code() == ERROR_SERVICE_CANNOT_ACCEPT_CTRL.to_hresult() => {}
-        Err(e) => return Err(service_error("cannot stop the service", e)),
+    // A starting service does not accept a stop yet: let it come up (or
+    // fail), then stop it.
+    let deadline = Instant::now() + Duration::from_secs(100);
+    loop {
+        let mut status = SERVICE_STATUS::default();
+        // SAFETY: valid handle and out pointer.
+        match unsafe { ControlService(service.0, SERVICE_CONTROL_STOP, &mut status) } {
+            Ok(()) => break,
+            Err(e) if e.code() == ERROR_SERVICE_NOT_ACTIVE.to_hresult() => return Ok(()),
+            Err(e) if e.code() == ERROR_SERVICE_CANNOT_ACCEPT_CTRL.to_hresult() => {
+                match status_of(service)?.state {
+                    State::Stopped => return Ok(()),
+                    State::Stopping => break,
+                    _ if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(500));
+                    }
+                    _ => {
+                        return Err(service_error(
+                            "cannot stop the service",
+                            "it is still starting",
+                        ));
+                    }
+                }
+            }
+            Err(e) => return Err(service_error("cannot stop the service", e)),
+        }
     }
     wait_for(service, State::Stopped, "the service did not stop")
 }
@@ -566,8 +594,12 @@ pub fn remove(name: &str) -> Result<bool> {
     };
     stop_service(&service)?;
     // SAFETY: valid handle.
-    unsafe { DeleteService(service.0) }
-        .map_err(|e| service_error("cannot delete the service", e))?;
+    match unsafe { DeleteService(service.0) } {
+        Ok(()) => {}
+        // A first attempt already marked it; wait for it below.
+        Err(e) if e.code() == ERROR_SERVICE_MARKED_FOR_DELETE.to_hresult() => {}
+        Err(e) => return Err(service_error("cannot delete the service", e)),
+    }
     // The entry goes once the last handle is closed: close ours, then wait
     // until it is gone, so an install right after does not meet it.
     drop(service);

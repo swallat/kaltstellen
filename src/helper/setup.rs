@@ -51,8 +51,10 @@ pub fn install(owner_sid: &str) -> Result<()> {
     let data =
         data_dir().ok_or_else(|| Error::new(Code::HelperService, "ProgramData is not known"))?;
     // The source is where the running image is now, not the path it was
-    // started from: a file put at that path meanwhile is not what runs.
+    // started from, and it is opened at once and held against writers: a
+    // file put at that path later is not what is copied.
     let source = service::running_image()?;
+    let input = open_source(&source)?;
     let target = program.join(EXE_NAME);
 
     // Any user can create a folder in ProgramData first and would keep the
@@ -71,12 +73,15 @@ pub fn install(owner_sid: &str) -> Result<()> {
     }
     fs::create_dir_all(&program).map_err(|e| io_error("cannot create", &program, e))?;
     fs::create_dir_all(&data).map_err(|e| io_error("cannot create", &data, e))?;
+    // At once, before anything is put in it: the default access list of
+    // ProgramData lets users add files to a new folder.
+    service::protect_data_dir(&data, owner_sid)?;
+    remove_foreign_files(&data)?;
 
     // A running service holds its file: stop it first, copy, then set the
     // rest up and start it again.
     service::stop(SERVICE_NAME)?;
-    copy_exe(&source, &target)?;
-    service::protect_data_dir(&data, owner_sid)?;
+    copy_exe(input, &source, &target)?;
     write_policy(owner_sid)?;
     service::install(
         SERVICE_NAME,
@@ -89,39 +94,71 @@ pub fn install(owner_sid: &str) -> Result<()> {
     Ok(())
 }
 
+/// Removes files in the data folder that a standard user created or that
+/// belong to someone else than SYSTEM or the administrators: a user owns
+/// what they created whatever its access list says.
+fn remove_foreign_files(data: &Path) -> Result<()> {
+    let entries = fs::read_dir(data).map_err(|e| io_error("cannot list", data, e))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !service::owner_is_trusted(&path).unwrap_or(false) {
+            fs::remove_file(&path)
+                .or_else(|_| fs::remove_dir_all(&path))
+                .map_err(|e| {
+                    io_error(
+                        "cannot remove a file not owned by an administrator:",
+                        &path,
+                        e,
+                    )
+                })?;
+        }
+    }
+    Ok(())
+}
+
 /// Writes `helper.toml`: a new one, or the existing one with the owner
-/// updated (roles and allow lists the administrator set stay; the folder
-/// was checked to be trusted before).
+/// updated (roles and allow lists the administrator set stay; files of
+/// other owners were removed before). A file that exists but cannot be read
+/// is not replaced silently: the administrator removes it on purpose.
 fn write_policy(owner_sid: &str) -> Result<()> {
     let path = policy_file().ok_or_else(|| Error::new(Code::HelperService, "no data folder"))?;
-    let policy = match Policy::read(&path) {
-        Ok(mut existing) => {
-            existing.owner_sid = owner_sid.to_owned();
-            existing
-        }
-        Err(_) => Policy::initial(owner_sid),
+    let policy = if path.exists() {
+        let mut existing = Policy::read(&path).map_err(|e| {
+            Error::new(
+                Code::HelperPolicy,
+                format!("{e}; fix or delete the file and install again"),
+            )
+        })?;
+        existing.owner_sid = owner_sid.to_owned();
+        existing
+    } else {
+        Policy::initial(owner_sid)
     };
     fs::write(&path, policy.to_toml()).map_err(|e| io_error("cannot write", &path, e))
 }
 
-/// Puts `source` at `target` through a temporary file in the same folder,
-/// so a failure leaves the old copy. The source is opened once and held
-/// against writers while it is read, and what was written is read back and
-/// compared. Nothing to do when they are the same file.
-fn copy_exe(source: &Path, target: &Path) -> Result<()> {
-    use std::io::{Read, Write};
+fn open_source(source: &Path) -> Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 1;
+    fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(source)
+        .map_err(|e| io_error("cannot open", source, e))
+}
+
+/// Puts the opened `input` (the file at `source`) at `target` through a
+/// temporary file in the same folder, so a failure leaves the old copy, and
+/// moves it over the old copy in one step. Only the length of what was
+/// written is compared with the source. Nothing to do when source and
+/// target are the same file.
+fn copy_exe(mut input: fs::File, source: &Path, target: &Path) -> Result<()> {
+    use std::io::{Read, Write};
     if let (Ok(a), Ok(b)) = (fs::canonicalize(source), fs::canonicalize(target))
         && a == b
     {
         return Ok(());
     }
-    const FILE_SHARE_READ: u32 = 1;
-    let mut input = fs::OpenOptions::new()
-        .read(true)
-        .share_mode(FILE_SHARE_READ)
-        .open(source)
-        .map_err(|e| io_error("cannot open", source, e))?;
     let temporary = target.with_extension("exe.new");
     let _ = fs::remove_file(&temporary);
     let mut write = || -> std::io::Result<()> {
@@ -157,8 +194,6 @@ fn copy_exe(source: &Path, target: &Path) -> Result<()> {
             format!("the copy has {got} bytes, expected {wanted}"),
         ));
     }
-    // One step that replaces the old file, so there is never a moment
-    // without a file at the registered path.
     fs::rename(&temporary, target).map_err(|e| {
         let _ = fs::remove_file(&temporary);
         io_error("cannot put in place", target, e)
@@ -215,6 +250,9 @@ pub fn uninstall() -> Result<bool> {
 #[derive(Debug)]
 pub struct Report {
     pub service: Option<service::Info>,
+    /// Why the service state could not be read (no access, for instance in
+    /// a session without an interactive sign-in).
+    pub service_error: Option<String>,
     pub installed_exe: Option<PathBuf>,
     pub policy: std::result::Result<Policy, String>,
 }
@@ -225,8 +263,13 @@ pub fn report() -> Result<Report> {
         Some(path) => Policy::read(&path).map_err(|e| e.reason),
         None => Err("ProgramData is not set".to_owned()),
     };
+    let (service, service_error) = match service::query(SERVICE_NAME) {
+        Ok(info) => (info, None),
+        Err(err) => (None, Some(err.to_string())),
+    };
     Ok(Report {
-        service: service::query(SERVICE_NAME)?,
+        service,
+        service_error,
         installed_exe: exe,
         policy,
     })
@@ -238,10 +281,11 @@ pub fn describe(
     answer: &std::result::Result<Option<super::protocol::Reply>, Error>,
 ) -> Vec<String> {
     let mut lines = Vec::new();
-    match &report.service {
-        None => lines
+    match (&report.service, &report.service_error) {
+        (None, Some(reason)) => lines.push(format!("service: state unknown ({reason})")),
+        (None, None) => lines
             .push("service: not installed (portable use; everything works without it)".to_owned()),
-        Some(info) => {
+        (Some(info), _) => {
             let state = match info.state {
                 State::Stopped => "stopped",
                 State::Starting => "starting",
@@ -322,11 +366,11 @@ mod tests {
         let target = dir.path().join("kaltstellen.exe");
         fs::write(&source, b"new version").unwrap();
         fs::write(&target, b"old").unwrap();
-        copy_exe(&source, &target).unwrap();
+        copy_exe(open_source(&source).unwrap(), &source, &target).unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"new version");
         assert!(!dir.path().join("kaltstellen.exe.new").exists());
         // The same file is left alone.
-        copy_exe(&target, &target).unwrap();
+        copy_exe(open_source(&target).unwrap(), &target, &target).unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"new version");
     }
 
@@ -334,6 +378,7 @@ mod tests {
     fn a_portable_copy_is_described_without_a_service() {
         let report = Report {
             service: None,
+            service_error: None,
             installed_exe: None,
             policy: Err("no file".into()),
         };

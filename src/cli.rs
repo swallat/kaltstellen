@@ -1016,7 +1016,7 @@ fn relaunch_elevated(arguments: impl FnOnce(&str) -> String, owner_sid: Option<S
     if !crate::helper::valid_owner(&sid) {
         return refused(Error::new(
             Code::HelperService,
-            format!("{sid:?} is not a SID"),
+            format!("{sid:?} is not the SID of one user account"),
         ));
     }
     let exe = match std::env::current_exe() {

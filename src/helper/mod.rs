@@ -120,22 +120,30 @@ pub fn valid_sid(sid: &str) -> bool {
             .all(|p| !p.is_empty() && p.len() <= 20 && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// Is `sid` acceptable as the user the helper serves? A well-formed SID of
-/// one account, not a group everybody belongs to (Everyone, Users,
-/// Authenticated Users, Interactive, Network, Anonymous).
+/// Is `sid` acceptable as the user the helper serves? One account: a
+/// local, domain or Microsoft account SID (`S-1-5-21-a-b-c-RID` with RID of
+/// 1000 or more) or an Entra ID account (`S-1-12-1-a-b-c-d`), numbers
+/// without leading zeros and within 32 bits. Not a group, not a built-in
+/// account.
 pub fn valid_owner(sid: &str) -> bool {
-    valid_sid(sid)
-        && !matches!(
-            sid,
-            "S-1-1-0"
-                | "S-1-5-11"
-                | "S-1-5-32-545"
-                | "S-1-5-4"
-                | "S-1-5-2"
-                | "S-1-5-7"
-                | "S-1-5-18"
-                | "S-1-5-32-544"
-        )
+    if !valid_sid(sid) {
+        return false;
+    }
+    let numbers: Option<Vec<u32>> = sid["S-1-".len()..]
+        .split('-')
+        .map(|part| {
+            if part.len() > 1 && part.starts_with('0') {
+                None
+            } else {
+                part.parse().ok()
+            }
+        })
+        .collect();
+    match numbers.as_deref() {
+        Some([5, 21, _, _, _, rid]) => *rid >= 1000,
+        Some([12, 1, _, _, _, _]) => true,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -145,7 +153,20 @@ mod tests {
     #[test]
     fn the_owner_is_one_account_not_a_group_everybody_is_in() {
         assert!(valid_owner("S-1-5-21-1004336348-1177238915-682003330-1001"));
-        for broad in ["S-1-1-0", "S-1-5-11", "S-1-5-32-545", "S-1-5-18", "S-1-5-4"] {
+        assert!(valid_owner("S-1-12-1-1-2-3-4"));
+        for broad in [
+            "S-1-1-0",
+            "S-1-5-11",
+            "S-1-5-32-545",
+            "S-1-5-32-546",
+            "S-1-5-18",
+            "S-1-5-4",
+            "S-1-5-21-1-2-3-513",
+            "S-1-5-21-1-2-3-999",
+            "S-1-5-21-1-2-3-01001",
+            "S-1-5-21-1-2-3-99999999999",
+            "S-1-5-21-1-2-1001",
+        ] {
             assert!(!valid_owner(broad), "{broad}");
         }
     }
