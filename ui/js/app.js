@@ -977,24 +977,20 @@ function snapMark(key, on, range) {
   } else if (on) snap.sel.add(key);
   else snap.sel.delete(key);
   snap.last = key;
-  snapRender(key);
+  snapRender(key, 'mark');
 }
 
-/** Renders again and puts the keyboard focus back on the row. */
+/** Renders again and puts the keyboard focus back where it was (or on the
+ * row and button named), so keyboard use survives every re-render. */
 function snapRender(focusKey, action) {
-  const box = $('snapshot-dialog');
-  const top = box.scrollTop;
-  renderSnapshot();
-  box.scrollTop = top;
-  if (!focusKey) return;
-  const rowNode = [...$('snapshot-groups').querySelectorAll('tr[data-key]')].find((r) => r.dataset.key === focusKey);
-  const target = action && rowNode ? rowNode.querySelector(`button[data-a="${action}"]`) : null;
-  (target || rowNode)?.focus();
+  renderSnapshot(focusKey, action);
 }
 
 function snapBulkBar() {
   const bar = $('snapshot-bulk');
-  const count = [...snap.sel].filter((k) => snap.order.includes(k)).length;
+  // What a filter hides is not selected any more.
+  for (const key of [...snap.sel]) if (!snap.order.includes(key)) snap.sel.delete(key);
+  const count = snap.sel.size;
   bar.hidden = count === 0;
   $('snapshot-bulk-count').textContent = `${count} selected`;
 }
@@ -1023,7 +1019,7 @@ function snapTable(title, rows, note) {
     });
     const segment = el('span', { class: row.suggestion ? 'seg suggested' : 'seg', role: 'group', 'aria-label': `Action for ${row.exe}` },
       ...options.map(([value, label]) => el('button', {
-        type: 'button', 'data-a': value, 'aria-pressed': String(value === current), title: `${label} (key ${snapKeyNumber(value)})`,
+        type: 'button', 'data-a': value, 'aria-pressed': String(value === current), 'aria-label': `${label}, ${row.exe}`, title: `${label} (key ${snapKeyNumber(value)})`,
         text: snapShort[value],
         onclick: () => snapSet([key], value, key),
       })));
@@ -1082,8 +1078,17 @@ function snapUpdateOk() {
   $('snapshot-ok').disabled = count === 0 && snap.mode === 'update';
 }
 
-function renderSnapshot() {
+function renderSnapshot(focusKey, action) {
   snap.order = [];
+  const box = $('snapshot-dialog');
+  const top = box.scrollTop;
+  const active = document.activeElement;
+  const inRow = active && $('snapshot-groups').contains(active) && active.closest ? active.closest('tr[data-key]') : null;
+  if (!focusKey && inRow) {
+    focusKey = inRow.dataset.key;
+    if (active.tagName === 'BUTTON') action = active.dataset.a;
+    else if (active.tagName === 'INPUT' && active.getAttribute('aria-label')?.startsWith('Select ')) action = 'mark';
+  }
   const showBackground = $('snapshot-background').checked;
   const running = snap.data.running.filter((r) => showBackground || !r.background);
   const hidden = snap.data.running.length - running.length;
@@ -1093,6 +1098,12 @@ function renderSnapshot() {
     snapTable('Not running, seen earlier', snap.data.seen, ''));
   loadIcons($('snapshot-groups'));
   snapBulkBar();
+  box.scrollTop = top;
+  if (focusKey) {
+    const node = [...$('snapshot-groups').querySelectorAll('tr[data-key]')].find((r) => r.dataset.key === focusKey);
+    const target = !node ? null : action === 'mark' ? node.querySelector('input[aria-label^="Select "]') : action ? node.querySelector(`button[data-a="${action}"]`) : null;
+    (target || node)?.focus();
+  }
   const existing = $('snapshot-existing');
   existing.hidden = !(snap.mode === 'update' && snap.data.existing > 0) && !snap.note;
   if (snap.note && snap.mode === 'new') existing.textContent = snap.note;
@@ -1205,7 +1216,7 @@ $('snapshot-all').addEventListener('click', () => {
  * selected rows (or of this row when none is selected), Space selects. */
 $('snapshot-groups').addEventListener('keydown', (event) => {
   const rowNode = event.target.closest && event.target.closest('tr[data-key]');
-  if (!rowNode) return;
+  if (!rowNode || event.ctrlKey || event.altKey || event.metaKey) return;
   const nodes = [...$('snapshot-groups').querySelectorAll('tr[data-key]')];
   const at = nodes.indexOf(rowNode);
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
