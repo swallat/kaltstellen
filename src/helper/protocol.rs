@@ -25,6 +25,9 @@ pub struct Request {
     /// With `events`: the first event number wanted (0 for the oldest).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<u64>,
+    /// With `network`: the window in seconds, 1 to 600 (default 10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -37,6 +40,9 @@ pub enum Command {
     /// M4b: process start and stop events of the caller's own Windows
     /// session, from `after` on; needs the role *observe*.
     Events,
+    /// M4b: bytes sent and received per process of the caller's own
+    /// Windows session over the last `seconds`; needs the role *observe*.
+    Network,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -72,6 +78,12 @@ pub struct Reply {
     /// `events`: how many events are missing since the helper started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lost: Option<u64>,
+    /// `network`: bytes per process (those with none are left out).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traffic: Option<Vec<super::events::Usage>>,
+    /// `status`: whether the network counters run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<bool>,
 }
 
 impl Reply {
@@ -87,6 +99,8 @@ impl Reply {
             events: None,
             next: None,
             lost: None,
+            traffic: None,
+            network: None,
         }
     }
 }
@@ -99,6 +113,8 @@ pub struct Context {
     pub roles: Roles,
     /// The ring of events when the role *observe* runs.
     pub events: Option<std::sync::Arc<super::events::Ring>>,
+    /// The Windows session of a process id, `None` if it cannot be told.
+    pub session_of: fn(u32) -> Option<u32>,
 }
 
 /// Answers one request line. Never panics on bad input. `session` is the
@@ -117,6 +133,9 @@ pub fn answer(line: &str, context: &Context, session: Option<u32>) -> Reply {
     if request.after.is_some() && request.cmd != Command::Events {
         return Reply::failure("`after` belongs to `events` only");
     }
+    if request.seconds.is_some() && request.cmd != Command::Network {
+        return Reply::failure("`seconds` belongs to `network` only");
+    }
     let mut reply = Reply {
         v: VERSION,
         ok: true,
@@ -132,6 +151,11 @@ pub fn answer(line: &str, context: &Context, session: Option<u32>) -> Reply {
         events: None,
         next: None,
         lost: None,
+        traffic: None,
+        network: context
+            .events
+            .as_ref()
+            .map(|ring| ring.running() && ring.traffic.running()),
     };
     match request.cmd {
         Command::Hello | Command::Status => reply,
@@ -146,6 +170,29 @@ pub fn answer(line: &str, context: &Context, session: Option<u32>) -> Reply {
             reply.events = Some(batch.events);
             reply.next = Some(batch.next);
             reply.lost = Some(batch.lost);
+            reply
+        }
+        Command::Network => {
+            let Some(ring) = context
+                .events
+                .as_ref()
+                .filter(|ring| ring.running() && ring.traffic.running())
+            else {
+                return Reply::failure("the network counters are not running");
+            };
+            let Some(session) = session else {
+                return Reply::failure("the session of the caller is not known");
+            };
+            let seconds = request.seconds.unwrap_or(10);
+            if !(1..=600).contains(&seconds) {
+                return Reply::failure("`seconds` is 1 to 600");
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            reply.traffic = Some(ring.traffic.usage(u64::from(seconds), now, |pid| {
+                (context.session_of)(pid) == Some(session)
+            }));
             reply
         }
     }
@@ -221,6 +268,7 @@ mod tests {
                 services: false,
             },
             events: None,
+            session_of: |_| Some(1),
         }
     }
 
@@ -346,6 +394,27 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].pid, 11);
         assert_eq!(reply.next, Some(2));
+        // Network counters need the traffic to run, and only the caller's session counts.
+        assert!(!answer(r#"{"v":1,"cmd":"network"}"#, &with, Some(1)).ok);
+        with.events.as_ref().unwrap().traffic.set_running(true);
+        with.events
+            .as_ref()
+            .unwrap()
+            .traffic
+            .add(&crate::win32::etw::NetEvent {
+                pid: 11,
+                bytes: 5,
+                received: false,
+            });
+        let own = answer(r#"{"v":1,"cmd":"network","seconds":600}"#, &with, Some(1));
+        assert!(own.ok, "{own:?}");
+        assert_eq!(
+            own.traffic.unwrap().len(),
+            1,
+            "session_of stub says session 1"
+        );
+        assert!(!answer(r#"{"v":1,"cmd":"network","seconds":0}"#, &with, Some(1)).ok);
+        assert!(!answer(r#"{"v":1,"cmd":"events","seconds":5}"#, &with, Some(1)).ok);
         // Without a known session of the caller nothing is given out.
         assert!(!answer(r#"{"v":1,"cmd":"events"}"#, &with, None).ok);
         // The status says the role runs.

@@ -120,10 +120,15 @@ fn serve(stop: Stop) -> Result<()> {
     let mut session = None;
     if policy.roles.observe {
         let sink = Arc::clone(&ring);
-        match etw::start(EVENT_SESSION, move |event| {
-            sink.push(&event, etw::device_map);
+        match etw::start(EVENT_SESSION, move |event| match event {
+            etw::Event::Process(event) => sink.push(&event, etw::device_map),
+            etw::Event::Network(event) => sink.traffic.add(&event),
         }) {
-            Ok(started) => {
+            Ok(mut started) => {
+                match started.enable_network() {
+                    Ok(()) => ring.traffic.set_running(true),
+                    Err(err) => warn!("observe: no network counters: {err}"),
+                }
                 info!("observe: the process event session runs");
                 ring.set_running(true);
                 session = Some(started);
@@ -136,6 +141,7 @@ fn serve(stop: Stop) -> Result<()> {
         pid: std::process::id(),
         roles: policy.roles.clone(),
         events: session.as_ref().map(|_| Arc::clone(&ring)),
+        session_of: pipe::session_of,
     });
     let active = Arc::new(AtomicUsize::new(0));
     let accepting = stop.clone();
@@ -187,6 +193,7 @@ fn serve(stop: Stop) -> Result<()> {
         if let Some(session) = session.as_mut() {
             if ring.running() && !session.alive() {
                 ring.set_running(false);
+                ring.traffic.set_running(false);
                 error!("observe: the process event session has ended; the role does not run");
             }
             if let Some(lost) = session.lost() {

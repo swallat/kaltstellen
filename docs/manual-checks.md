@@ -408,3 +408,7 @@ With the helper installed and running (see above), signed in as the owner:
 5. Set `observe = false` in `%ProgramData%\kaltstellen\helper.toml` from an
    elevated prompt, restart the service: `helper status` says `not
    running` and `helper events` is refused.
+6. `kaltstellen helper status` also says `network counters: running`. Start a large
+   download in a browser, then run `kaltstellen helper traffic --seconds 10`:
+   the browser's process id shows a `down` of a similar size as the
+   download; a second account's programs are not listed.

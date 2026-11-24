@@ -307,3 +307,25 @@ Hardening from the review of M4a (same day):
 - The tray's profile assistance (another thread) uses this verb for the
   event "process started": `exe`, `path` (may be `null`), `pid`, `time` as
   seconds since 1970.
+
+## M4b as built, part 2: network counters
+
+- The same event session also enables `Microsoft-Windows-Kernel-Network`
+  (TCP and UDP, IPv4 and IPv6). Only the process id and the size in bytes of
+  each event are read; no address, no port, no data. If it cannot be
+  enabled, the process events still run and `helper status` says
+  `network counters: not running`.
+- The helper keeps per process per second sums of bytes sent and received
+  for the last 10 minutes, in memory (at most 4096 processes). A process id
+  can be reused: the counters name a process id, the reader checks the
+  creation time as everywhere else (S6).
+- Pipe verb `{"v":1,"cmd":"network","seconds":N}` (`seconds` 1 to 600,
+  default 10, only with `network`): `traffic`, a list of `{pid, up, down}` for the
+  processes of the **caller's own Windows session** (each process id is
+  looked up when asked), processes without traffic left out.
+- `kaltstellen helper traffic [--seconds N]` prints the same as JSON lines.
+- H2 in the tray can show `Network down/up` next to `I/O` and
+  `Connections` from this; the tray side is not built yet.
+- Under heavy load the kernel may drop events; `lost` of the `events` verb
+  counts buffers lost for the whole session. Values are counters, not a
+  record of traffic (R14).
