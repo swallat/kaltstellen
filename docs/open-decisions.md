@@ -323,6 +323,24 @@ files) and, later, the real window.
 10. **H6 compare**: profile with profile only; `Take over from B` and
     `Remove from A` per row; `kaltstellen compare` exits `0` also when profiles differ (`4` unknown profile, `2` invalid configuration).
 
+## Open: optional background helper (owner request 2026-11-24)
+
+Requested by the owner: an optional background component with administrator
+rights, installable later, with a portable version without administrator
+rights staying possible; the widest scope (watching, acting on elevated
+programs, Windows services) **[decided]**. Everything else is in
+[design-optional-helper.md](design-optional-helper.md) and **[assumed]**:
+
+1. Service account `LocalSystem` with privileges removed.
+2. Automatic (delayed) start, so no process start is missed.
+3. New optional profile key `watch` (opt-in per profile).
+4. The service runs a protected copy in `%ProgramFiles%`; it is updated by
+   `kaltstellen helper install`, not by the user-level updater.
+5. Clients are authenticated by owner and session only, not by path.
+6. Elevated programs only from an administrator-maintained allow list;
+   `stop` of an elevated program is `terminate` after the timeout.
+7. Not before code signing (deferred by the owner).
+
 ## Decided by the owner on 2026-11-24
 
 - **N3 Icons of paused programs**: no hiding or greying of foreign
