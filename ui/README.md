@@ -28,7 +28,7 @@ python -m http.server 8000     # or: npx serve, or any other static server
 
 Without the WebView2 bridge, `bridge.js` loads `mock.js`; all buttons work
 on sample data in memory, nothing is saved. `?theme=dark` or `?theme=light`
-forces a colour scheme; `?view=entry|add|confirm|new` opens a dialog and
+forces a colour scheme; `?view=entry|add|confirm|new|compare` opens a dialog and
 `?view=settings` the Settings view; `?state=update|locked|notriggers` shows
 an update found, the update mode set by the environment, or no triggers.
 

@@ -50,6 +50,7 @@
           </div>
           <div class="actions">
             <button type="button" class="button primary" id="apply">Apply profile</button>
+            <button type="button" class="button" id="compare">Compare…</button>
             <button type="button" class="button" id="rename">Rename</button>
             <button type="button" class="button" id="copy">Copy</button>
             <button type="button" class="button danger" id="delete">Delete</button>
@@ -333,6 +334,32 @@
       <div class="dialog-actions">
         <button type="button" class="button" data-close>Cancel</button>
         <button type="submit" class="button primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="compare-dialog" class="xwide" aria-labelledby="compare-title">
+    <form method="dialog">
+      <h2 id="compare-title">Compare profiles</h2>
+      <div class="compare-head">
+        <span id="compare-a"></span>
+        <label for="compare-with">with</label>
+        <select id="compare-with"></select>
+      </div>
+      <p class="hint" id="compare-summary" aria-live="polite"></p>
+      <div class="scroll">
+        <table class="table" id="compare-table">
+          <caption class="visually-hidden">Differences between two profiles</caption>
+          <thead><tr><th scope="col">Program</th><th scope="col" id="compare-col-a"></th><th scope="col" id="compare-col-b"></th><th scope="col">Difference</th><th scope="col"><span class="visually-hidden">Commands</span></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="hint" id="compare-meta"></p>
+      <p class="error" id="compare-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button type="button" class="link" id="compare-identical"></button>
+        <span class="spacer"></span>
+        <button type="button" class="button" data-close>Close</button>
       </div>
     </form>
   </dialog>

@@ -260,6 +260,34 @@ function handle(message) {
       });
       return { ok: true, data };
     }
+    case 'compare': {
+      const a = state.profiles.find((p) => p.name.toLowerCase() === String(m.a).toLowerCase());
+      const b = state.profiles.find((p) => p.name.toLowerCase() === String(m.b).toLowerCase());
+      if (!a) return fail(`no profile named "${m.a}"`);
+      if (!b) return fail(`no profile named "${m.b}"`);
+      const same = (x, y) => x.exe.toLowerCase() === y.exe.toLowerCase() && (!x.path || !y.path || x.path.toLowerCase() === y.path.toLowerCase());
+      const text = (e) => {
+        const o = [];
+        if (e.action === 'suspend') o.push(e.trim ? 'trim' : 'no trim');
+        if (e.action === 'stop') o.push(e.on_timeout === 'keep' ? 'keep it if it does not close' : 'end it if it does not close');
+        if (e.restart_on_neutral) o.push('restart on neutral');
+        if (e.confirmed) o.push('confirmed');
+        return [e.action, ...o].join(' · ');
+      };
+      const taken = new Set();
+      const rows = [];
+      for (const e of a.entries) {
+        const i = b.entries.findIndex((o, k) => !taken.has(k) && same(e, o));
+        if (i < 0) { rows.push({ exe: e.exe, path: e.path, a: text(e), b: null, difference: 'only_a' }); continue; }
+        taken.add(i);
+        const o = b.entries[i];
+        const difference = o.action !== e.action ? 'action' : text(o) !== text(e) ? 'options' : null;
+        rows.push({ exe: e.exe, path: e.path || o.path, a: text(e), b: text(o), difference });
+      }
+      b.entries.forEach((o, i) => { if (!taken.has(i)) rows.push({ exe: o.exe, path: o.path, a: null, b: text(o), difference: 'only_b' }); });
+      const pair = (x, y) => (x !== y ? { a: x, b: y } : null);
+      return { ok: true, data: { rows, meta: { hotkey: pair(a.hotkey || '', b.hotkey || ''), triggers: pair((a.triggers || []).join(', '), (b.triggers || []).join(', ')), priority: pair(a.priority || 0, b.priority || 0) } } };
+    }
     case 'unassigned': return { ok: true, data: clone(unassigned[profile ? profile.name : ''] || []) };
     case 'dismiss': {
       const list = unassigned[profile ? profile.name : ''] || [];

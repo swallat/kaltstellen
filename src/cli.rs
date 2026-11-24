@@ -73,6 +73,14 @@ enum Command {
         #[arg(long)]
         no_wait: bool,
     },
+    /// Show how two profiles differ: programs only one has, other actions
+    /// or options, hotkey, triggers and priority
+    Compare {
+        /// First profile
+        a: String,
+        /// Second profile
+        b: String,
+    },
     /// Show the active profile and what kaltstellen has put on ice
     Status {
         /// Also list running programs without an entry in the active profile
@@ -177,6 +185,7 @@ pub fn main() -> ExitCode {
             force,
             no_wait,
         } => switch(&profile, force, !no_wait),
+        Command::Compare { a, b } => compare(&a, &b),
         Command::Status { unassigned } => {
             let code = status();
             if unassigned && code == exit::OK {
@@ -947,6 +956,41 @@ fn print_status(state: &State) {
 }
 
 /// Prints problems as `file:line: message`, the form editors can jump to.
+/// `kaltstellen compare A B` (H6): prints the differences; exit code 0 also
+/// when the profiles differ, 4 for an unknown profile, 2 for an invalid
+/// configuration.
+fn compare(a: &str, b: &str) -> u8 {
+    let Some(file) = paths::config_file() else {
+        eprintln!("error: no configuration directory (APPDATA unset)");
+        return exit::CONFIG_INVALID;
+    };
+    let loaded = match config::load(&file) {
+        Ok(loaded) => loaded,
+        Err(rejected) => {
+            for line in config::rejected_lines(&file, &rejected) {
+                eprintln!("{line}");
+            }
+            return exit::CONFIG_INVALID;
+        }
+    };
+    let find = |name: &str| loaded.config.profile(name);
+    let (Some(first), Some(second)) = (find(a), find(b)) else {
+        for name in [a, b] {
+            if find(name).is_none() {
+                eprintln!(
+                    "error: {}: no profile named \"{name}\"",
+                    Code::UnknownProfile
+                );
+            }
+        }
+        return exit::UNKNOWN_PROFILE;
+    };
+    for line in crate::compare::compare(first, second).lines(&first.name, &second.name) {
+        println!("{line}");
+    }
+    exit::OK
+}
+
 fn check_config(file: Option<PathBuf>) -> u8 {
     let Some(file) = file.or_else(paths::config_file) else {
         eprintln!("error: no configuration directory (APPDATA unset); name a file");
@@ -1084,6 +1128,7 @@ fn run(command: Command) -> Result<bool> {
         Command::Resume { name } => for_each(&name, "resumed", Target::resume),
         Command::CheckConfig { .. }
         | Command::Switch { .. }
+        | Command::Compare { .. }
         | Command::Status { .. }
         | Command::Recover { .. }
         | Command::Quit

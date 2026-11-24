@@ -616,6 +616,124 @@ async function loadUnassigned() {
   renderUnassigned();
 }
 
+
+// Compare two profiles (H6) -------------------------------------------------
+
+const differenceLabel = {
+  only_a: 'only in {a}', only_b: 'only in {b}', action: 'different action', options: 'different options',
+};
+let comparison = null;
+let showIdentical = false;
+
+function sameProgram(entry, row) {
+  if (entry.exe.toLowerCase() !== row.exe.toLowerCase()) return false;
+  if (entry.path && row.path) return entry.path.toLowerCase() === row.path.toLowerCase();
+  return true;
+}
+
+function profileNamed(name) {
+  return state.profiles.find((p) => p.name.toLowerCase() === name.toLowerCase());
+}
+
+function renderCompare() {
+  const a = current().name;
+  const b = $('compare-with').value;
+  const label = (key) => differenceLabel[key].replace('{a}', a).replace('{b}', b);
+  const rows = comparison.rows;
+  const identical = rows.filter((r) => !r.difference).length;
+  const count = (key) => rows.filter((r) => r.difference === key).length;
+  $('compare-summary').textContent = `${count('only_a')} only in ${a}, ${count('only_b')} only in ${b}, ${count('action') + count('options')} differ, ${identical} identical.`;
+  $('compare-col-a').textContent = `In ${a}`;
+  $('compare-col-b').textContent = `In ${b}`;
+  const shown = rows.filter((r) => r.difference || showIdentical);
+  $('compare-table').tBodies[0].replaceChildren(...shown.map((row) => el('tr', {},
+    el('td', {}, el('span', { class: 'exe', text: row.exe }), row.path ? el('span', { class: 'path', text: row.path }) : null),
+    el('td', { class: 'diff-cell', text: row.a || '—' }),
+    el('td', { class: 'diff-cell', text: row.b || '—' }),
+    el('td', {}, row.difference ? el('span', { class: `diff-tag ${row.difference}`, text: label(row.difference) }) : 'same'),
+    el('td', {},
+      row.difference && row.difference !== 'only_a'
+        ? el('button', { type: 'button', class: 'button small', onclick: () => takeOver(row), text: `Take over from ${b}` }) : null,
+      row.difference === 'only_a'
+        ? el('button', { type: 'button', class: 'button small', onclick: () => removeFromA(row), text: `Remove from ${a}` }) : null))));
+  const meta = [];
+  const m = comparison.meta;
+  if (m.hotkey) meta.push(`hotkey ${m.hotkey.a || 'none'} in ${a}, ${m.hotkey.b || 'none'} in ${b}`);
+  if (m.triggers) meta.push(`triggers ${m.triggers.a || 'none'} in ${a}, ${m.triggers.b || 'none'} in ${b}`);
+  if (m.priority) meta.push(`priority ${m.priority.a} in ${a}, ${m.priority.b} in ${b}`);
+  $('compare-meta').textContent = meta.length ? `Not the same: ${meta.join(' · ')}.` : '';
+  const toggle = $('compare-identical');
+  toggle.hidden = identical === 0;
+  toggle.textContent = showIdentical ? 'Hide identical' : `Show identical (${identical})`;
+}
+
+async function loadCompare() {
+  $('compare-error').textContent = '';
+  const reply = await call('compare', { a: current().name, b: $('compare-with').value }, { quiet: true });
+  if (!reply.ok) {
+    $('compare-error').textContent = reply.error;
+    return;
+  }
+  comparison = reply.data;
+  renderCompare();
+}
+
+async function openCompare() {
+  const here = current();
+  const others = state.profiles.filter((p) => p !== here);
+  if (!here || others.length === 0) {
+    notice('There is no other profile to compare with.', false);
+    return;
+  }
+  $('compare-a').textContent = here.name;
+  $('compare-with').replaceChildren(...others.map((p) => el('option', { value: p.name, text: p.name })));
+  showIdentical = false;
+  openDialog($('compare-dialog'));
+  await loadCompare();
+}
+
+/** Copies the entry of the other profile into this one, or replaces the
+ * entry it has (the same calls as the entry dialog). */
+async function takeOver(row) {
+  const here = current();
+  const other = profileNamed($('compare-with').value);
+  const from = other.entries.find((e) => sameProgram(e, row));
+  const edit = {
+    exe: from.exe, path: from.path, action: from.action, args: from.args, cwd: from.cwd,
+    on_timeout: from.on_timeout, restart_on_neutral: from.restart_on_neutral,
+    trim: from.trim, confirmed: from.confirmed,
+  };
+  let index = here.entries.findIndex((e) => sameProgram(e, row));
+  let reply;
+  if (index >= 0) {
+    reply = await call('update_entry', { profile: here.name, index, entry: edit });
+  } else {
+    reply = await call('add_entry', { profile: here.name, exe: from.exe, path: from.path, confirmed: from.confirmed });
+    if (reply.ok) {
+      index = current().entries.length - 1;
+      reply = await call('update_entry', { profile: here.name, index, entry: edit });
+    }
+  }
+  if (!reply.ok) $('compare-error').textContent = reply.error;
+  await loadCompare();
+}
+
+async function removeFromA(row) {
+  const here = current();
+  const index = here.entries.findIndex((e) => sameProgram(e, row));
+  if (index < 0) return;
+  const reply = await call('remove_entry', { profile: here.name, index });
+  if (!reply.ok) $('compare-error').textContent = reply.error;
+  await loadCompare();
+}
+
+$('compare').addEventListener('click', openCompare);
+$('compare-with').addEventListener('change', loadCompare);
+$('compare-identical').addEventListener('click', () => {
+  showIdentical = !showIdentical;
+  renderCompare();
+});
+
 // Dialogs -----------------------------------------------------------------
 
 function openDialog(dialog) {
@@ -1056,6 +1174,7 @@ async function openView(name) {
   if (name === 'add' && profile) await openAdd();
   if (name === 'confirm' && profile) confirmDialog('Warn list', 'anydesk.exe is a remote-access tool. Freezing or closing it can cut you off or break things. Add it anyway?', 'Add anyway');
   if (name === 'settings') showSettings();
+  if (name === 'compare' && profile) await openCompare();
   if (name === 'new') nameDialog('New profile', 'Evening', async () => ({ ok: false, error: 'KS205: profile name "Evening" is used already' }));
 }
 
