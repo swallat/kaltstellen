@@ -83,6 +83,9 @@ pub trait Host {
     /// M6: forgets the profile that was active when the last session ended
     /// (the tray's `Apply last profile` offer, S5).
     fn forget_last_profile(&self) -> Result<(), String>;
+    /// H4: what switching to `profile` would do, changing nothing. Run as
+    /// `kaltstellen switch --dry-run` would, with the saved state.
+    fn preview(&self, config: &Config, profile: &str) -> Result<crate::engine::Plan, String>;
     /// M6: shows a file or folder in Explorer. The bridge passes only
     /// paths it derived itself, never one from the page.
     fn open_path(&self, path: &Path) -> Result<(), String>;
@@ -207,6 +210,10 @@ pub enum Request {
     Compare {
         a: String,
         b: String,
+    },
+    /// H4: what switching to a profile would do.
+    Preview {
+        profile: String,
     },
     Unassigned {
         profile: String,
@@ -349,6 +356,35 @@ fn compare_json(result: &crate::compare::Comparison) -> Value {
             "triggers": pair(&result.meta.triggers),
             "priority": result.meta.priority.map(|(a, b)| json!({"a": a, "b": b})),
         },
+    })
+}
+
+fn preview_json(plan: &crate::engine::Plan) -> Value {
+    use crate::engine::Outcome;
+    let items: Vec<Value> = plan
+        .items
+        .iter()
+        .map(|item| {
+            json!({
+                "step": item.step.to_string(),
+                "program": item.program,
+                "outcome": match item.outcome {
+                    Outcome::Will => "will",
+                    Outcome::NoChange => "no_change",
+                    Outcome::Problem => "problem",
+                },
+                "text": item.text,
+                "processes": item.processes,
+                "private_bytes": item.private_bytes,
+            })
+        })
+        .collect();
+    let problems: Vec<String> = plan.problems.iter().map(ToString::to_string).collect();
+    json!({
+        "profile": plan.profile,
+        "items": items,
+        "problems": problems,
+        "private_bytes": plan.private_bytes(),
     })
 }
 
@@ -987,6 +1023,17 @@ impl<H: Host> Bridge<H> {
                 let (first, second) = (find(&a)?, find(&b)?);
                 Ok(Some(compare_json(&crate::compare::compare(first, second))))
             }
+            Request::Preview { profile } => {
+                check_text(&[&profile])?;
+                let profile = profile.trim();
+                if !profile.eq_ignore_ascii_case(NEUTRAL)
+                    && self.document.config().profile(profile).is_none()
+                {
+                    return Err(format!("no profile named \"{profile}\""));
+                }
+                let plan = self.host.preview(self.document.config(), profile)?;
+                Ok(Some(preview_json(&plan)))
+            }
             Request::Unassigned { profile } => {
                 check_text(&[&profile])?;
                 let list: Vec<Value> = self
@@ -1283,6 +1330,32 @@ mod tests {
                 private_bytes: 1 << 20,
                 protection: protection::of("anydesk.exe"),
             }]
+        }
+        fn preview(&self, _config: &Config, profile: &str) -> Result<crate::engine::Plan, String> {
+            use crate::engine::{Outcome, Plan, PlanItem};
+            use crate::error::{Code, Error, Step};
+            Ok(Plan {
+                profile: profile.to_owned(),
+                items: vec![
+                    PlanItem {
+                        step: Step::Stop,
+                        program: "browser.exe".into(),
+                        outcome: Outcome::Will,
+                        text: "would stop 2 processes".into(),
+                        processes: 2,
+                        private_bytes: 3 << 20,
+                    },
+                    PlanItem {
+                        step: Step::Suspend,
+                        program: "tool.exe".into(),
+                        outcome: Outcome::Problem,
+                        text: "needs administrator".into(),
+                        processes: 1,
+                        private_bytes: 0,
+                    },
+                ],
+                problems: vec![Error::new(Code::NeedsAdmin, "tool.exe")],
+            })
         }
         fn unassigned(&self, _config: &Config, profile: &str) -> Vec<Unassigned> {
             vec![Unassigned {
@@ -2004,6 +2077,29 @@ mod tests {
         let unknown = send(
             &mut b,
             json!({"v": 1, "id": 4, "type": "compare", "a": "focus", "b": "nope"}),
+        );
+        assert_eq!(unknown["ok"], false);
+    }
+
+    #[test]
+    fn preview_reports_the_plan_of_the_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _) = bridge(&dir);
+        let reply = send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "preview", "profile": "focus"}),
+        );
+        assert_eq!(reply["ok"], true);
+        assert_eq!(reply["data"]["profile"], "focus");
+        let items = reply["data"]["items"].as_array().unwrap();
+        assert_eq!(items[0]["step"], "stop");
+        assert_eq!(items[0]["outcome"], "will");
+        assert_eq!(items[1]["outcome"], "problem");
+        assert_eq!(reply["data"]["problems"].as_array().unwrap().len(), 1);
+        assert_eq!(reply["data"]["private_bytes"], 3 << 20);
+        let unknown = send(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "preview", "profile": "nope"}),
         );
         assert_eq!(unknown["ok"], false);
     }

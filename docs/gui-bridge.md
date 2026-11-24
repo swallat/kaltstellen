@@ -38,6 +38,7 @@ control characters; paths must be absolute.
 | `drop_done` | `profile`, `added`, `not_added` (reasons) | M2: the summary of a drop becomes the status line. |
 | `running` | | `data`: running programs `{exe, private_bytes, protection}`, largest first. |
 | `compare` | `a`, `b` | H6: `data` is `{rows, meta}`: rows `{exe, path, a, b, difference}` with `difference` one of `only_a`, `only_b`, `action`, `options` or `null` (identical), in the order of A and then what only B has; `a` and `b` are the entries as text (`suspend · no trim`) or `null`; `meta` has `hotkey`, `triggers` and `priority` as `{a, b}` where they differ, else `null`. Reads the configuration only; the page copies or removes entries with `add_entry`, `update_entry` and `remove_entry`. Both profiles must exist. |
+| `preview` | `profile` (or `neutral`) | H4: `data` is `{profile, items, problems, private_bytes}`: `items` in the order of W1, each `{step, program, outcome, text, processes, private_bytes}` with `step` one of `resume`, `stop`, `suspend`, `start` and `outcome` one of `will`, `no_change`, `problem`; `problems` are the errors the switch would report (P7, a missing file) as text; `private_bytes` is the private memory of what the stop and suspend steps would touch. Reads the processes and the saved state, opens each matching process with the rights the real step needs and closes it again; changes nothing. Runs on the window's thread like `running`. |
 | `unassigned` | `profile` | `data`: `{exe, path, new}` (N1). |
 | `dismiss` | `profile`, `exe` | Hide an unassigned program for this profile. |
 | `apply` | `profile` | Start `kaltstellen switch PROFILE`; the result arrives as the `applied` event. One switch at a time. |
@@ -76,7 +77,6 @@ Requests the helpers of spec section 8 need. Names and fields are a proposal
 | `measure` | `programs` (up to 256 `{exe, path?}`), `interval_ms` (1000 to 3000) | H2: `data` per program `{private_bytes, cpu, io_bytes_per_s, tcp, udp, frozen}`; two handle-free process queries `interval_ms` apart; no process is opened. |
 | `create_profile_from` | `name`, `entries` | H1: a new profile with these entries in one atomic save; refused as a whole when any entry breaks C1 to C8 or P6. |
 | `add_entries` | `profile`, `entries` | H1 update mode: adds entries for programs without one; refused as a whole like `create_profile_from`. |
-| `preview` | `profile` | H4: `data` is the plan in W1 order with outcomes, predicted problems, totals and the time of the reading. Changes nothing. |
 | `suggestions` | `profile` | H5: `data` the suggestions `{exe, path, action, reason}`. |
 | `suggestion_answer` | `profile`, `exe`, `answer` (`add`, `later`, `never`), `action?` | H5: `add` writes an entry as `add_entry` does. |
 | `templates` | | H7: `data` the templates `{id, name, purpose, rules, found}`; `snapshot` takes `template` (an id) and sets the rows by its rules. |

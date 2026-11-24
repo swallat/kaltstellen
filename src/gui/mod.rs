@@ -290,6 +290,18 @@ impl Host for RealHost {
         views
     }
 
+    fn preview(&self, config: &Config, profile: &str) -> Result<crate::engine::Plan, String> {
+        let state = Store::new(&self.data).peek().unwrap_or_default();
+        crate::engine::preview(
+            config,
+            profile,
+            &state,
+            crate::engine::Options::default(),
+            &Vec::new,
+        )
+        .map_err(|err| err.to_string())
+    }
+
     fn tray_status(&self) -> Result<Option<crate::tray::protocol::TrayStatus>, String> {
         // M5: the tray keeps the error state (L9); without a tray there is
         // none, and the status line alone reports a switch. U4: the tray
