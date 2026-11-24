@@ -130,6 +130,8 @@ pub enum Code {
     HelperPolicy = 1004,
     /// The action needs administrator rights and they were not granted.
     HelperNeedsAdmin = 1005,
+    /// The helper could not start or read its event session.
+    HelperObserve = 1006,
 
     // 9xx: internal
     /// Logging could not be set up.
@@ -187,6 +189,7 @@ impl Code {
         Code::HelperProtocol,
         Code::HelperPolicy,
         Code::HelperNeedsAdmin,
+        Code::HelperObserve,
         Code::LogSetup,
     ];
 

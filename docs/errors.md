@@ -56,3 +56,4 @@ when they apply. Codes are never renumbered or reused. The source of truth is
 | `KS1003` | Malformed message on the helper's pipe, or another protocol version. |
 | `KS1004` | `helper.toml` could not be read or is invalid. |
 | `KS1005` | The action needs administrator rights and they were not granted (the UAC prompt was declined). |
+| `KS1006` | The helper could not start or read its process event session (rights, or another session of the same name). |

@@ -390,3 +390,21 @@ Not yet covered: step 6 (a second account), the declined prompt (`KS1005`),
 step 9 for the tray and window, and an install over an older build. The first
 uninstall left the protected copy behind (the service process still held it);
 the file is now removed with retries.
+
+## Background helper: process events (M4b)
+
+With the helper installed and running (see above), signed in as the owner:
+
+1. `kaltstellen helper status` shows `observe (process events): running`.
+2. Run `kaltstellen helper events` once; note the `next:` number printed on
+   stderr. Start Notepad, close it, then run `kaltstellen helper events
+   --after <next>`. Expected: a `start` line for `notepad.exe` (with `path`
+   `C:\Windows\...`, a `parent` and a `session`) and later a `stop` line
+   for the same `pid`.
+3. A second user account signed in at the same time (fast user switching):
+   its programs do not appear in your output.
+4. Stop the service (`sc stop kaltstellen-helper` from an elevated prompt),
+   start it again: the numbers start from 0, nothing from before is shown.
+5. Set `observe = false` in `%ProgramData%\kaltstellen\helper.toml` from an
+   elevated prompt, restart the service: `helper status` says `not
+   running` and `helper events` is refused.

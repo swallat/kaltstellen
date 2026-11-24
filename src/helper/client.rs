@@ -15,6 +15,11 @@ const DEADLINE: Duration = Duration::from_secs(3);
 /// installed or not running); an error if something answers that is not the
 /// helper (wrong account, wrong protocol).
 pub fn ask(command: Command) -> Result<Option<Reply>> {
+    ask_after(command, None)
+}
+
+/// [`ask`] with the `after` of an `events` request.
+pub fn ask_after(command: Command, after: Option<u64>) -> Result<Option<Reply>> {
     let Some(mut conn) = pipe::connect_peer(PIPE_NAME, Duration::from_secs(1), Peer::Helper)?
     else {
         return Ok(None);
@@ -31,10 +36,11 @@ pub fn ask(command: Command) -> Result<Option<Reply>> {
     let request = Request {
         v: protocol::VERSION,
         cmd: command,
+        after,
     };
     let reply = pipe::with_deadline(DEADLINE, || -> Result<Option<String>> {
         protocol::write_line(&mut conn, &request)?;
-        protocol::read_line(&mut BufReader::new(&conn))
+        protocol::read_line(&mut BufReader::new(&conn), protocol::MAX_REPLY)
     })?
     .ok_or_else(|| Error::new(Code::HelperProtocol, "the helper closed without an answer"))?;
     let reply: Reply = serde_json::from_str(&reply)

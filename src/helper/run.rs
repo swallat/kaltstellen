@@ -13,9 +13,11 @@ use std::time::Duration;
 
 use log::{error, info, warn};
 
+use super::events;
 use super::protocol::{self, Context};
 use super::{PIPE_NAME, SERVICE_NAME, data_dir, policy, policy_file, version};
 use crate::error::{Code, Error, Result};
+use crate::win32::etw;
 use crate::win32::pipe::{self, Listener, Peer};
 use crate::win32::service::{self, Stop};
 
@@ -23,6 +25,8 @@ use crate::win32::service::{self, Stop};
 const MAX_CLIENTS: usize = 8;
 /// How long one conversation may take.
 const DEADLINE: Duration = Duration::from_secs(5);
+/// Name of the kernel event session.
+const EVENT_SESSION: &str = "kaltstellen-helper-process";
 
 /// One of the client slots; given back on drop.
 struct Slot(Arc<AtomicUsize>);
@@ -102,17 +106,35 @@ fn serve(stop: Stop) -> Result<()> {
         }
     };
     info!(
-        "helper {} serves {} (observe {}, act {}, services {}; none implemented yet)",
+        "helper {} serves {} (roles: observe {}, act {}, services {}; only observe is implemented)",
         version(),
         policy.owner_sid,
         policy.roles.observe,
         policy.roles.act,
         policy.roles.services
     );
+    // The role observe: a kernel event session for process start and stop.
+    // Without it (not switched on, or it cannot start) the helper still
+    // answers; the status then says the role does not run.
+    let ring = Arc::new(events::Ring::new());
+    let mut session = None;
+    if policy.roles.observe {
+        let sink = Arc::clone(&ring);
+        match etw::start(EVENT_SESSION, move |event| {
+            sink.push(&event, etw::device_map);
+        }) {
+            Ok(started) => {
+                info!("observe: the process event session runs");
+                session = Some(started);
+            }
+            Err(err) => error!("observe does not run: {err}"),
+        }
+    }
     let context = Arc::new(Context {
         version: version().to_owned(),
         pid: std::process::id(),
         roles: policy.roles.clone(),
+        events: session.as_ref().map(|_| Arc::clone(&ring)),
     });
     let active = Arc::new(AtomicUsize::new(0));
     let accepting = stop.clone();
@@ -159,8 +181,19 @@ fn serve(stop: Stop) -> Result<()> {
             )
         })?;
     stop.running();
-    stop.wait();
+    let mut reported = 0;
+    while !stop.wait_for(Duration::from_secs(30)) {
+        if let Some(session) = session.as_mut() {
+            let lost = session.lost();
+            ring.set_lost(lost);
+            if lost > reported {
+                warn!("observe: {lost} process events lost so far");
+                reported = lost;
+            }
+        }
+    }
     info!("helper stopping");
+    drop(session);
     // Wake the accept loop, which sees the stop flag and ends.
     let _ = pipe::connect_peer(PIPE_NAME, Duration::from_millis(500), Peer::Helper);
     Ok(())
@@ -174,11 +207,13 @@ fn handle(conn: File, context: &Context) {
             return;
         }
     };
+    // The session of the caller decides which events it may read.
+    let session = pipe::client_pid(&conn).and_then(pipe::session_of);
     let mut duplex = Duplex {
         reader: BufReader::new(conn),
         writer,
     };
-    let result = pipe::with_deadline(DEADLINE, || protocol::serve(&mut duplex, context));
+    let result = pipe::with_deadline(DEADLINE, || protocol::serve(&mut duplex, context, session));
     if let Err(err) = result {
         warn!("{err}");
     }

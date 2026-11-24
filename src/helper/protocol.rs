@@ -22,6 +22,9 @@ pub struct Request {
     /// Protocol version of the sender.
     pub v: u32,
     pub cmd: Command,
+    /// With `events`: the first event number wanted (0 for the oldest).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -31,6 +34,9 @@ pub enum Command {
     Hello,
     /// What the helper is doing: roles and counters.
     Status,
+    /// M4b: process start and stop events of the caller's own Windows
+    /// session, from `after` on; needs the role *observe*.
+    Events,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -57,6 +63,15 @@ pub struct Reply {
     /// Roles the running helper actually implements.
     pub active: Option<Roles>,
     pub error: Option<String>,
+    /// `events`: the events, oldest first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events: Option<Vec<super::events::Event>>,
+    /// `events`: ask again with `after` set to this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<u64>,
+    /// `events`: how many events are missing since the helper started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost: Option<u64>,
 }
 
 impl Reply {
@@ -69,6 +84,9 @@ impl Reply {
             roles: None,
             active: None,
             error: Some(text.into()),
+            events: None,
+            next: None,
+            lost: None,
         }
     }
 }
@@ -79,10 +97,13 @@ pub struct Context {
     pub version: String,
     pub pid: u32,
     pub roles: Roles,
+    /// The ring of events when the role *observe* runs.
+    pub events: Option<std::sync::Arc<super::events::Ring>>,
 }
 
-/// Answers one request line. Never panics on bad input.
-pub fn answer(line: &str, context: &Context) -> Reply {
+/// Answers one request line. Never panics on bad input. `session` is the
+/// Windows session of the client, as far as it could be told.
+pub fn answer(line: &str, context: &Context, session: Option<u32>) -> Reply {
     let request: Request = match serde_json::from_str(line) {
         Ok(request) => request,
         Err(e) => return Reply::failure(format!("malformed request: {e}")),
@@ -93,30 +114,53 @@ pub fn answer(line: &str, context: &Context) -> Reply {
             request.v
         ));
     }
+    if request.after.is_some() && request.cmd != Command::Events {
+        return Reply::failure("`after` belongs to `events` only");
+    }
+    let mut reply = Reply {
+        v: VERSION,
+        ok: true,
+        version: Some(context.version.clone()),
+        pid: Some(context.pid),
+        roles: Some(context.roles.clone()),
+        active: Some(Roles {
+            observe: context.events.is_some(),
+            act: false,
+            services: false,
+        }),
+        error: None,
+        events: None,
+        next: None,
+        lost: None,
+    };
     match request.cmd {
-        Command::Hello | Command::Status => Reply {
-            v: VERSION,
-            ok: true,
-            version: Some(context.version.clone()),
-            pid: Some(context.pid),
-            roles: Some(context.roles.clone()),
-            // M4a implements no role yet.
-            active: Some(Roles {
-                observe: false,
-                act: false,
-                services: false,
-            }),
-            error: None,
-        },
+        Command::Hello | Command::Status => reply,
+        Command::Events => {
+            let Some(ring) = &context.events else {
+                return Reply::failure("the role observe is not running");
+            };
+            let Some(session) = session else {
+                return Reply::failure("the session of the caller is not known");
+            };
+            let batch = ring.read(request.after.unwrap_or(0), Some(session));
+            reply.events = Some(batch.events);
+            reply.next = Some(batch.next);
+            reply.lost = Some(batch.lost);
+            reply
+        }
     }
 }
 
-/// Reads one line of at most [`MAX_REQUEST`] bytes. `Ok(None)` at the end of
-/// the stream before any byte.
-pub fn read_line(reader: &mut impl BufRead) -> Result<Option<String>> {
+/// Longest reply line a client accepts, in bytes.
+pub const MAX_REPLY: usize = 256 * 1024;
+
+/// Reads one line of at most `limit` bytes ([`MAX_REQUEST`] for requests,
+/// [`MAX_REPLY`] for replies). `Ok(None)` at the end of the stream before
+/// any byte.
+pub fn read_line(reader: &mut impl BufRead, limit: usize) -> Result<Option<String>> {
     let mut bytes = Vec::new();
     let read = reader
-        .take(MAX_REQUEST as u64 + 1)
+        .take(limit as u64 + 1)
         .read_until(b'\n', &mut bytes)
         .map_err(|e| {
             Error::new(
@@ -127,10 +171,10 @@ pub fn read_line(reader: &mut impl BufRead) -> Result<Option<String>> {
     if read == 0 {
         return Ok(None);
     }
-    if bytes.len() > MAX_REQUEST {
+    if bytes.len() > limit {
         return Err(Error::new(
             Code::HelperProtocol,
-            format!("message longer than {MAX_REQUEST} bytes"),
+            format!("message longer than {limit} bytes"),
         ));
     }
     let text = String::from_utf8(bytes)
@@ -139,9 +183,13 @@ pub fn read_line(reader: &mut impl BufRead) -> Result<Option<String>> {
 }
 
 /// Serves one connection: one request line, one reply line.
-pub fn serve(conn: &mut (impl BufRead + Write), context: &Context) -> Result<()> {
-    let reply = match read_line(conn) {
-        Ok(Some(line)) => answer(&line, context),
+pub fn serve(
+    conn: &mut (impl BufRead + Write),
+    context: &Context,
+    session: Option<u32>,
+) -> Result<()> {
+    let reply = match read_line(conn, MAX_REQUEST) {
+        Ok(Some(line)) => answer(&line, context, session),
         Ok(None) => return Ok(()),
         Err(e) => Reply::failure(e.reason),
     };
@@ -172,17 +220,18 @@ mod tests {
                 act: false,
                 services: false,
             },
+            events: None,
         }
     }
 
     #[test]
     fn hello_names_the_version_and_the_roles() {
-        let reply = answer(r#"{"v":1,"cmd":"hello"}"#, &context());
+        let reply = answer(r#"{"v":1,"cmd":"hello"}"#, &context(), Some(1));
         assert!(reply.ok, "{reply:?}");
         assert_eq!(reply.version.as_deref(), Some("1.2.3"));
         assert_eq!(reply.pid, Some(4242));
         assert!(reply.roles.unwrap().observe);
-        // Nothing is implemented behind the roles in M4a.
+        // No event session runs in this context.
         assert_eq!(
             reply.active,
             Some(Roles {
@@ -197,6 +246,8 @@ mod tests {
     fn unknown_verbs_fields_and_versions_are_refused() {
         for line in [
             r#"{"v":1,"cmd":"terminate","pid":1}"#,
+            r#"{"v":1,"cmd":"hello","after":3}"#,
+            r#"{"v":1,"cmd":"events"}"#,
             r#"{"v":1,"cmd":"hello","extra":true}"#,
             r#"{"v":2,"cmd":"hello"}"#,
             r#"{"cmd":"hello"}"#,
@@ -204,7 +255,7 @@ mod tests {
             "",
             r#"{"v":1}"#,
         ] {
-            let reply = answer(line, &context());
+            let reply = answer(line, &context(), Some(1));
             assert!(!reply.ok, "{line:?} was answered: {reply:?}");
             assert!(reply.error.is_some());
         }
@@ -242,7 +293,7 @@ mod tests {
             input: Cursor::new(b"{\"v\":1,\"cmd\":\"status\"}\n".to_vec()),
             output: Vec::new(),
         };
-        serve(&mut duplex, &context()).unwrap();
+        serve(&mut duplex, &context(), Some(1)).unwrap();
         let text = String::from_utf8(duplex.output).unwrap();
         assert_eq!(text.matches('\n').count(), 1);
         let reply: Reply = serde_json::from_str(text.trim()).unwrap();
@@ -252,8 +303,49 @@ mod tests {
     #[test]
     fn an_oversized_message_is_not_buffered_without_end() {
         let big = vec![b'x'; MAX_REQUEST * 4];
-        let err = read_line(&mut Cursor::new(big)).unwrap_err();
+        let err = read_line(&mut Cursor::new(big), MAX_REQUEST).unwrap_err();
         assert_eq!(err.code, Code::HelperProtocol);
-        assert_eq!(read_line(&mut Cursor::new(Vec::new())).unwrap(), None);
+        assert_eq!(
+            read_line(&mut Cursor::new(Vec::new()), MAX_REQUEST).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn events_are_given_to_the_session_of_the_caller_only() {
+        use crate::helper::events::Ring;
+        use crate::win32::etw::{Kind, ProcessEvent};
+        let ring = std::sync::Arc::new(Ring::new());
+        for (pid, session) in [(10, 1), (11, 2)] {
+            ring.push(
+                &ProcessEvent {
+                    kind: Kind::Start,
+                    pid,
+                    parent_pid: 4,
+                    session: Some(session),
+                    created: 132_000_000_000_000_000,
+                    time: 132_000_000_000_000_000,
+                    image: r"\Device\X\a.exe".to_owned(),
+                },
+                Vec::new,
+            );
+        }
+        let mut with = context();
+        with.events = Some(ring);
+        let reply = answer(r#"{"v":1,"cmd":"events","after":0}"#, &with, Some(2));
+        assert!(reply.ok, "{reply:?}");
+        let events = reply.events.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].pid, 11);
+        assert_eq!(reply.next, Some(2));
+        // Without a known session of the caller nothing is given out.
+        assert!(!answer(r#"{"v":1,"cmd":"events"}"#, &with, None).ok);
+        // The status says the role runs.
+        assert!(
+            answer(r#"{"v":1,"cmd":"status"}"#, &with, Some(1))
+                .active
+                .unwrap()
+                .observe
+        );
     }
 }

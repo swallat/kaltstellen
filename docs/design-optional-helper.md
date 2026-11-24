@@ -269,3 +269,35 @@ Hardening from the review of M4a (same day):
 ## Settings entry (built after M4a)
 
 `Settings` > `Background helper` shows the service state and the pipe answer (`helper_status`, same facts as `kaltstellen helper status`) and starts `helper install` / `helper uninstall` in a console of its own (`--from-window` keeps that console readable). The window never elevates itself and sends no account name; the elevated step is the command line's `runas` relaunch (see above).
+
+## M4b as built: process events (first part of *observe*)
+
+- With the role `observe` on (the default after install) the service starts
+  a real-time event session `kaltstellen-helper-process` for the provider
+  `Microsoft-Windows-Kernel-Process` (keyword process start and stop only).
+  A session of that name left behind by a crashed service is stopped and
+  started again. If the session cannot start, the helper still answers and
+  `helper status` says `observe (process events): not running`; the reason
+  is in the log (`KS1006`).
+- Event fields are read by name (TDH), not by byte offset, so event versions
+  do not matter. Kept per event: number, `start`/`stop`, pid, parent pid,
+  Windows session, creation time, time, file name, full path in drive form
+  (`null` when the kernel path maps to no drive). No command lines, no
+  window titles. The ring holds at most 4096 events and 24 hours, only in
+  memory; a restart starts empty.
+- Pipe verb `{"v":1,"cmd":"events","after":N}` (extra field `after`, only
+  with `events`): the events from number `N` on that belong to **the
+  caller's own Windows session** (looked up from the pipe's client process),
+  at most 200 per answer, with `next` (ask again with this) and `lost`
+  (events dropped from the ring or lost by the kernel since the helper
+  started). A caller whose session cannot be told gets nothing. A `stop`
+  whose event does not name its session takes it from the matching `start`
+  (same pid and creation time); without a match it is not given out.
+- Replies may be up to 256 KiB; requests stay at 4096 bytes.
+- `kaltstellen helper events [--after N]` prints them as JSON lines (for
+  checking by hand; the tray will use the pipe).
+- Not part of this step: network volume per program (H2) and the push of
+  events to the tray (the tray polls with `after`); both stay in M4b/M4c.
+- The tray's profile assistance (another thread) uses this verb for the
+  event "process started": `exe`, `path` (may be `null`), `pid`, `time` as
+  seconds since 1970.

@@ -644,6 +644,19 @@ impl Stop {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Blocks until [`set`](Stop::set) was called or `timeout` has passed;
+    /// `true` if it was called.
+    pub fn wait_for(&self, timeout: Duration) -> bool {
+        let (flag, signal) = &*self.0;
+        let guard = flag
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (guard, _) = signal
+            .wait_timeout_while(guard, timeout, |set| !*set)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard
+    }
+
     /// Blocks until [`set`](Stop::set) was called.
     pub fn wait(&self) {
         let (flag, signal) = &*self.0;

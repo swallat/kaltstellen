@@ -15,6 +15,7 @@
 //! (M4b to M4e).
 
 pub mod client;
+pub mod events;
 pub mod policy;
 pub mod protocol;
 pub mod run;

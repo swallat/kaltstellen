@@ -328,7 +328,7 @@ pub fn describe(
             .map(|(_, name)| *name)
             .collect();
             lines.push(format!(
-                "policy: roles {} (not all are implemented yet)",
+                "policy: roles {} (only observe is implemented)",
                 if on.is_empty() {
                     "none".to_owned()
                 } else {
@@ -343,6 +343,16 @@ pub fn describe(
         Ok(Some(reply)) => {
             let version = reply.version.as_deref().unwrap_or("?");
             lines.push(format!("pipe {PIPE_NAME}: answers, version {version}"));
+            if let Some(active) = &reply.active {
+                lines.push(format!(
+                    "observe (process events): {}",
+                    if active.observe {
+                        "running"
+                    } else {
+                        "not running"
+                    }
+                ));
+            }
             if let Some(note) = super::client::version_note(version) {
                 lines.push(note);
             }
