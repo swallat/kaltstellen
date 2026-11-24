@@ -76,6 +76,14 @@ pub trait Host {
     /// Opens the visible update (a console window running `kaltstellen
     /// update`), as the tray's `Install update…` does.
     fn install_update(&self) -> Result<(), String>;
+    /// M4: starts reading what the optional background helper is doing
+    /// (service state and pipe; takes seconds when nothing answers, so not
+    /// on the window's thread). The end comes back through
+    /// [`Bridge::helper_ready`].
+    fn check_helper(&self);
+    /// M4: opens the visible console that installs (or updates) or removes
+    /// the helper; that asks Windows for administrator rights itself.
+    fn open_helper(&self, install: bool) -> Result<(), String>;
     /// M2: the icon of each program as a PNG `data:` URL, `None` where
     /// there is none, in the order asked.
     fn icons(&self, wanted: &[Wanted], size: u32) -> Vec<Option<String>>;
@@ -298,6 +306,12 @@ pub enum Request {
     },
     CheckUpdates,
     InstallUpdate,
+    /// M4: the state of the optional background helper.
+    HelperStatus {},
+    /// M4: install or update the helper (console window and a UAC prompt).
+    HelperInstall {},
+    /// M4: remove the helper (console window and a UAC prompt).
+    HelperUninstall {},
     /// M6: the `[settings]` of the configuration file.
     SetDefaults {
         default_action: String,
@@ -659,6 +673,8 @@ pub struct Bridge<H: Host> {
     pending_delete: Option<String>,
     applying: bool,
     checking: bool,
+    /// M4: a read of the helper's state runs.
+    helper_checking: bool,
     /// The document before the edit that is being handled.
     snapshot: Option<Document>,
     /// M5: the open errors of the last switch as the tray reported them
@@ -688,6 +704,7 @@ impl<H: Host> Bridge<H> {
             pending_delete: None,
             applying: false,
             checking: false,
+            helper_checking: false,
             snapshot: None,
             last_switch: None,
             tray_paused: None,
@@ -1427,6 +1444,24 @@ impl<H: Host> Bridge<H> {
                 self.status = format!("Installing {version} in a separate window…");
                 Ok(None)
             }
+            Request::HelperStatus {} => {
+                // One read at a time; the answer is the `helper_status` event.
+                if !self.helper_checking {
+                    self.helper_checking = true;
+                    self.host.check_helper();
+                }
+                Ok(None)
+            }
+            Request::HelperInstall {} => {
+                self.host.open_helper(true)?;
+                self.status = "Installing the background helper in a separate window…".to_owned();
+                Ok(None)
+            }
+            Request::HelperUninstall {} => {
+                self.host.open_helper(false)?;
+                self.status = "Removing the background helper in a separate window…".to_owned();
+                Ok(None)
+            }
             Request::Icons { programs, size } => {
                 if programs.len() > MAX_ICONS {
                     return Err(format!("at most {MAX_ICONS} icons per request"));
@@ -1510,6 +1545,13 @@ impl<H: Host> Bridge<H> {
         Ok(())
     }
 
+    /// The read started by `helper_status` ended with `summary`; returns the
+    /// event.
+    pub fn helper_ready(&mut self, summary: &crate::helper::setup::Summary) -> String {
+        self.helper_checking = false;
+        json!({"v": VERSION, "event": "helper_status", "data": summary}).to_string()
+    }
+
     /// The check started by `check_updates` ended; returns the event.
     pub fn checked(&mut self) -> String {
         self.checking = false;
@@ -1574,6 +1616,9 @@ mod tests {
         update: Rc<RefCell<UpdateInfo>>,
         checks: Rc<RefCell<usize>>,
         installs: Rc<RefCell<usize>>,
+        /// M4: what `open_helper` was asked (`true` install, `false` remove).
+        helper_opened: Rc<RefCell<Vec<bool>>>,
+        helper_checks: Rc<RefCell<usize>>,
         last_switch: Rc<RefCell<Option<LastSwitch>>>,
         tray_silent: Rc<std::cell::Cell<bool>>,
         /// No tray runs (`tray_status` is `Ok(None)`).
@@ -1805,6 +1850,13 @@ mod tests {
         }
         fn install_update(&self) -> Result<(), String> {
             *self.installs.borrow_mut() += 1;
+            Ok(())
+        }
+        fn check_helper(&self) {
+            *self.helper_checks.borrow_mut() += 1;
+        }
+        fn open_helper(&self, install: bool) -> Result<(), String> {
+            self.helper_opened.borrow_mut().push(install);
             Ok(())
         }
         fn icons(&self, wanted: &[Wanted], size: u32) -> Vec<Option<String>> {
@@ -3017,5 +3069,35 @@ mod tests {
         assert_eq!(reply["ok"], true, "{reply}");
         let text = std::fs::read_to_string(&file).unwrap();
         assert!(text.contains("games") && !text.contains("music"), "{text}");
+    }
+    #[test]
+    fn the_helper_settings_read_its_state_and_open_the_console() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, fake) = bridge(&dir);
+        let status = send(&mut b, json!({"v": 1, "id": 1, "type": "helper_status"}));
+        assert_eq!(status["ok"], true);
+        // One read at a time; the answer is an event.
+        send(&mut b, json!({"v": 1, "id": 9, "type": "helper_status"}));
+        assert_eq!(*fake.helper_checks.borrow(), 1);
+        let summary = crate::helper::setup::Summary {
+            state: "not_installed".to_owned(),
+            ..Default::default()
+        };
+        let event: Value = serde_json::from_str(&b.helper_ready(&summary)).unwrap();
+        assert_eq!(event["event"], "helper_status");
+        assert_eq!(event["data"]["state"], "not_installed");
+        assert_eq!(event["data"]["answers"], false);
+        send(&mut b, json!({"v": 1, "id": 10, "type": "helper_status"}));
+        assert_eq!(*fake.helper_checks.borrow(), 2);
+        let install = send(&mut b, json!({"v": 1, "id": 2, "type": "helper_install"}));
+        assert_eq!(install["ok"], true);
+        let remove = send(&mut b, json!({"v": 1, "id": 3, "type": "helper_uninstall"}));
+        assert_eq!(remove["ok"], true);
+        assert_eq!(*fake.helper_opened.borrow(), vec![true, false]);
+        let extra = send(
+            &mut b,
+            json!({"v": 1, "id": 4, "type": "helper_install", "owner": "S-1-5-18"}),
+        );
+        assert_eq!(extra["ok"], false, "the page cannot name an owner");
     }
 }

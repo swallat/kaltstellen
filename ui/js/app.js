@@ -136,6 +136,55 @@ function renderUpdate() {
   install.textContent = u.available ? `Install ${u.available}` : 'Install';
 }
 
+/** M4: the optional background helper (service state, asked on demand). */
+const HELPER_STATES = {
+  not_installed: ['Not installed', 'Not installed. Everything works without it.'],
+  stopped: ['Stopped', 'Installed, but the service is stopped.'],
+  starting: ['Starting', 'The service is starting.'],
+  running: ['Running', 'Installed and running.'],
+  stopping: ['Stopping', 'The service is stopping.'],
+  other: ['Other state', 'The service is in a state this window does not know.'],
+  unknown: ['Unknown', 'The state of the service could not be read.'],
+};
+
+function renderHelper(info) {
+  const [pill, text] = HELPER_STATES[info.state] || HELPER_STATES.unknown;
+  const installed = !['not_installed', 'unknown'].includes(info.state);
+  $('helper-pill').textContent = pill;
+  $('helper-pill').classList.toggle('warn', info.state === 'unknown' || info.state === 'stopped' || (installed && !info.answers));
+  const parts = [text];
+  if (info.answers) parts.push(`Answers on its pipe${info.version ? `, version ${info.version}` : ''}.`);
+  else if (installed) parts.push('It does not answer on its pipe.');
+  parts.push(info.roles.length ? `Roles switched on: ${info.roles.join(', ')}.` : '');
+  $('helper-state').textContent = parts.filter(Boolean).join(' ');
+  $('helper-notes').replaceChildren(...info.notes.map((note) => el('li', { text: note })));
+  $('helper-install').textContent = installed ? 'Update' : 'Install';
+  // Unknown may still be an installed service, so Remove stays reachable.
+  $('helper-uninstall').hidden = info.state === 'not_installed';
+  // Back from a started step: the buttons work again.
+  $('helper-install').disabled = false;
+  $('helper-uninstall').disabled = false;
+}
+
+/** The host reads in the background and answers with a `helper_status`
+ * event; a request while one runs is folded into it. */
+async function loadHelper() {
+  const reply = await request('helper_status');
+  if (!reply.ok) renderHelper({ state: 'unknown', answers: false, version: null, roles: [], notes: [reply.error] });
+}
+
+/** One console at a time: the buttons wait until Refresh (or the next
+ * time the window is entered) reads the state again. */
+async function runHelperStep(type) {
+  $('helper-install').disabled = true;
+  $('helper-uninstall').disabled = true;
+  const reply = await call(type);
+  if (!reply.ok) {
+    $('helper-install').disabled = false;
+    $('helper-uninstall').disabled = false;
+  }
+}
+
 function renderProfiles() {
   const list = $('profile-list');
   list.replaceChildren(...state.profiles.map((profile) => {
@@ -554,6 +603,7 @@ addEventListener('scroll', () => {
 function showSettings(section = null) {
   view = 'settings';
   render();
+  loadHelper();
   // Scroll the content area only. scrollIntoView would also scroll the
   // window itself (the body is hidden, but still scrollable by script),
   // which pushed the header out of sight with nothing to scroll back.
@@ -1594,6 +1644,9 @@ $('autostart').addEventListener('change', (event) => call('set_autostart', { on:
 $('automation').addEventListener('change', (event) => call('set_automation', { on: event.target.checked }));
 $('check-updates').addEventListener('click', () => call('check_updates'));
 $('install-update').addEventListener('click', () => call('install_update'));
+$('helper-refresh').addEventListener('click', loadHelper);
+$('helper-install').addEventListener('click', () => runHelperStep('helper_install'));
+$('helper-uninstall').addEventListener('click', () => runHelperStep('helper_uninstall'));
 
 /** M5: back in the window, the state is asked for again, so markers of
  * errors that resolved meanwhile go (and the active profile is current).
@@ -1602,6 +1655,7 @@ let lastRefresh = 0;
 addEventListener('focus', async () => {
   if (!state || document.querySelector('dialog[open]') || Date.now() - lastRefresh < 2000) return;
   lastRefresh = Date.now();
+  if (view === 'settings') loadHelper();
   const reply = await request('get_state');
   if (reply.ok && !document.querySelector('dialog[open]')) {
     forgetAbout();
@@ -1618,6 +1672,7 @@ onEvent(async (event) => {
     await loadUnassigned();
   }
   if (event.event === 'update_checked') adopt(event.state);
+  if (event.event === 'helper_status') renderHelper(event.data);
   // M2, N1: the host read more about programs; fill what was pending.
   if (event.event === 'program_info') {
     aboutEvents++;

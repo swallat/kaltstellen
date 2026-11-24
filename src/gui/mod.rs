@@ -214,6 +214,8 @@ enum Kind {
     Watchdog,
     /// M2: the reader knows more about programs.
     Info,
+    /// M4: the read of the helper's state ended; `stderr` holds it as JSON.
+    Helper,
 }
 
 struct Applied {
@@ -530,6 +532,34 @@ impl Host for RealHost {
         Ok(())
     }
 
+    fn check_helper(&self) {
+        let results = self.results.clone();
+        let waker = self.waker.clone();
+        thread::spawn(move || {
+            let summary = crate::helper::setup::summary();
+            let _ = results.send(Applied {
+                kind: Kind::Helper,
+                target: String::new(),
+                code: 0,
+                stderr: serde_json::to_string(&summary).unwrap_or_default(),
+            });
+            waker.wake();
+        });
+    }
+
+    fn open_helper(&self, install: bool) -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        let exe = std::env::current_exe().map_err(|e| format!("own path: {e}"))?;
+        let verb = if install { "install" } else { "uninstall" };
+        Command::new(exe)
+            .args(["helper", verb, "--from-window"])
+            .creation_flags(CREATE_NEW_CONSOLE)
+            .spawn()
+            .map(|child| info!("window: helper {verb} started (pid {})", child.id()))
+            .map_err(|e| format!("cannot start the {verb} step: {e}"))
+    }
+
     fn apply(&self, profile: &str) {
         let exe = std::env::current_exe();
         let results = self.results.clone();
@@ -670,6 +700,11 @@ impl Page for GuiPage {
             if applied.kind == Kind::Info {
                 // One event for all that arrived meanwhile.
                 info = true;
+                continue;
+            }
+            if applied.kind == Kind::Helper {
+                let summary = serde_json::from_str(&applied.stderr).unwrap_or_default();
+                answers.push(Answer::Reply(self.bridge.helper_ready(&summary)));
                 continue;
             }
             if applied.kind == Kind::Check {
