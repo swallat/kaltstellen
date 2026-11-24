@@ -93,8 +93,11 @@ if (-not $Arch) {
     $Arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
 }
 if (-not $Version) {
-    $line = (& $Exe --version | Select-Object -First 1)
-    if ($LASTEXITCODE -ne 0 -or $line -notmatch '^kaltstellen (\S+)$') {
+    # All of the output: a pipeline that stops early leaves no exit code.
+    $lines = @(& $Exe --version)
+    $code = $LASTEXITCODE
+    $line = if ($lines.Count -gt 0) { $lines[0] } else { '' }
+    if ($code -ne 0 -or $line -notmatch '^kaltstellen (\S+)$') {
         throw "cannot read the version of $Exe ($line)"
     }
     $Version = $Matches[1]
