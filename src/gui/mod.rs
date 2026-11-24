@@ -290,6 +290,18 @@ impl Host for RealHost {
         views
     }
 
+    fn sample(&self) -> crate::load::Sample {
+        let state = Store::new(&self.data).peek().unwrap_or_default();
+        crate::load::Sample {
+            processes: Snapshot::take()
+                .map(|s| s.processes().to_vec())
+                .unwrap_or_default(),
+            connections: crate::win32::net::by_process(),
+            frozen: state.suspended.iter().map(|r| (r.pid, r.created)).collect(),
+            cpus: thread::available_parallelism().map_or(1, |n| n.get() as u32),
+        }
+    }
+
     fn snapshot(&self, entries: &[crate::config::App]) -> crate::snapshot::Groups {
         let state = Store::new(&self.data).peek().unwrap_or_default();
         let (seen, problem) = crate::unassigned::load(&self.data);

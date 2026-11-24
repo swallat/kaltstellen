@@ -74,6 +74,25 @@ struct RawProcess {
     inherited_from_unique_process_id: usize,
     handle_count: u32,
     session_id: u32,
+    unique_process_key: usize,
+    peak_virtual_size: usize,
+    virtual_size: usize,
+    page_fault_count: u32,
+    peak_working_set_size: usize,
+    working_set_size: usize,
+    quota_peak_paged_pool_usage: usize,
+    quota_paged_pool_usage: usize,
+    quota_peak_non_paged_pool_usage: usize,
+    quota_non_paged_pool_usage: usize,
+    pagefile_usage: usize,
+    peak_pagefile_usage: usize,
+    private_page_count: usize,
+    read_operation_count: i64,
+    write_operation_count: i64,
+    other_operation_count: i64,
+    read_transfer_count: i64,
+    write_transfer_count: i64,
+    other_transfer_count: i64,
 }
 
 const _: () = {
@@ -81,9 +100,11 @@ const _: () = {
     assert!(std::mem::offset_of!(RawProcess, image_name_buffer) == 64);
     assert!(std::mem::offset_of!(RawProcess, unique_process_id) == 80);
     assert!(std::mem::offset_of!(RawProcess, session_id) == 100);
+    assert!(std::mem::offset_of!(RawProcess, read_transfer_count) == 232);
+    assert!(std::mem::offset_of!(RawProcess, other_transfer_count) == 248);
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProcessInfo {
     pub pid: u32,
     pub parent_pid: u32,
@@ -96,6 +117,12 @@ pub struct ProcessInfo {
     /// Private working set in bytes, from the same system query (no
     /// handle needed); shown when programs are picked in the main window.
     pub private_bytes: u64,
+    /// Kernel plus user time in 100 ns units (H2); a delta over an interval
+    /// is the CPU the process used.
+    pub cpu_time: u64,
+    /// Read, write and other transfer counts together, in bytes (H2): files,
+    /// pipes and sockets alike, never "network".
+    pub io_bytes: u64,
 }
 
 /// A process protected like kaltstellen itself for one job (T16): the
@@ -354,6 +381,10 @@ fn query_processes() -> Result<Vec<ProcessInfo>> {
             session_id: raw.session_id,
             created: raw.create_time as u64,
             private_bytes: raw.working_set_private_size.max(0) as u64,
+            cpu_time: (raw.kernel_time.max(0) as u64).saturating_add(raw.user_time.max(0) as u64),
+            io_bytes: (raw.read_transfer_count.max(0) as u64)
+                .saturating_add(raw.write_transfer_count.max(0) as u64)
+                .saturating_add(raw.other_transfer_count.max(0) as u64),
         });
         if raw.next_entry_offset == 0 {
             break;
@@ -864,7 +895,7 @@ mod tests {
             name: name.to_owned(),
             session_id: session,
             created,
-            private_bytes: 0,
+            ..ProcessInfo::default()
         }
     }
 

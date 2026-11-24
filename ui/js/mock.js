@@ -303,6 +303,17 @@ function handle(message) {
       state.status = `${m.entries.length} entries added to "${profile.name}"; saved.`;
       return { ok: true };
     }
+    case 'measure_start': return { ok: true };
+    case 'measure': {
+      const data = m.programs.map((exe, i) => ({
+        exe, frozen: exe === 'chat.exe', private_bytes: 0,
+        cpu: exe === 'chat.exe' ? null : [0.12, 0.004, 0.03, 0.0][i % 4],
+        io_per_s: exe === 'chat.exe' ? null : [3_500_000, 2048, 90_000, 0][i % 4],
+        tcp: i % 3, udp: i % 2,
+        heavy: i === 0 ? '12 % CPU, 3.3 MB/s I/O' : (exe === 'browser.exe' ? '1.2 GB memory' : null),
+      }));
+      return { ok: true, data: { interval_ms: 1500, programs: data } };
+    }
     case 'preview': {
       const p = state.profiles.find((q) => q.name.toLowerCase() === String(m.profile).toLowerCase());
       if (!p) return fail(`no profile named "${m.profile}"`);

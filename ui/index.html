@@ -365,10 +365,14 @@
         <button type="button" class="button small" id="snapshot-everything">Everything as it is now</button>
         <button type="button" class="button small" id="snapshot-clear">Clear</button>
         <button type="button" class="button small" id="snapshot-refresh">Refresh</button>
+        <button type="button" class="button small" id="snapshot-measure">Measure again</button>
+        <label class="inline"><input type="checkbox" id="snapshot-heavy"> Heavy only</label>
+        <label class="inline"><input type="checkbox" id="snapshot-sort"> Sort by load</label>
         <label class="inline"><input type="checkbox" id="snapshot-background"> Show background programs</label>
       </div>
       <div class="scroll" id="snapshot-groups"></div>
-      <p class="hint">Arguments and working folders are not taken: kaltstellen does not read the command lines of running programs. Programs without a known path can only be left as they are.</p>
+      <p class="hint" id="snapshot-measuring" aria-live="polite"></p>
+      <p class="hint">Load is an average over a short measurement, not a peak. I/O counts files, pipes and network together; connections only show that a program talks to the network, not how much. Arguments and working folders are not taken: kaltstellen does not read the command lines of running programs. Programs without a known path can only be left as they are.</p>
       <p class="error" id="snapshot-error" role="alert"></p>
       <div class="dialog-actions">
         <button type="button" class="button" data-close>Cancel</button>

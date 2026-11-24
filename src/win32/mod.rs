@@ -15,6 +15,7 @@ pub mod hash;
 pub mod http;
 pub mod icon;
 pub mod instance;
+pub mod net;
 pub mod pipe;
 pub mod registry;
 pub mod tray;
