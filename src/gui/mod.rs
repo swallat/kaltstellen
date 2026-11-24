@@ -214,6 +214,8 @@ enum Kind {
     Watchdog,
     /// M2: the reader knows more about programs.
     Info,
+    /// M4: the read of the helper's state ended; `stderr` holds it as JSON.
+    Helper,
 }
 
 struct Applied {
@@ -530,8 +532,19 @@ impl Host for RealHost {
         Ok(())
     }
 
-    fn helper_summary(&self) -> crate::helper::setup::Summary {
-        crate::helper::setup::summary()
+    fn check_helper(&self) {
+        let results = self.results.clone();
+        let waker = self.waker.clone();
+        thread::spawn(move || {
+            let summary = crate::helper::setup::summary();
+            let _ = results.send(Applied {
+                kind: Kind::Helper,
+                target: String::new(),
+                code: 0,
+                stderr: serde_json::to_string(&summary).unwrap_or_default(),
+            });
+            waker.wake();
+        });
     }
 
     fn open_helper(&self, install: bool) -> Result<(), String> {
@@ -687,6 +700,11 @@ impl Page for GuiPage {
             if applied.kind == Kind::Info {
                 // One event for all that arrived meanwhile.
                 info = true;
+                continue;
+            }
+            if applied.kind == Kind::Helper {
+                let summary = serde_json::from_str(&applied.stderr).unwrap_or_default();
+                answers.push(Answer::Reply(self.bridge.helper_ready(&summary)));
                 continue;
             }
             if applied.kind == Kind::Check {

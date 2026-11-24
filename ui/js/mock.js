@@ -444,7 +444,8 @@ function handle(message) {
       state.status = `Installing ${state.update.available} in a separate window…`;
       return { ok: true };
     case 'helper_status':
-      return { ok: true, data: { state: 'not_installed', answers: false, version: null, roles: [], notes: [] } };
+      setTimeout(() => emit({ v: 1, event: 'helper_status', data: { state: 'not_installed', answers: false, version: null, roles: [], notes: [] } }), 50);
+      return { ok: true };
     case 'helper_install':
       state.status = 'Installing the background helper in a separate window…';
       return { ok: true };

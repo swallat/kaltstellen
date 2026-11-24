@@ -361,17 +361,17 @@ pub fn describe(
 
 /// What the window's settings show about the helper: the same facts as
 /// `helper status`, as data.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Summary {
     /// `not_installed`, `stopped`, `starting`, `running`, `stopping`,
     /// `other` or `unknown` (the service state could not be read).
-    pub state: &'static str,
+    pub state: String,
     /// Whether the pipe answered as the helper.
     pub answers: bool,
     /// Version of the running helper.
     pub version: Option<String>,
     /// Roles switched on in the policy file.
-    pub roles: Vec<&'static str>,
+    pub roles: Vec<String>,
     /// Anything the page should say besides the state: why the state is
     /// unknown, an outdated helper, a pipe that is not the helper.
     pub notes: Vec<String>,
@@ -405,7 +405,7 @@ pub fn summarize(
         ]
         .iter()
         .filter(|(on, _)| *on)
-        .map(|(_, name)| *name)
+        .map(|(_, name)| (*name).to_owned())
         .collect(),
         Err(reason) => {
             if report.service.is_some() {
@@ -429,7 +429,7 @@ pub fn summarize(
         }
     };
     Summary {
-        state,
+        state: state.to_owned(),
         answers,
         version,
         roles,
@@ -445,7 +445,7 @@ pub fn summary() -> Summary {
             summarize(&report, &answer)
         }
         Err(err) => Summary {
-            state: "unknown",
+            state: "unknown".to_owned(),
             notes: vec![err.to_string()],
             ..Summary::default()
         },

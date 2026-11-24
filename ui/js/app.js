@@ -159,13 +159,30 @@ function renderHelper(info) {
   $('helper-state').textContent = parts.filter(Boolean).join(' ');
   $('helper-notes').replaceChildren(...info.notes.map((note) => el('li', { text: note })));
   $('helper-install').textContent = installed ? 'Update' : 'Install';
-  $('helper-uninstall').hidden = !installed;
+  // Unknown may still be an installed service, so Remove stays reachable.
+  $('helper-uninstall').hidden = info.state === 'not_installed';
+  // Back from a started step: the buttons work again.
+  $('helper-install').disabled = false;
+  $('helper-uninstall').disabled = false;
 }
 
+/** The host reads in the background and answers with a `helper_status`
+ * event; a request while one runs is folded into it. */
 async function loadHelper() {
   const reply = await request('helper_status');
-  if (reply.ok) renderHelper(reply.data);
-  else renderHelper({ state: 'unknown', answers: false, version: null, roles: [], notes: [reply.error] });
+  if (!reply.ok) renderHelper({ state: 'unknown', answers: false, version: null, roles: [], notes: [reply.error] });
+}
+
+/** One console at a time: the buttons wait until Refresh (or the next
+ * time the window is entered) reads the state again. */
+async function runHelperStep(type) {
+  $('helper-install').disabled = true;
+  $('helper-uninstall').disabled = true;
+  const reply = await call(type);
+  if (!reply.ok) {
+    $('helper-install').disabled = false;
+    $('helper-uninstall').disabled = false;
+  }
 }
 
 function renderProfiles() {
@@ -1559,8 +1576,8 @@ $('automation').addEventListener('change', (event) => call('set_automation', { o
 $('check-updates').addEventListener('click', () => call('check_updates'));
 $('install-update').addEventListener('click', () => call('install_update'));
 $('helper-refresh').addEventListener('click', loadHelper);
-$('helper-install').addEventListener('click', () => call('helper_install'));
-$('helper-uninstall').addEventListener('click', () => call('helper_uninstall'));
+$('helper-install').addEventListener('click', () => runHelperStep('helper_install'));
+$('helper-uninstall').addEventListener('click', () => runHelperStep('helper_uninstall'));
 
 /** M5: back in the window, the state is asked for again, so markers of
  * errors that resolved meanwhile go (and the active profile is current).
@@ -1586,6 +1603,7 @@ onEvent(async (event) => {
     await loadUnassigned();
   }
   if (event.event === 'update_checked') adopt(event.state);
+  if (event.event === 'helper_status') renderHelper(event.data);
   // M2, N1: the host read more about programs; fill what was pending.
   if (event.event === 'program_info') {
     aboutEvents++;
