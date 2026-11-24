@@ -1666,7 +1666,7 @@ function Test-Tray {
     $null = Start-Tray
     Set-Neutral
     Invoke-Step tray icon 'Icon, tooltip and menu (manual-checks "Tray icon and menu" 1-3)' -Human -Say @(
-        'Find the kaltstellen icon in the notification area (maybe in the overflow area): a blue tile, sharp at your scaling and on a second monitor.',
+        'Find the kaltstellen icon in the notification area (maybe in the overflow area): a grey window with mint icicles, sharp at your scaling and on a second monitor.',
         'Hover: the tooltip reads "kaltstellen: neutral".',
         'Right click and left click: the menu lists the beta-* profiles, Neutral (checked), Open kaltstellen..., Quit, and no settings (no Start at sign-in, Automatic switching or Updates: lines; they are in the main window); clicking elsewhere closes it.'
     ) -Check {
@@ -1679,14 +1679,14 @@ function Test-Tray {
     $null = Request-Running $script:Programs.suspend
     Invoke-Step tray profile 'Choose a profile from the menu (step 4)' -Freeze -Human -Robot { $null = Invoke-Ks switch --no-wait beta-freeze } -Say @(
         'Choose "beta-freeze" in the tray menu.',
-        'Expect: the icon turns orange, the tooltip names the profile, the profile is checked.'
+        'Expect: the icon turns violet, the tooltip names the profile, the profile is checked.'
     ) -Check {
         param($since)
         $line = Wait-Log '(menu asks for|command line asks for switch to) "beta-freeze"' $since 10 -Regex
         $null = Wait-Log 'switch to "beta-freeze" finished' $since 30
         $f = Get-FreezeReport $script:Programs.suspend
         @{ ok = ([bool]$line -and (Get-Active) -eq 'beta-freeze' -and $f.all); m = [ordered]@{ menu_line = [bool]$line; frozen = $f.detail } }
-    } -Ask 'Icon orange, tooltip names beta-freeze, the profile checked?'
+    } -Ask 'Icon violet, tooltip names beta-freeze, the profile checked?'
     Set-Neutral
 
     $cfg = Join-Path $script:ConfigDir 'config.toml'
@@ -1703,9 +1703,9 @@ function Test-Tray {
             param($since)
             $cc = Invoke-Ks check-config
             @{ ok = ($cc.Code -ne 0) }
-        } -Ask 'Red icon and "Configuration invalid" in the menu?' -Human -Robot {}
+        } -Ask 'Orange icon with a warning triangle and "Configuration invalid" in the menu?' -Human -Robot {}
     } finally { Write-Utf8 $cfg $original }
-    Invoke-Step tray config-fixed 'Configuration fixed again' -Human -Robot {} -Say @('The file is fixed again. Open the menu: the error is gone, the icon is blue.') -Check {
+    Invoke-Step tray config-fixed 'Configuration fixed again' -Human -Robot {} -Say @('The file is fixed again. Open the menu: the error is gone, the icon is grey.') -Check {
         param($since)
         $cc = Invoke-Ks check-config
         @{ ok = ($cc.Code -eq 0) }
@@ -1964,7 +1964,7 @@ function Test-Window {
 
     $null = Request-Running $script:Programs.suspend
     Invoke-Step window apply 'Apply profile (step 8)' -Freeze -Human -Robot { $null = Invoke-Ks switch beta-freeze } -Say @(
-        'Select "beta-freeze" in the window and press "Apply profile": the button shows "Applying...", then the status line the result; the tray icon turns orange.'
+        'Select "beta-freeze" in the window and press "Apply profile": the button shows "Applying...", then the status line the result; the tray icon turns violet.'
     ) -Check {
         param($since)
         $line = Wait-Log 'switch to "beta-freeze"' $since 10
@@ -2037,14 +2037,14 @@ function Test-Failure {
         [ordered]@{ exit = $r.Code; output = ($r.Output -join ' | ') }
     } -Say @(
         'The script applied "beta-failure": its start entry points at a program that does not exist.',
-        'Tray: the icon is red with an exclamation mark, the menu shows the error line; opening and closing the menu changes nothing.',
+        'Tray: the icon is orange with a warning triangle, the menu shows the error line; opening and closing the menu changes nothing.',
         'Window, profile beta-failure: the start entry has a red mark "KS110 start failed", hovering shows the whole error, the row has a red edge; other entries and profiles show nothing.'
     ) -Check {
         param($since)
         $r = $script:Ctx.failure
         $f = Get-FreezeReport @($first)
         @{ ok = ($r.Code -eq 1 -and $r.Text -match 'KS110' -and $f.all); m = [ordered]@{ frozen = $f.detail } }
-    } -Ask 'Red icon, error line in the menu, marker in the window as described?' -AskNote
+    } -Ask 'Orange icon with a warning triangle, error line in the menu, marker in the window as described?' -AskNote
 
     $resolve = [pscustomobject]@{ exe = 'ks-beta-missing.exe'; path = $missing; args = @('-n', '600', '127.0.0.1'); disposable = $true; hidden = $true }
     Invoke-Step failure resolves 'The error resolves by itself' -Prepare {
@@ -2054,14 +2054,14 @@ function Test-Failure {
         [ordered]@{ started = 'ks-beta-missing.exe (a copy of ping.exe) at the missing path' }
     } -Say @(
         'The script put a program at that path and started it.',
-        'Within about 30 s (or when the menu opens) the tray icon turns orange again without a switch.',
+        'Within about 30 s (or when the menu opens) the tray icon turns violet again without a switch.',
         'Click into another window and back into kaltstellen: the marker is gone.'
     ) -Check {
         param($since)
         $sw = [Diagnostics.Stopwatch]::StartNew()
         $line = Wait-Log 'tray: error resolved by itself' $script:Ctx.resolve_since 45
         @{ ok = [bool]$line; m = [ordered]@{ resolved_line = $(if ($line) { $line.Substring(24).Trim() }); waited_ms = $sw.ElapsedMilliseconds } }
-    } -Ask 'Icon orange again and the marker gone?'
+    } -Ask 'Icon violet again and the marker gone?'
 
     Invoke-Step failure clean 'A clean switch removes all markers' -Prepare {
         $r = Switch-Profile neutral
@@ -2186,14 +2186,14 @@ function Test-Hotkeys {
     $null = Request-Running $script:Programs.suspend
     Invoke-Step hotkeys press "A real key press (manual-checks ""Hotkeys"" 1, T17)" -Freeze -Human -Robot { Send-Hotkey $hk } -Say @(
         "Press $hk once briefly. Then press it a second time and hold it for 2 s.",
-        'Expect: "beta-freeze" is applied (icon orange), once per press even when held down.'
+        'Expect: "beta-freeze" is applied (icon violet), once per press even when held down.'
     ) -Check {
         param($since)
         Start-Sleep -Milliseconds 800
         $hits = Find-Log 'hotkey asks for "beta-freeze"' $since -All
         $f = Get-FreezeReport $script:Programs.suspend
         @{ ok = ($hits.Count -eq 2 -and (Get-Active) -eq 'beta-freeze'); m = [ordered]@{ hotkey_requests = $hits.Count; frozen = $f.detail } }
-    } -Ask 'The icon turned orange on the first press?'
+    } -Ask 'The icon turned violet on the first press?'
     Set-Neutral
 
     Invoke-Step hotkeys taken 'A hotkey that is taken (step 2)' -Human -Robot {} -Prepare {
@@ -2436,7 +2436,7 @@ function Test-TriggersSteps {
         if ($script:Ctx.trigger_end_seen -eq $false) { Write-Note "   the tray did not report the end of $($tr.exe) within 15 s" }
     }
     Invoke-Step triggers applies 'The trigger applies its profile (step 3)' -Freeze -Prepare $startTrigger -Say @(
-        "Within about 5 s after $($tr.exe) started: icon orange, tooltip ends in ""(by trigger)"", a notification ""kaltstellen: beta-trigger"" appears;",
+        "Within about 5 s after $($tr.exe) started: icon violet, tooltip ends in ""(by trigger)"", a notification ""kaltstellen: beta-trigger"" appears;",
         "the menu shows ""Applied by trigger $($tr.exe); back to neutral when it ends"" and starts with ""Back to neutral"". Do not click the notification yet."
     ) -Check {
         param($since)
