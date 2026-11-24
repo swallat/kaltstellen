@@ -1,11 +1,10 @@
 # Design note: the optional background helper (M4; A5, P7, P8, W6, H2, H5)
 
-Status: decided on 2026-11-24 (see the end), partly implemented as the milestones say. Requested by the owner on 2026-11-24 **[decided]**: an
+Status: decided on 2026-11-24 (five decisions at the end); not implemented yet. Requested by the owner on 2026-11-24 **[decided]**: an
 optional background component with administrator rights that can be
 installed later, while a portable version without administrator rights stays
 possible. The owner chose the widest scope (watching, acting on elevated
-programs, Windows services). Everything below the request is **[assumed]**
-until the owner has reviewed it. Implementation follows the milestones below.
+programs, Windows services). The five decisions at the end are **[decided]**; everything else is **[assumed]** until the owner has reviewed it. Implementation follows the milestones below.
 
 This note extends [design-elevated-helper.md](design-elevated-helper.md)
 (services only, request driven). Its pipe trust model, allow list and
@@ -60,8 +59,7 @@ differ, this note wins.
   Changed only from an elevated prompt (`kaltstellen helper allow ...`).
 - Account: `LocalSystem` with every privilege the service does not need
   removed (required-privileges list: the ones for kernel event sessions,
-  opening processes of the owner's session, and `SeChangeNotify`). Open
-  question below.
+  opening processes of the owner's session, and `SeChangeNotify`). Decided: see the end of this note.
 
 ## Roles
 
@@ -102,7 +100,7 @@ differ, this note wins.
   programs reported by *observe* are matched against the active profile and
   handled by the tray in the same way as in a switch (W1 order for that
   program, W7), on request of the owner only when the profile has
-  `watch = true` **[assumed]** (a new optional profile key; nothing is
+  `watch = true` **[decided]** (a new optional profile key, default off; nothing is
   automatic otherwise).
 - The helper acts only for what the tray cannot (P7): elevated programs.
   Requests: `suspend`, `resume`, `terminate` for a PID with its creation
@@ -138,8 +136,7 @@ differ, this note wins.
   can run any file, and a portable copy must be able to use the helper. The
   protection is therefore the allow lists, the hard-protected list, the
   owner and session checks and the bounded verbs above, not who the client
-  is. Once the executable is signed (R7), the helper may additionally
-  require the signature of the installed publisher.
+  is. The helper does not rely on a signature (decision 4); once the project has a certificate it may additionally require the signature of the installed publisher.
 - Versioned JSON lines, size-limited, `deny_unknown_fields`; one request at a
   time per client; every request and refusal logged to the event log and
   `%ProgramData%\kaltstellen\helper.log`.
@@ -156,20 +153,18 @@ differ, this note wins.
   lazy behaviour (W6, N1, H5 with two lists) and shows an info line, the
   state of what the helper froze is resumed by the helper itself (above).
 
-## Limits and risks (to go into spec section 13 when accepted)
+## Limits and risks (R13 to R15, to go into spec section 13)
 
 - **R13** A `LocalSystem` service that can freeze and end processes is a
   target; its safety is the allow lists, the checks above and a small
-  separately reviewed module, not secrecy. An unsigned executable cannot be
-  verified by the helper (R7).
+  separately reviewed module, not secrecy. An unsigned executable cannot be verified by the helper.
 - **R14** Kernel network events are high volume under load; the helper
   counts bytes per PID only and may lose events, which it logs. Values are
   per second counters, not a record of traffic.
 - **R15** Antivirus and endpoint products watch services that suspend and end
-  processes and open kernel event sessions; the helper needs signing and a
-  test with Defender (T21) before a release offers it.
+  processes and open kernel event sessions; the helper is offered unsigned, so SmartScreen and antivirus products may warn (decision 4); the test with Defender (T21) still applies.
 
-## Milestones (proposal, replaces M4 of section 11)
+## Milestones (replaces M4 of section 11)
 
 - M4a: `helper` subcommand, service install and uninstall, protected copy,
   pipe, trust checks, `status`, the `Background helper` entry in `Settings`.
@@ -188,8 +183,5 @@ Each step is useful on its own and ships behind the helper being installed.
 2. **Start**: automatic (delayed).
 3. **`watch`**: opt-in key per profile.
 4. **Code signing**: none for now, a certificate comes when the project is
-   better known. The helper is built, tested and offered unsigned. Where the
-   text above says it waits for a certificate (R7, R15, milestones), that no
-   longer holds: the helper never relies on a signature, and the setup says
-   that the file is unsigned.
+   better known. The helper is built, tested and offered unsigned. The helper never relies on a signature, and the setup says that the file is unsigned.
 5. **Elevated-program allow list**: changed only from an elevated prompt.

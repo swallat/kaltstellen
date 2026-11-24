@@ -345,8 +345,7 @@ Decided by the owner on 2026-11-24:
 2. Automatic (delayed) start, so no process start is missed.
 3. `watch` is an opt-in key per profile (default off).
 4. **No code-signing certificate for now**; one comes when the project is
-   better known. The helper therefore ships unsigned. It cannot check the
-   publisher of its clients (R7), SmartScreen and antivirus products may warn
+   better known. The helper therefore ships unsigned. It cannot check the publisher of its clients, SmartScreen and antivirus products may warn
    (R15). Safety rests on the protected copy, the allow lists and the checks.
 5. The allow list of elevated programs is changed only from an elevated
    prompt (`kaltstellen helper allow ...`), not from the window.
@@ -371,8 +370,7 @@ Decided to be settled later, at the point named:
 1. **L7 session end, wait time**: `WM_QUERYENDSESSION` waits at most 4 s for
    the resume; fixed once VM test T20 has measured a real shutdown.
 2. **Elevated helper for services (A5, P8)**: the proposal in
-   [design-elevated-helper.md](design-elevated-helper.md) stays a proposal,
-   to be decided in detail later.
+   [design-elevated-helper.md](design-elevated-helper.md) stays a proposal, to be decided in detail later. Superseded for the optional helper by "Decided: optional background helper" above; the helper note now covers services too.
 3. **Update signing (UP1)**: integrity by SHA-256 from `checksums.txt` only
    for now. Signing (Authenticode certificate or an own key pair) is decided
    together with the release pipeline.
