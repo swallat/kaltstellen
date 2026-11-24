@@ -1004,6 +1004,47 @@ function snapEverything() {
   for (const row of snap.data.seen) if (row.protection !== 'warn' && snapShown(row)) set(row, 'stop');
 }
 
+const snapShort = { none: 'Not', ignore: 'As is', suspend: 'Freeze', stop: 'Stop', start: 'Run' };
+const snapKeyNumber = (value) => snapshotChoices.findIndex(([v]) => v === value) + 1;
+
+/** Sets one action for rows by key. A row that cannot have it (an elevated
+ * program cannot be frozen, `Keep running` needs a path) keeps what it has,
+ * and a warn-list program is never confirmed here (P6). */
+function snapSet(keys, action, focusKey) {
+  const rows = new Map(snapRows().map((r) => [snapKey(r), r]));
+  for (const key of keys) {
+    const row = rows.get(key);
+    if (!row || !snapOptions(row).some(([v]) => v === action)) continue;
+    snap.choices.set(key, { action, confirmed: false });
+  }
+  snapRender(focusKey, action);
+}
+
+function snapMark(key, on, range) {
+  if (range && snap.last && snap.order.includes(snap.last)) {
+    const [a, b] = [snap.order.indexOf(snap.last), snap.order.indexOf(key)].sort((x, y) => x - y);
+    for (const k of snap.order.slice(a, b + 1)) snap.sel.add(k);
+  } else if (on) snap.sel.add(key);
+  else snap.sel.delete(key);
+  snap.last = key;
+  snapRender(key, 'mark');
+}
+
+/** Renders again and puts the keyboard focus back where it was (or on the
+ * row and button named), so keyboard use survives every re-render. */
+function snapRender(focusKey, action) {
+  renderSnapshot(focusKey, action);
+}
+
+function snapBulkBar() {
+  const bar = $('snapshot-bulk');
+  // What a filter hides is not selected any more.
+  for (const key of [...snap.sel]) if (!snap.order.includes(key)) snap.sel.delete(key);
+  const count = snap.sel.size;
+  bar.hidden = count === 0;
+  $('snapshot-bulk-count').textContent = `${count} selected`;
+}
+
 function snapTable(title, rows, note) {
   if ($('snapshot-heavy').checked) rows = rows.filter((r) => snap.load.get(r.exe.toLowerCase())?.heavy);
   if ($('snapshot-tray').checked) rows = rows.filter((r) => r.tray);
@@ -1015,21 +1056,29 @@ function snapTable(title, rows, note) {
   for (const row of rows) {
     const key = snapKey(row);
     const choice = snap.choices.get(key) || { action: 'none', confirmed: false };
-    const select = el('select', { 'aria-label': `Action for ${row.exe}`, class: row.suggestion ? 'suggested' : null },
-      ...snapOptions(row).map(([value, label]) => el('option', { value, text: label })));
-    select.value = snapOptions(row).some(([v]) => v === choice.action) ? choice.action : 'none';
+    const options = snapOptions(row);
+    const current = options.some(([v]) => v === choice.action) ? choice.action : 'none';
     const confirm = el('input', { type: 'checkbox', 'aria-label': `I confirm for ${row.exe}` });
     confirm.checked = choice.confirmed;
     const confirmCell = el('label', { class: 'inline' }, confirm, ' I confirm');
-    const sync = () => {
-      snap.choices.set(key, { action: select.value, confirmed: confirm.checked });
-      confirmCell.hidden = !(row.protection === 'warn' && (select.value === 'suspend' || select.value === 'stop'));
+    const needsConfirm = (action) => row.protection === 'warn' && (action === 'suspend' || action === 'stop');
+    confirmCell.hidden = !needsConfirm(current);
+    confirm.addEventListener('change', () => {
+      snap.choices.set(key, { action: current, confirmed: confirm.checked });
       snapUpdateOk();
-    };
-    select.addEventListener('change', sync);
-    confirm.addEventListener('change', sync);
-    confirmCell.hidden = !(row.protection === 'warn' && (select.value === 'suspend' || select.value === 'stop'));
-    body.append(el('tr', {},
+    });
+    const segment = el('span', { class: row.suggestion ? 'seg suggested' : 'seg', role: 'group', 'aria-label': `Action for ${row.exe}` },
+      ...options.map(([value, label]) => el('button', {
+        type: 'button', 'data-a': value, 'aria-pressed': String(value === current), 'aria-label': `${label}, ${row.exe}`, title: `${label} (key ${snapKeyNumber(value)})`,
+        text: snapShort[value],
+        onclick: () => snapSet([key], value, key),
+      })));
+    const mark = el('input', { type: 'checkbox', 'aria-label': `Select ${row.exe}` });
+    mark.checked = snap.sel.has(key);
+    mark.addEventListener('click', (event) => snapMark(key, mark.checked, event.shiftKey));
+    snap.order.push(key);
+    body.append(el('tr', { 'data-key': key, tabindex: '0', class: snap.sel.has(key) ? 'selected' : null },
+      el('td', { class: 'mark' }, mark),
       el('td', {}, el('div', { class: 'program' }, programIcon(row.exe, null),
         el('span', { class: 'names' }, el('span', { class: 'exe', text: row.exe }),
           row.path ? el('span', { class: 'path', text: row.path }) : el('span', { class: 'path', text: row.elevated ? 'higher integrity, path not readable' : 'path not known' }),
@@ -1040,10 +1089,10 @@ function snapTable(title, rows, note) {
           ...snapWarnings(row).map((text) => el('span', { class: 'diff-tag only_a', text }))))),
       el('td', { class: 'num', text: row.private_bytes ? megabytes(row.private_bytes) : '' }),
       snapLoadCell(row),
-      el('td', {}, select, confirmCell)));
+      el('td', {}, segment, confirmCell)));
   }
   wrap.append(el('div', {}, el('table', { class: 'table' },
-    el('thead', {}, el('tr', {}, el('th', { scope: 'col', text: 'Program' }), el('th', { scope: 'col', class: 'num', text: 'Memory' }), el('th', { scope: 'col', text: 'Load' }), el('th', { scope: 'col', text: 'In the profile' }))),
+    el('thead', {}, el('tr', {}, el('th', { scope: 'col', class: 'mark' }), el('th', { scope: 'col', text: 'Program' }), el('th', { scope: 'col', class: 'num', text: 'Memory' }), el('th', { scope: 'col', text: 'Load' }), el('th', { scope: 'col', text: 'In the profile' }))),
     body)));
   return wrap;
 }
@@ -1079,7 +1128,17 @@ function snapUpdateOk() {
   $('snapshot-ok').disabled = count === 0 && snap.mode === 'update';
 }
 
-function renderSnapshot() {
+function renderSnapshot(focusKey, action) {
+  snap.order = [];
+  const box = $('snapshot-dialog');
+  const top = box.scrollTop;
+  const active = document.activeElement;
+  const inRow = active && $('snapshot-groups').contains(active) && active.closest ? active.closest('tr[data-key]') : null;
+  if (!focusKey && inRow) {
+    focusKey = inRow.dataset.key;
+    if (active.tagName === 'BUTTON') action = active.dataset.a;
+    else if (active.tagName === 'INPUT' && active.getAttribute('aria-label')?.startsWith('Select ')) action = 'mark';
+  }
   const showBackground = $('snapshot-background').checked;
   const running = snap.data.running.filter((r) => showBackground || !r.background);
   const hidden = snap.data.running.length - running.length;
@@ -1088,6 +1147,13 @@ function renderSnapshot() {
     snapTable('Held by kaltstellen', snap.data.held, snap.data.held.length ? 'Programs kaltstellen froze or stopped and that nobody has resumed.' : ''),
     snapTable('Not running, seen earlier', snap.data.seen, ''));
   loadIcons($('snapshot-groups'));
+  snapBulkBar();
+  box.scrollTop = top;
+  if (focusKey) {
+    const node = [...$('snapshot-groups').querySelectorAll('tr[data-key]')].find((r) => r.dataset.key === focusKey);
+    const target = !node ? null : action === 'mark' ? node.querySelector('input[aria-label^="Select "]') : action ? node.querySelector(`button[data-a="${action}"]`) : null;
+    (target || node)?.focus();
+  }
   const existing = $('snapshot-existing');
   existing.hidden = !(snap.mode === 'update' && snap.data.existing > 0) && !snap.note;
   if (snap.note && snap.mode === 'new') existing.textContent = snap.note;
@@ -1109,7 +1175,7 @@ async function loadSnapshot() {
 }
 
 async function openSnapshot(mode, template) {
-  snap = { mode, profile: mode === 'update' ? current().name : null, data: null, choices: new Map(), load: new Map(), token: null };
+  snap = { mode, profile: mode === 'update' ? current().name : null, data: null, choices: new Map(), load: new Map(), token: null, sel: new Set(), order: [], last: null };
   $('snapshot-title').textContent = mode === 'new' ? 'New profile from the current state' : `Update ${current().name} from the current state`;
   $('snapshot-name-row').hidden = mode !== 'new';
   $('snapshot-name').value = template ? template.name : '';
@@ -1181,6 +1247,40 @@ $('snapshot-suggestions').addEventListener('click', () => {
     snap.choices.set(key, { action: row.suggestion.action, confirmed: false });
   }
   renderSnapshot();
+});
+
+$('snapshot-bulk-actions').addEventListener('click', (event) => {
+  const action = event.target.dataset && event.target.dataset.a;
+  if (action) snapSet([...snap.sel].filter((k) => snap.order.includes(k)), action, null);
+});
+$('snapshot-unmark').addEventListener('click', () => {
+  snap.sel.clear();
+  snapRender();
+});
+$('snapshot-all').addEventListener('click', () => {
+  for (const key of snap.order) snap.sel.add(key);
+  snapRender();
+});
+
+/** Keyboard: Up and Down move between rows, 1 to 5 set the action of the
+ * selected rows (or of this row when none is selected), Space selects. */
+$('snapshot-groups').addEventListener('keydown', (event) => {
+  const rowNode = event.target.closest && event.target.closest('tr[data-key]');
+  if (!rowNode || event.ctrlKey || event.altKey || event.metaKey) return;
+  const nodes = [...$('snapshot-groups').querySelectorAll('tr[data-key]')];
+  const at = nodes.indexOf(rowNode);
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    nodes[Math.max(0, Math.min(nodes.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)))].focus();
+  } else if (event.key === ' ' && event.target === rowNode) {
+    event.preventDefault();
+    snapMark(rowNode.dataset.key, !snap.sel.has(rowNode.dataset.key), event.shiftKey);
+  } else if (/^[1-5]$/.test(event.key)) {
+    const action = snapshotChoices[Number(event.key) - 1][0];
+    const keys = snap.sel.size ? [...snap.sel].filter((k) => snap.order.includes(k)) : [rowNode.dataset.key];
+    event.preventDefault();
+    snapSet(keys, action, rowNode.dataset.key);
+  }
 });
 $('snapshot-clear').addEventListener('click', () => {
   snap.note = null;
@@ -1542,7 +1642,7 @@ $('new-template').addEventListener('click', async () => {
     return;
   }
   if (!groups.ok) $('template-error').textContent = groups.error;
-  snap = { mode: 'new', profile: null, data: groups.ok ? groups.data : null, choices: new Map(), load: new Map(), token: null };
+  snap = { mode: 'new', profile: null, data: groups.ok ? groups.data : null, choices: new Map(), load: new Map(), token: null, sel: new Set(), order: [], last: null };
   $('template-list').replaceChildren(...templates.data.map((t) => {
     const words = t.rules.map((r) => `${r.label}: ${TEMPLATE_VERB[r.action]}`).join('; ');
     const found = snap.data ? snapTemplateRows(t).filter(([row, action]) => action !== 'ignore' && !(snap.data.running.includes(row) && row.background)).length : null;
