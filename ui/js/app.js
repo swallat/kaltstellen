@@ -1004,6 +1004,10 @@ function snapEverything() {
   for (const row of snap.data.seen) if (row.protection !== 'warn' && snapShown(row)) set(row, 'stop');
 }
 
+/** Order of two rows by kind: known kinds by their plural name, unknown last. */
+const snapKindOrder = (x, y) => (snapKindId(x) === 'unknown') - (snapKindId(y) === 'unknown')
+  || (x.kind?.plural || '').localeCompare(y.kind?.plural || '');
+
 /** H8: the kind of a row; a program of a kind nobody could name is `unknown`. */
 const snapKindId = (row) => (row.kind && row.kind.known ? row.kind.id : 'unknown');
 
@@ -1011,6 +1015,9 @@ const snapKindId = (row) => (row.kind && row.kind.known ? row.kind.id : 'unknown
  * choice for all of them. Nothing is remembered as a rule: it only sets the
  * rows once, like the bulk bar. Warn-list programs are not changed for
  * Freeze or Stop (they need their own confirmation, P6). */
+/** Rows a Freeze or Stop for a whole kind leaves alone. */
+const snapLocked = (row) => row.protection === 'warn' || row.elevated;
+
 function snapRenderKinds() {
   const panel = $('snapshot-kinds');
   if (panel.hidden) return;
@@ -1023,12 +1030,15 @@ function snapRenderKinds() {
     if (!kinds.has(id)) kinds.set(id, { id, plural: row.kind && row.kind.plural ? row.kind.plural : 'programs', rows: [] });
     kinds.get(id).rows.push(row);
   }
+  const had = panel.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement : null;
+  const hadAt = had ? { line: [...panel.querySelectorAll('.kind-line')].indexOf(had.closest('.kind-line')), a: had.dataset.a } : null;
   const lines = [...kinds.values()].sort((a, b) => (a.id === 'unknown') - (b.id === 'unknown') || a.plural.localeCompare(b.plural));
   panel.replaceChildren(
     el('p', { class: 'hint', text: 'One choice for every program of a kind that the list shows. It sets the rows once; nothing is remembered, and you can change each row afterwards.' }),
     ...lines.map((kind) => el('div', { class: 'kind-line' },
-      el('span', { class: 'kind-name' }, el('strong', { text: `All ${kind.plural} (${kind.rows.length})` }),
-        el('span', { class: 'hint', text: kind.rows.map((r) => r.exe).join(', ') })),
+      el('span', { class: 'kind-name' }, el('strong', { text: kind.id === 'unknown' ? `Unknown kind (${kind.rows.length})` : `All ${kind.plural} (${kind.rows.length})` }),
+        el('span', { class: 'hint', text: kind.rows.map((r) => r.exe).join(', ') }),
+        kind.rows.some(snapLocked) ? el('span', { class: 'hint', text: `${kind.rows.filter(snapLocked).length} of them keep their choice for Freeze or Stop (warn list or higher integrity).` }) : null),
       el('span', { class: 'seg', role: 'group', 'aria-label': `Choice for all ${kind.plural}` },
         ...snapshotChoices.map(([value, label]) => el('button', {
           type: 'button', 'data-a': value, 'aria-label': `${label}, all ${kind.plural}`, text: snapShort[value],
@@ -1039,6 +1049,7 @@ function snapRenderKinds() {
             snapSet(keys, value, null);
           },
         }))))));
+  if (hadAt && hadAt.line >= 0) panel.querySelectorAll('.kind-line')[hadAt.line]?.querySelector(`button[data-a="${hadAt.a}"]`)?.focus();
   if (lines.length === 0) panel.append(el('p', { class: 'hint', text: 'No programs are shown.' }));
 }
 
@@ -1086,8 +1097,12 @@ function snapBulkBar() {
 function snapTable(title, rows, note) {
   if ($('snapshot-heavy').checked) rows = rows.filter((r) => snap.load.get(r.exe.toLowerCase())?.heavy);
   if ($('snapshot-tray').checked) rows = rows.filter((r) => r.tray);
-  if ($('snapshot-sortkind').checked) rows = [...rows].sort((a, b) => (snapKindId(a) === 'unknown') - (snapKindId(b) === 'unknown') || snapKindId(a).localeCompare(snapKindId(b)));
-  if ($('snapshot-sort').checked) rows = [...rows].sort((a, b) => loadScore(snap.load.get(b.exe.toLowerCase())) - loadScore(snap.load.get(a.exe.toLowerCase())));
+  if ($('snapshot-sort').checked || $('snapshot-sortkind').checked) {
+    // Kind first when asked for, then the load; unknown kinds come last.
+    const byKind = $('snapshot-sortkind').checked;
+    const load = (r) => ($('snapshot-sort').checked ? loadScore(snap.load.get(r.exe.toLowerCase())) : 0);
+    rows = [...rows].sort((x, y) => (byKind ? snapKindOrder(x, y) : 0) || load(y) - load(x));
+  }
   const wrap = el('section', { class: 'snap-group' }, el('h3', { text: `${title} (${rows.length})` }));
   if (note) wrap.append(el('p', { class: 'hint', text: note }));
   if (rows.length === 0) return wrap;
