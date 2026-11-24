@@ -317,6 +317,13 @@ mod tests {
         use crate::win32::etw::{Kind, ProcessEvent};
         let ring = std::sync::Arc::new(Ring::new());
         ring.set_running(true);
+        // Now, as a FILETIME: older events are not given out.
+        let now = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 11_644_473_600)
+            * 10_000_000;
         for (pid, session) in [(10, 1), (11, 2)] {
             ring.push(
                 &ProcessEvent {
@@ -324,8 +331,8 @@ mod tests {
                     pid,
                     parent_pid: 4,
                     session: Some(session),
-                    created: 132_000_000_000_000_000,
-                    time: 132_000_000_000_000_000,
+                    created: now,
+                    time: now,
                     image: r"\Device\X\a.exe".to_owned(),
                 },
                 Vec::new,
