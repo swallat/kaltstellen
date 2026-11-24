@@ -1,4 +1,4 @@
-; Per-user installer for kaltstellen (Inno Setup 6.7, spec Q2 "Installer").
+﻿; Per-user installer for kaltstellen (Inno Setup 6.7, spec Q2 "Installer").
 ;
 ; Built by scripts/installer.ps1, which passes:
 ;   /DVersion=<version>          what the program reports, e.g. 1.0.0-beta.2
