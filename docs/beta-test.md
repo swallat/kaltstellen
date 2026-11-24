@@ -46,18 +46,31 @@ If PowerShell refuses to run scripts, start it with
   asking, and setup says how to start it again afterwards. A second setup
   without teardown is refused. A `KALTSTELLEN_*` variable set for the user
   or the machine is reported, because it reaches every kaltstellen.
-- Reads `%LOCALAPPDATA%\kaltstellen-beta-backup\beta-test.json`, the list of
-  programs the test may touch: which may be frozen, which may be stopped,
-  a large one for T19, optionally one you start as administrator (T18) and
-  one with a tray icon (T22). The trigger is by default `"builtin"`: a
-  renamed copy of `ping.exe` in the test folder that the script starts and
-  ends itself, so the trigger test never touches a program of yours. On the
-  first setup the list is copied from
-  [beta-test.example.json](../scripts/beta-test.example.json) and opened in
-  Notepad. Nothing outside this list is frozen or stopped; stop entries get
-  `on_timeout = "keep"` unless the list says `kill`. The script closes or
-  ends only processes it started itself (PID and start time recorded); for
-  any other process of a listed name it asks you and never forces it.
+- Brings its own test programs, so you do not have to choose any. Without
+  a `beta-test.json` (the normal case) setup compiles
+  [beta-test-programs.cs](../scripts/beta-test-programs.cs) with the C#
+  compiler that ships with Windows (`csc.exe` of the .NET Framework, no
+  SDK needed) and copies the result to a few names in the test folder:
+  `ks-beta-freeze1.exe` and `ks-beta-freeze2.exe` (windows with a heartbeat,
+  frozen by `beta-freeze`), `ks-beta-stop.exe` (closes when asked),
+  `ks-beta-stubborn.exe` (refuses to close; `on_timeout = "keep"`),
+  `ks-beta-stubborn-kill.exe` (refuses; `on_timeout = "kill"`),
+  `ks-beta-large.exe` (holds 300 MB, for T19) and `ks-beta-tray.exe` (a
+  notification-area icon in no profile, for T22). The trigger is a renamed
+  copy of `ping.exe`. All of them live in the test folder, touch nothing
+  but a heartbeat file there, and are ended and deleted at teardown.
+  Nothing of yours is frozen or stopped.
+- A `%LOCALAPPDATA%\kaltstellen-beta-backup\beta-test.json` is optional and
+  replaces the built-in programs: the programs the test may touch (which
+  may be frozen, which may be stopped, a large one, one you start as
+  administrator for T18, one with a tray icon for T22). Start from
+  [beta-test.example.json](../scripts/beta-test.example.json); `suspend`, `stop`, `large` and `tray_program`
+  may also say `"builtin"` to keep the script's own programs for it
+  (`-ProgramList` names another file). Nothing outside the list is frozen
+  or stopped; stop entries get `on_timeout = "keep"` unless the list says
+  `kill`. The script closes or ends only processes it started itself (PID
+  and start time recorded); for any other process of a listed name it asks
+  you and never forces it.
 - Writes the test configuration (profiles `beta-freeze`, `beta-stop`,
   `beta-failure`, `beta-dragdrop`, `beta-trigger`, `beta-trim-on`,
   `beta-trim-off`, `beta-elevated`, `beta-session`, `beta-altgr`) and sample
@@ -93,13 +106,14 @@ backup.
 | --- | --- | --- | --- |
 | `tray` | config error by check-config | profile from the menu (log, frozen threads), Explorer restart, shortcut start, Quit | icon, tooltip, menu without settings |
 | `signin` | Run value and `autostart on` (switched on with `kaltstellen autostart on` if you answered No) | the question at the first start | menu while asking, question text |
-| `window` | start time, page ready, one window only, WebView2 processes end; header switches against `kaltstellen autostart` and `kaltstellen automation`, `Automatic switching` disabled without triggers | Apply profile, comments kept | look, scaling, keyboard, editing, header hint |
+| `programs` | the built-in test programs start, beat and answer; a close request closes `ks-beta-stop.exe` and not the stubborn ones | | |
+| `window` | start time, page ready, one window only, WebView2 processes end; `Start at sign-in` in Settings and the header switch against `kaltstellen autostart` and `kaltstellen automation`, `Automatic switching` disabled without triggers | Apply profile, comments kept, Settings: Defaults saved into `config.toml`, update mode in `settings.json`, "Forget last profile" | look, scaling, keyboard, editing, Settings sections and scrolling, header hint |
 | `failure` | KS110, error resolves within 30 s | | red icon, marker, hover text |
 | `dragdrop` | which entries the file gained | the drops | outline, status line |
 | `descriptions` | `list --info`, `status --unassigned` recorded (`n/a` for a build without `list --info`) | | the window |
 | `hotkeys` | taken hotkey warned (second test tray), Ctrl+Alt+7 refused | key press counted once per press | AltGr+7 |
-| `unassigned` | listed as new | | menu item, Add, Dismiss |
-| `stop` | closed, started again on neutral | | |
+| `unassigned` | the tray program is listed as new | | menu item, Add, Dismiss |
+| `stop` | `ks-beta-stop.exe` and the kill entry closed, the stubborn keep entry stays (reported), all started again on neutral | | |
 | `triggers` | check-config, apply within 5 s, back to neutral, manual switch wins, pause and resume with `kaltstellen automation off/on` (survives a restart), priority in the file | notification click, 4a, 4b, rename | notifications, header switch, `Automatic switching paused` in the menu |
 | `t14` | taskbar and Explorer answer, no ghost windows | | Start menu |
 | `t19` | available memory with trim on and off, resume time | | felt delay |
@@ -107,7 +121,7 @@ backup.
 | `t13` | stays frozen for `-FreezeMinutes` (10) | | network, sync, sound, licence |
 | `t15` | PIDs and times recorded | the trace | |
 | `defender` | detections, if readable | | Protection history |
-| `updates` | `update --mode off` taken over by the tray, version, `kaltstellen.old.exe`, one tray | install | offer in the menu, Mode in the main window, SmartScreen |
+| `updates` | `update --mode off` taken over by the tray, version, `kaltstellen.old.exe`, one tray | install | offer in the menu, Mode in Settings, SmartScreen |
 | `t7`, `t20` | resume time from the log, last profile offered not applied, tray at sign-in | | screens at sign-out or shutdown |
 
 **T7 and T20** end the session and run on their own (`run t7`, never with
@@ -128,8 +142,8 @@ of the first tray start after it are taken, not the time between. The
 results include the output of `kaltstellen list` and `status
 --unassigned`, which names programs that ran; `collect -NoProgramLists`
 leaves it out, and `state.json` too (it names what was frozen); the results
-and log lines still name the programs of `beta-test.json`, which are the
-test. Your profile folder (also in its short 8.3 form), user name, domain
+and log lines still name the test programs (the built-in ones or the
+list's), which are the test. Your profile folder (also in its short 8.3 form), user name, domain
 and computer name appear as `%USERPROFILE%`, `%USERNAME%`, `%USERDOMAIN%`
 and `%COMPUTERNAME%`, account SIDs as `S-1-5-21-<sid>`; nothing else is
 collected. Look at it before you send it.
