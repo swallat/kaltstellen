@@ -514,11 +514,6 @@ impl App {
             window::set_recheck(None);
             return;
         }
-        if !self.triggers_configured() && self.automation.idle() {
-            // Only the start watch needs the timer: no snapshot.
-            self.arm_poll();
-            return;
-        }
         let Ok(snapshot) = Snapshot::take() else {
             return;
         };
@@ -1101,6 +1096,11 @@ impl App {
     /// each once (A7).
     fn poll_triggers(&mut self) {
         if self.automation.paused() || self.controller.is_quitting() || self.session_ending {
+            self.arm_poll();
+            return;
+        }
+        if !self.triggers_configured() && self.automation.idle() {
+            // Only the start watch needs the timer: no snapshot.
             self.arm_poll();
             return;
         }
