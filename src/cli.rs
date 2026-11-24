@@ -518,6 +518,14 @@ fn autostart(switch: Option<OnOff>) -> u8 {
         eprintln!("error: {err}");
         return exit::ERRORS;
     }
+    // An explicit choice answers the tray's one-time question (L8): a tray
+    // started later (by the installer, say) does not ask again.
+    if switch.is_some()
+        && let Some(dir) = paths::config_dir()
+        && let Err(err) = crate::settings::edit(&dir, |s| s.autostart_asked = true)
+    {
+        warn!("autostart: {err}");
+    }
     match crate::autostart::state(&at, &exe) {
         Ok(crate::autostart::State::On) => println!("start at sign-in: on"),
         Ok(crate::autostart::State::Off) => println!("start at sign-in: off"),
