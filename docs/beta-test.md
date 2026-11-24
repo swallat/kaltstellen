@@ -64,7 +64,7 @@ If PowerShell refuses to run scripts, start it with
   replaces the built-in programs: the programs the test may touch (which
   may be frozen, which may be stopped, a large one, one you start as
   administrator for T18, one with a tray icon for T22). Start from
-  [beta-test.example.json](../scripts/beta-test.example.json); each entry
+  [beta-test.example.json](../scripts/beta-test.example.json); `suspend`, `stop`, `large` and `tray_program`
   may also say `"builtin"` to keep the script's own programs for it
   (`-ProgramList` names another file). Nothing outside the list is frozen
   or stopped; stop entries get `on_timeout = "keep"` unless the list says

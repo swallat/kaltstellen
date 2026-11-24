@@ -953,7 +953,11 @@ function Get-FreezeReport($Programs) {
 function Get-BeatFile($Program) { Join-Path (Join-Path $script:TestDir 'beats') ($Program.exe + '.beat') }
 
 function Get-Beat($Program) {
-    try { [int64]([IO.File]::ReadAllText((Get-BeatFile $Program)).Trim()) } catch { 0 }
+    # The writer replaces the file every 100 ms: a read that collides is tried again.
+    for ($i = 0; $i -lt 5; $i++) {
+        try { return [int64]([IO.File]::ReadAllText((Get-BeatFile $Program)).Trim()) } catch { Start-Sleep -Milliseconds 20 }
+    }
+    0
 }
 
 function Register-Started($Process, $Program) {
@@ -1915,7 +1919,8 @@ function Test-WindowSettings {
         } -Ask 'Version, mode and "Check now" as described?'
     } finally { Set-SettingsValue 'update' $(if ($updateBefore) { $updateBefore } else { 'manual' }) }
 
-    Invoke-Step window settings-files 'Files section and "Forget last profile" (13a)' -Human -Prepare {
+    Invoke-Step window settings-files 'Files section and "Forget last profile" (13a)' -Human -Freeze -Prepare {
+        $null = Request-Running $script:Programs.suspend
         $null = Switch-Profile 'beta-freeze'
         $null = Switch-Profile neutral
         $script:Ctx.last_profile = (Read-JsonFile $settingsFile).last_profile
@@ -2363,7 +2368,7 @@ function Test-Triggers {
 
 function Test-TriggersSteps {
     $tr = $script:Programs.trigger
-    if (-not $tr) { Add-Skip triggers all 'no trigger program in beta-test.json'; return }
+    if (-not $tr) { Add-Skip triggers all 'the program list has no trigger'; return }
     $first = Get-First
     Invoke-Step triggers check-config 'check-config names the trigger and refuses it as a frozen entry (step 1)' -Check {
         param($since)
@@ -2709,7 +2714,7 @@ function Measure-Trim([string]$ProfileName, $Large) {
 
 function Test-T19 {
     $large = $script:Programs.large
-    if (-not $large) { Add-Skip t19 trim 'no "large" program in beta-test.json'; return }
+    if (-not $large) { Add-Skip t19 trim 'the program list has no "large" program'; return }
     $null = Start-Tray
     Set-Neutral
     # A fixture that was trimmed before keeps its memory out of RAM: start it afresh.
