@@ -39,6 +39,8 @@ pub enum Code {
     MinimizeFailed = 112,
     /// A program on the warn list was selected without confirmation (P6).
     WarnListUnconfirmed = 113,
+    /// Stopping or starting a Windows service through the helper failed (M4e).
+    ServiceFailed = 114,
     /// Any other operating-system error while handling a process.
     ProcessOs = 199,
 
@@ -154,6 +156,7 @@ impl Code {
         Code::ElevationRequired,
         Code::MinimizeFailed,
         Code::WarnListUnconfirmed,
+        Code::ServiceFailed,
         Code::ProcessOs,
         Code::ConfigRead,
         Code::ConfigSyntax,

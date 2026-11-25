@@ -145,6 +145,7 @@ pub fn failure_label(code: &str) -> &'static str {
         "KS111" => "start needs elevation",
         "KS112" => "minimise failed",
         "KS113" => "needs confirmation",
+        "KS114" => "service not changed",
         _ => "failed",
     }
 }

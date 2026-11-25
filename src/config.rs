@@ -67,6 +67,26 @@ pub struct Profile {
     /// runs, a program of this profile that starts later is handled at once
     /// as in a switch (default off).
     pub watch: bool,
+    /// M4e: Windows services this profile stops or starts through the
+    /// optional helper (`[[profile.service]]`).
+    pub services: Vec<ServiceEntry>,
+}
+
+/// What a profile does with a Windows service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceAction {
+    /// Stop it; it is started again on a switch to neutral.
+    Stop,
+    /// Start it if it is not running; left running afterwards.
+    Start,
+}
+
+/// M4e: one `[[profile.service]]` entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceEntry {
+    /// The service's short key name (`Spooler`).
+    pub name: String,
+    pub action: ServiceAction,
 }
 
 /// U4: a trigger program, by executable name and optionally its full path
@@ -351,6 +371,15 @@ struct RawProfile {
     trigger: Option<Vec<Spanned<String>>>,
     priority: Option<Spanned<i64>>,
     watch: Option<bool>,
+    #[serde(default)]
+    service: Vec<RawService>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawService {
+    name: Spanned<String>,
+    action: Option<Spanned<String>>,
 }
 
 #[derive(Deserialize)]
@@ -433,6 +462,7 @@ impl Check<'_> {
                 .hotkey
                 .and_then(|raw| self.hotkey(&raw, &name, &mut hotkeys));
             let apps = self.apps(raw.app, &settings);
+            let services = self.services(raw.service);
             let triggers = raw
                 .trigger
                 .map(|list| self.triggers(list, &name, &apps, &mut triggers_seen))
@@ -459,9 +489,59 @@ impl Check<'_> {
                 triggers,
                 priority,
                 watch: raw.watch.unwrap_or(false),
+                services,
             });
         }
         Config { settings, profiles }
+    }
+
+    /// M4e: the services of a profile. The name is the short key name, the
+    /// action `stop` (default) or `start`; each service once.
+    fn services(&mut self, raw: Vec<RawService>) -> Vec<ServiceEntry> {
+        let mut entries: Vec<ServiceEntry> = Vec::new();
+        for item in raw {
+            let span = item.name.span();
+            let name = match crate::helper::policy::normalize_service(item.name.get_ref()) {
+                Ok(name) => name,
+                Err(err) => {
+                    self.error(&span, err.reason);
+                    continue;
+                }
+            };
+            let action = match item.action.as_ref().map(|a| a.get_ref().as_str()) {
+                None | Some("stop") => ServiceAction::Stop,
+                Some("start") => ServiceAction::Start,
+                Some(other) => {
+                    let at = item.action.as_ref().map_or(span.clone(), Spanned::span);
+                    self.error(
+                        &at,
+                        format!(
+                            "the action of a service is \"stop\" or \"start\", not \"{other}\""
+                        ),
+                    );
+                    continue;
+                }
+            };
+            if entries.iter().any(|e| e.name.eq_ignore_ascii_case(&name)) {
+                self.error(
+                    &span,
+                    format!("service \"{name}\" is listed twice in this profile"),
+                );
+                continue;
+            }
+            if entries.len() >= crate::helper::policy::MAX_SERVICES {
+                self.error(
+                    &span,
+                    format!(
+                        "at most {} services per profile",
+                        crate::helper::policy::MAX_SERVICES
+                    ),
+                );
+                continue;
+            }
+            entries.push(ServiceEntry { name, action });
+        }
+        entries
     }
 
     /// C5 and C7.
@@ -1180,6 +1260,38 @@ name = "a"
         assert_eq!(rejected.code, Code::ConfigInvalid);
         let lines: Vec<_> = rejected.issues.iter().map(|i| i.line.unwrap()).collect();
         assert_eq!(lines, vec![2, 5, 7]);
+    }
+
+    #[test]
+    fn m4e_services_are_read_with_stop_as_the_default() {
+        let config = ok(r#"
+[[profile]]
+name = "focus"
+
+[[profile.service]]
+name = "Spooler"
+
+[[profile.service]]
+name = "WSearch"
+action = "start"
+"#)
+        .config;
+        let services = &config.profile("focus").unwrap().services;
+        assert_eq!(services.len(), 2);
+        assert_eq!(services[0].name, "Spooler");
+        assert_eq!(services[0].action, ServiceAction::Stop);
+        assert_eq!(services[1].action, ServiceAction::Start);
+        for bad in [
+            "name = \"RpcSs\"",
+            "name = \"a\\\\b\"",
+            "name = \"Spooler\"\naction = \"pause\"",
+        ] {
+            let text = format!("[[profile]]\nname = \"x\"\n[[profile.service]]\n{bad}\n");
+            let (line, _) = rejected(&text);
+            assert!(line >= 4, "{bad}: line {line}");
+        }
+        let twice = "[[profile]]\nname = \"x\"\n[[profile.service]]\nname = \"Spooler\"\n[[profile.service]]\nname = \"spooler\"\n";
+        assert_eq!(rejected(twice).0, 6);
     }
 
     #[test]

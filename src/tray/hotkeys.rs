@@ -151,6 +151,7 @@ mod tests {
             triggers: Vec::new(),
             priority: 0,
             watch: false,
+            services: Vec::new(),
         }
     }
 

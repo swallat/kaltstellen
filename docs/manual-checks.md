@@ -486,3 +486,25 @@ spooler) or a test service of your own:
    "a\b"`.
 6. `helper services off` (UAC), then `stop-service --name Spooler` is
    refused (`the role services is off`). Remove the entry again.
+
+## Background helper: services in a profile (M4e part 2)
+
+With the helper, role services on and `Spooler` on the allow list (see
+above). Add to a profile (`kaltstellen config` opens the file):
+
+```toml
+[[profile.service]]
+name = "Spooler"
+```
+
+1. `kaltstellen check-config` is fine; `kaltstellen preview <profile>` says
+   `will stop the service (needs the helper)` for Spooler.
+2. `kaltstellen switch <profile>`: Spooler is stopped; `state.json` lists it
+   under `stopped_services`. `kaltstellen switch neutral`: Spooler runs
+   again and the record is gone.
+3. Switch with the role services off (or the helper removed): the switch
+   reports `KS114` for Spooler and Spooler keeps running.
+4. A name that does not exist, `RpcSs`, `action = "pause"`: `check-config`
+   refuses with the line.
+5. The window opens the profile and saves another change without losing the
+   service entry.
