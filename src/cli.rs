@@ -218,7 +218,29 @@ enum HelperAction {
         #[arg(long, hide = true)]
         from_window: bool,
     },
-    /// The elevated programs the helper may suspend and end (role act)
+    /// Switch the role services (stop and start Windows services on the
+    /// allow list) on or off; asks for administrator rights
+    Services {
+        #[arg(value_enum)]
+        state: OnOff,
+        #[arg(long, hide = true)]
+        relaunched: bool,
+        #[arg(long, hide = true)]
+        from_window: bool,
+    },
+    /// Stop a Windows service on the allow list (role services; for tests
+    /// by hand, the tray does this itself)
+    StopService {
+        #[arg(long)]
+        name: String,
+    },
+    /// Start a Windows service on the allow list
+    StartService {
+        #[arg(long)]
+        name: String,
+    },
+    /// The elevated programs the helper may suspend and end (role act) and
+    /// the services it may stop and start (role services)
     Allow {
         #[command(subcommand)]
         action: AllowAction,
@@ -259,6 +281,19 @@ enum AllowAction {
     /// Take a program off the allow list (asks for administrator rights)
     Remove {
         path: String,
+        #[arg(long, hide = true)]
+        relaunched: bool,
+    },
+    /// Put a Windows service on the allow list (its short key name, like
+    /// Spooler; asks for administrator rights)
+    AddService {
+        name: String,
+        #[arg(long, hide = true)]
+        relaunched: bool,
+    },
+    /// Take a service off the allow list (asks for administrator rights)
+    RemoveService {
+        name: String,
         #[arg(long, hide = true)]
         relaunched: bool,
     },
@@ -1066,6 +1101,28 @@ fn helper_act(command: crate::helper::protocol::Command, pid: u32) -> u8 {
     }
 }
 
+/// One service verb of the helper.
+fn helper_service(command: crate::helper::protocol::Command, name: &str) -> u8 {
+    match crate::helper::client::ask_service(command, name) {
+        Ok(Some(reply)) => {
+            println!(
+                "{}",
+                if reply.reached == Some(true) {
+                    "done"
+                } else {
+                    "asked, not there yet"
+                }
+            );
+            exit::OK
+        }
+        Ok(None) => {
+            eprintln!("the helper is not running (no pipe)");
+            exit::ERRORS
+        }
+        Err(err) => refused(err),
+    }
+}
+
 /// `kaltstellen helper …` (M4a, docs/design-optional-helper.md).
 fn helper(action: HelperAction) -> u8 {
     use crate::helper::{client, protocol, setup};
@@ -1198,7 +1255,92 @@ fn helper(action: HelperAction) -> u8 {
             }
             code
         }
+        HelperAction::Services {
+            state,
+            relaunched,
+            from_window,
+        } => {
+            let on = matches!(state, OnOff::On);
+            let code = if service::is_elevated() {
+                policy_edit(|policy| {
+                    let changed = policy.roles.services != on;
+                    policy.roles.services = on;
+                    Ok(setup::Edit {
+                        changed,
+                        message: format!(
+                            "the role services is {}{}",
+                            if on { "on" } else { "off" },
+                            if changed { "" } else { " already" }
+                        ),
+                    })
+                })
+            } else {
+                relaunch_elevated(
+                    |_| format!("helper services {}", if on { "on" } else { "off" }),
+                    None,
+                )
+            };
+            if relaunched || from_window {
+                finish_console(code);
+            }
+            code
+        }
+        HelperAction::StopService { name } => helper_service(protocol::Command::StopService, &name),
+        HelperAction::StartService { name } => {
+            helper_service(protocol::Command::StartService, &name)
+        }
         HelperAction::Allow { action } => match action {
+            AllowAction::AddService { name, relaunched } => {
+                let name = match crate::helper::policy::normalize_service(&name) {
+                    Ok(name) => name,
+                    Err(err) => return refused(err),
+                };
+                let code = if service::is_elevated() {
+                    policy_edit(|policy| {
+                        let changed = policy.allow_service(&name)?;
+                        Ok(setup::Edit {
+                            changed,
+                            message: format!(
+                                "service {name} is {}on the allow list{}",
+                                if changed { "now " } else { "" },
+                                if policy.roles.services {
+                                    ""
+                                } else {
+                                    " (the role services is off: `kaltstellen helper services on`)"
+                                }
+                            ),
+                        })
+                    })
+                } else {
+                    relaunch_elevated(|_| format!("helper allow add-service \"{name}\""), None)
+                };
+                if relaunched {
+                    finish_console(code);
+                }
+                code
+            }
+            AllowAction::RemoveService { name, relaunched } => {
+                let name = name.trim().to_owned();
+                let code = if service::is_elevated() {
+                    policy_edit(|policy| {
+                        let changed = policy.disallow_service(&name);
+                        Ok(setup::Edit {
+                            changed,
+                            message: if changed {
+                                format!("service {name} is off the allow list")
+                            } else {
+                                format!("service {name} was not on the allow list")
+                            },
+                        })
+                    })
+                } else {
+                    relaunch_elevated(|_| format!("helper allow remove-service \"{name}\""), None)
+                };
+                if relaunched {
+                    finish_console(code);
+                }
+                code
+            }
             AllowAction::List => match setup::report() {
                 Ok(report) => match &report.policy {
                     Ok(policy) => {
@@ -1208,6 +1350,16 @@ fn helper(action: HelperAction) -> u8 {
                         }
                         for program in &policy.allow.programs {
                             println!("allowed: {program}");
+                        }
+                        println!(
+                            "role services: {}",
+                            if policy.roles.services { "on" } else { "off" }
+                        );
+                        if policy.allow.services.is_empty() {
+                            println!("allowed services: none");
+                        }
+                        for name in &policy.allow.services {
+                            println!("allowed service: {name}");
                         }
                         exit::OK
                     }

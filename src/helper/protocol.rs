@@ -35,6 +35,9 @@ pub struct Request {
     /// so a reused id is never touched (S6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<u64>,
+    /// With `stop_service` and `start_service`: the service's key name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -56,6 +59,10 @@ pub enum Command {
     Resume,
     /// M4d: end an elevated program on the allow list.
     Terminate,
+    /// M4e: stop a Windows service on the allow list; needs the role *services*.
+    StopService,
+    /// M4e: start a Windows service on the allow list.
+    StartService,
 }
 
 impl Command {
@@ -105,6 +112,10 @@ pub struct Reply {
     /// `network`: bytes per process (those with none are left out).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub traffic: Option<Vec<super::events::Usage>>,
+    /// `stop_service`, `start_service`: whether the service is in the wanted
+    /// state now (`false`: asked, not there yet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reached: Option<bool>,
     /// `status`: whether the network counters run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<bool>,
@@ -124,6 +135,7 @@ impl Reply {
             next: None,
             lost: None,
             traffic: None,
+            reached: None,
             network: None,
         }
     }
@@ -141,6 +153,8 @@ pub struct Context {
     pub session_of: fn(u32) -> Option<u32>,
     /// The hands of the role *act*, when it runs.
     pub act: Option<std::sync::Arc<super::act::Actor>>,
+    /// The role *services*, when it runs.
+    pub services: Option<std::sync::Arc<super::services::Services>>,
 }
 
 /// Answers one request line. Never panics on bad input. `session` is the
@@ -175,6 +189,12 @@ pub fn answer_from(
     if (request.pid.is_some() || request.created.is_some()) && request.cmd.acts().is_none() {
         return Reply::failure("`pid` and `created` belong to the acting verbs only");
     }
+    let service_verb = matches!(request.cmd, Command::StopService | Command::StartService);
+    if request.service.is_some() != service_verb {
+        return Reply::failure(
+            "`service` belongs to `stop_service` and `start_service`, and is needed there",
+        );
+    }
     let mut reply = Reply {
         v: VERSION,
         ok: true,
@@ -184,13 +204,14 @@ pub fn answer_from(
         active: Some(Roles {
             observe: context.events.as_ref().is_some_and(|ring| ring.running()),
             act: context.act.is_some(),
-            services: false,
+            services: context.services.is_some(),
         }),
         error: None,
         events: None,
         next: None,
         lost: None,
         traffic: None,
+        reached: None,
         network: context
             .events
             .as_ref()
@@ -230,6 +251,24 @@ pub fn answer_from(
             };
             match actor.act(verb, pid, created, caller) {
                 Ok(()) => reply,
+                Err(text) => Reply::failure(text),
+            }
+        }
+        Command::StopService | Command::StartService => {
+            let Some(services) = context.services.as_ref() else {
+                return Reply::failure("the role services is not running");
+            };
+            let want = if request.cmd == Command::StopService {
+                super::services::Want::Stop
+            } else {
+                super::services::Want::Start
+            };
+            let name = request.service.as_deref().unwrap_or_default();
+            match services.act(want, name) {
+                Ok(reached) => {
+                    reply.reached = Some(reached == super::services::Reached::Yes);
+                    reply
+                }
                 Err(text) => Reply::failure(text),
             }
         }
@@ -332,6 +371,7 @@ mod tests {
             events: None,
             session_of: |_| Some(1),
             act: None,
+            services: None,
         }
     }
 
@@ -488,6 +528,24 @@ mod tests {
                 .active
                 .unwrap()
                 .observe
+        );
+    }
+
+    #[test]
+    fn m4e_service_verbs_need_a_name_and_the_role() {
+        let ok = |line: &str| answer_from(line, &context(), Some(1), Some(7));
+        let none = ok(r#"{"v":1,"cmd":"stop_service"}"#);
+        assert!(!none.ok && none.error.unwrap().contains("needed"));
+        // `service` only with the service verbs.
+        assert!(!ok(r#"{"v":1,"cmd":"status","service":"Spooler"}"#).ok);
+        // The role does not run in this context.
+        let off = ok(r#"{"v":1,"cmd":"start_service","service":"Spooler"}"#);
+        assert!(!off.ok && off.error.unwrap().contains("not running"));
+        assert!(
+            !answer(r#"{"v":1,"cmd":"status"}"#, &context(), Some(1))
+                .active
+                .unwrap()
+                .services
         );
     }
 

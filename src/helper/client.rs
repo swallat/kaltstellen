@@ -29,23 +29,28 @@ const QUICK_DEADLINE: Duration = Duration::from_millis(1000);
 /// installed or not running); an error if something answers that is not the
 /// helper (wrong account, wrong protocol).
 pub fn ask(command: Command) -> Result<Option<Reply>> {
-    ask_with(command, None, None, None, DEADLINE)
+    ask_with(command, None, None, None, None, DEADLINE)
 }
 
 /// [`ask`] with the `after` of an `events` request.
 pub fn ask_after(command: Command, after: Option<u64>) -> Result<Option<Reply>> {
-    ask_with(command, after, None, None, QUICK_DEADLINE)
+    ask_with(command, after, None, None, None, QUICK_DEADLINE)
 }
 
 /// [`ask`] for `network` with the window in seconds.
 pub fn ask_network(seconds: Option<u32>) -> Result<Option<Reply>> {
     // Also asked on the window's bridge thread: the short limit.
-    ask_with(Command::Network, None, seconds, None, QUICK_DEADLINE)
+    ask_with(Command::Network, None, seconds, None, None, QUICK_DEADLINE)
+}
+
+/// [`ask`] for `stop_service` or `start_service` of the service `name`.
+pub fn ask_service(command: Command, name: &str) -> Result<Option<Reply>> {
+    ask_with(command, None, None, None, Some(name), DEADLINE)
 }
 
 /// [`ask`] for an acting verb on the process `pid` created at `created`.
 pub fn ask_act(command: Command, pid: u32, created: u64) -> Result<Option<Reply>> {
-    ask_with(command, None, None, Some((pid, created)), DEADLINE)
+    ask_with(command, None, None, Some((pid, created)), None, DEADLINE)
 }
 
 fn ask_with(
@@ -53,6 +58,7 @@ fn ask_with(
     after: Option<u64>,
     seconds: Option<u32>,
     target: Option<(u32, u64)>,
+    service: Option<&str>,
     deadline: Duration,
 ) -> Result<Option<Reply>> {
     let Some(mut conn) = pipe::connect_peer(PIPE_NAME, Duration::from_secs(1), Peer::Helper)?
@@ -75,6 +81,7 @@ fn ask_with(
         seconds,
         pid: target.map(|t| t.0),
         created: target.map(|t| t.1),
+        service: service.map(str::to_owned),
     };
     let reply = pipe::with_deadline(deadline, || -> Result<Option<String>> {
         protocol::write_line(&mut conn, &request)?;

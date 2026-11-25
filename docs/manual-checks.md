@@ -469,3 +469,20 @@ Notepad (see above) on the allow list. Make a profile with that program as
 4. End the tray (Quit) while the elevated Notepad is frozen: within a few
    seconds the helper thaws it.
 5. `kaltstellen switch <profile>` from a prompt does not use the helper.
+
+## Background helper: services (M4e part 1)
+
+With the helper installed and a harmless service such as `Spooler` (print
+spooler) or a test service of your own:
+
+1. `kaltstellen helper allow list` shows `role services: off` and
+   `allowed services: none`.
+2. `helper allow add-service Spooler` (UAC), `helper services on` (UAC):
+   `allow list` shows both.
+3. `helper stop-service --name Spooler` prints `done`; `Get-Service Spooler`
+   says Stopped. `helper start-service --name Spooler`: Running again.
+4. `stop-service --name Themes` (not on the list) is refused with a reason.
+5. Refused before any prompt: `allow add-service RpcSs`, `allow add-service
+   "a\b"`.
+6. `helper services off` (UAC), then `stop-service --name Spooler` is
+   refused (`the role services is off`). Remove the entry again.
