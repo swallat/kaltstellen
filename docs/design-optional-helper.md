@@ -389,3 +389,13 @@ tray's use of them comes in part 3; `kaltstellen helper suspend|resume|terminate
   crash at the next start (from the record). A record that does not match a
   running process is dropped.
 - The status shows `act` among the active roles only when it runs.
+- What cannot be told or released stays on the list: a failed snapshot
+  never makes the sweep forget a frozen program, and a resume that fails is
+  tried again (at the next sweep, at stop, at the next start). At service
+  stop new freezes are refused. A record left by a crash is thawed at start
+  even when the role was switched off meanwhile.
+- Known limit: the record is written before the checks, so a crash in that
+  instant can make the next start resume a process that was not frozen by
+  the helper (resuming a running process does nothing; a program somebody
+  else suspended would be thawed).
+

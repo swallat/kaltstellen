@@ -156,14 +156,16 @@ fn serve(stop: Stop) -> Result<()> {
     }
     // The role act: the hands for elevated programs on the allow list.
     // What an earlier run froze and left behind is thawed first.
+    // A record left by a crash is thawed even if the role was switched off
+    // since.
+    let actor = Arc::new(act::Actor::new(
+        &policy,
+        Arc::new(act::RealOs),
+        data_dir().map(|dir| act::state_file(&dir)),
+        std::process::id(),
+    ));
+    actor.recover();
     let actor = if policy.roles.act {
-        let actor = Arc::new(act::Actor::new(
-            &policy,
-            Arc::new(act::RealOs),
-            data_dir().map(|dir| act::state_file(&dir)),
-            std::process::id(),
-        ));
-        actor.recover();
         info!("act: the role runs");
         Some(actor)
     } else {

@@ -68,8 +68,9 @@ pub trait Os: Send + Sync + std::fmt::Debug {
     ) -> std::result::Result<Done, String>;
     /// The creation time of a process (`FILETIME`), if it exists.
     fn created_of(&self, pid: u32) -> Option<u64>;
-    /// Whether the process with this pid and creation time still runs.
-    fn alive(&self, pid: u32, created: u64) -> bool;
+    /// Whether the process with this pid and creation time still runs;
+    /// `None` if that cannot be told now (nothing is forgotten then).
+    fn alive(&self, pid: u32, created: u64) -> Option<bool>;
 }
 
 /// The asker: the process that connected to the pipe.
@@ -108,6 +109,8 @@ pub struct Actor {
     file: Option<PathBuf>,
     own_pid: u32,
     frozen: Mutex<Vec<Frozen>>,
+    /// Set at service stop (under the lock): nothing is frozen afterwards.
+    stopped: std::sync::atomic::AtomicBool,
 }
 
 impl Actor {
@@ -120,6 +123,7 @@ impl Actor {
             file,
             own_pid,
             frozen: Mutex::new(Vec::new()),
+            stopped: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -196,6 +200,9 @@ impl Actor {
         let check = |found: &Inspected| self.check(caller, found);
         match verb {
             Verb::Suspend => {
+                if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err("the helper is stopping".to_owned());
+                }
                 if known.is_some() {
                     return Ok(());
                 }
@@ -284,12 +291,18 @@ impl Actor {
         let before = list.len();
         let mut keep = Vec::with_capacity(list.len());
         for entry in list.drain(..) {
-            if !self.os.alive(entry.pid, entry.created) {
-                info!("act: pid {} ended while frozen", entry.pid);
-            } else if !self.os.alive(entry.client_pid, entry.client_created) {
-                self.release(&entry, "its caller is gone");
-            } else {
-                keep.push(entry);
+            // What cannot be told stays on the list and is looked at again.
+            match (
+                self.os.alive(entry.pid, entry.created),
+                self.os.alive(entry.client_pid, entry.client_created),
+            ) {
+                (Some(false), _) => info!("act: pid {} ended while frozen", entry.pid),
+                (Some(true), Some(false)) => {
+                    if !self.release(&entry, "its caller is gone") {
+                        keep.push(entry);
+                    }
+                }
+                _ => keep.push(entry),
             }
         }
         *list = keep;
@@ -300,18 +313,26 @@ impl Actor {
         }
     }
 
-    /// Resumes everything (service stop, end of the session).
+    /// Resumes everything (service stop, end of the session) and refuses
+    /// new freezes from then on. What cannot be resumed stays on the record
+    /// for the next start.
     pub fn release_all(&self) {
         let mut list = self.lock();
-        for entry in list.drain(..) {
-            self.release(&entry, "the helper stops");
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let all = std::mem::take(&mut *list);
+        for entry in all {
+            if !self.release(&entry, "the helper stops") {
+                list.push(entry);
+            }
         }
         if let Err(e) = self.save(&list) {
             warn!("act: {e}");
         }
     }
 
-    /// At start: resumes what a crash or a kill left frozen.
+    /// At start: resumes what a crash or a kill left frozen. The record is
+    /// removed only when everything on it was released.
     pub fn recover(&self) {
         let Some(file) = &self.file else { return };
         let Ok(text) = std::fs::read_to_string(file) else {
@@ -319,21 +340,37 @@ impl Actor {
         };
         match serde_json::from_str::<StateFile>(&text) {
             Ok(state) if state.version == 1 => {
-                for entry in &state.frozen {
-                    self.release(entry, "left over from before");
+                let left: Vec<Frozen> = state
+                    .frozen
+                    .into_iter()
+                    .filter(|entry| !self.release(entry, "left over from before"))
+                    .collect();
+                if let Err(e) = self.save(&left) {
+                    warn!("act: {e}");
                 }
+                // What stays is tried again by the sweep.
+                *self.lock() = left;
             }
-            Ok(_) | Err(_) => warn!("act: {} is not a record this helper knows", file.display()),
+            Ok(_) | Err(_) => {
+                warn!("act: {} is not a record this helper knows", file.display());
+                let _ = std::fs::remove_file(file);
+            }
         }
-        let _ = std::fs::remove_file(file);
     }
 
-    fn release(&self, entry: &Frozen, why: &str) {
+    /// Resumes one entry; `false` if that failed and it must be kept.
+    fn release(&self, entry: &Frozen, why: &str) -> bool {
         let always = |_: &Inspected| Ok(());
         match self.os.run(entry.pid, entry.created, Verb::Resume, &always) {
-            Ok(Done::Done) => info!("act: resumed pid {} ({why})", entry.pid),
-            Ok(Done::Gone) => {}
-            Err(e) => warn!("act: cannot resume pid {} ({why}): {e}", entry.pid),
+            Ok(Done::Done) => {
+                info!("act: resumed pid {} ({why})", entry.pid);
+                true
+            }
+            Ok(Done::Gone) => true,
+            Err(e) => {
+                warn!("act: cannot resume pid {} ({why}): {e}", entry.pid);
+                false
+            }
         }
     }
 }
@@ -392,8 +429,10 @@ impl Os for RealOs {
             .map(|p| p.created)
     }
 
-    fn alive(&self, pid: u32, created: u64) -> bool {
-        crate::process::Snapshot::take().is_ok_and(|s| s.find(pid, created).is_some())
+    fn alive(&self, pid: u32, created: u64) -> Option<bool> {
+        crate::process::Snapshot::take()
+            .ok()
+            .map(|s| s.find(pid, created).is_some())
     }
 }
 
@@ -475,8 +514,8 @@ mod tests {
                 .find(|(p, _)| *p == pid)
                 .map(|(_, c)| *c)
         }
-        fn alive(&self, pid: u32, created: u64) -> bool {
-            self.processes.lock().unwrap().contains_key(&(pid, created))
+        fn alive(&self, pid: u32, created: u64) -> Option<bool> {
+            Some(self.processes.lock().unwrap().contains_key(&(pid, created)))
         }
     }
 
@@ -541,7 +580,7 @@ mod tests {
                 .contains("session")
         );
         assert!(actor.act(Verb::Terminate, 101, 8, TRAY).is_err());
-        assert!(os.alive(101, 8) && os.alive(102, 9));
+        assert!(os.alive(101, 8) == Some(true) && os.alive(102, 9) == Some(true));
     }
 
     #[test]
@@ -622,7 +661,7 @@ mod tests {
         actor.act(Verb::Suspend, 100, 7, TRAY).unwrap();
         actor.act(Verb::Suspend, 103, 11, TRAY).unwrap();
         actor.act(Verb::Terminate, 103, 11, TRAY).unwrap();
-        assert!(!os.alive(103, 11));
+        assert_eq!(os.alive(103, 11), Some(false));
         assert_eq!(actor.frozen_count(), 1);
         actor.release_all();
         assert!(!os.frozen(100, 7));
@@ -647,6 +686,16 @@ mod tests {
         assert!(!os.frozen(100, 7));
         assert!(!file.exists(), "the record is gone once released");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn m4d_after_stop_nothing_is_frozen_any_more() {
+        let (actor, os) = setup(true, &[TOOL]);
+        actor.act(Verb::Suspend, 100, 7, TRAY).unwrap();
+        actor.release_all();
+        assert!(actor.act(Verb::Suspend, 100, 7, TRAY).is_err());
+        assert!(!os.frozen(100, 7));
+        assert_eq!(actor.frozen_count(), 0);
     }
 
     #[test]
