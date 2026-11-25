@@ -528,7 +528,10 @@ fn switch(target: &str, force: bool, wait: bool) -> u8 {
         }
     };
     let mut state = load_state(&store);
-    let options = engine::Options { force };
+    let options = engine::Options {
+        force,
+        ..Default::default()
+    };
     // S5: Ctrl+C, Ctrl+Break or closing the console must not leave anything
     // frozen; they stop the switch early and everything is resumed below.
     let interrupts = match Interrupts::catch() {
@@ -628,7 +631,10 @@ fn preview(target: &str, force: bool) -> u8 {
         &config,
         target,
         &state,
-        engine::Options { force },
+        engine::Options {
+            force,
+            ..Default::default()
+        },
         &Vec::new,
     ) {
         Ok(plan) => {

@@ -234,7 +234,10 @@ impl Runner for EngineRunner {
                     source.refresh();
                     source.config().clone()
                 };
-                let options = Options { force: *force };
+                let options = Options {
+                    force: *force,
+                    helper: true,
+                };
                 let data = crate::paths::data_dir();
                 let learning = data.clone().filter(|_| crate::usage::enabled());
                 if learning.is_none()

@@ -8,6 +8,16 @@ use super::{PIPE_NAME, freshness};
 use crate::error::{Code, Error, Result};
 use crate::win32::pipe::{self, Peer};
 
+/// Start of the reason of an error that the helper itself gave: it
+/// understood the request and said no.
+const REFUSED: &str = "the helper refused: ";
+
+/// Whether `err` is an answer of the helper (a definite no), as opposed to
+/// a lost connection or a timeout, after which nothing is known.
+pub fn was_refused(err: &Error) -> bool {
+    err.reason.starts_with(REFUSED)
+}
+
 /// How long a conversation may take before it is cut off.
 const DEADLINE: Duration = Duration::from_secs(3);
 
@@ -81,7 +91,10 @@ fn ask_with(
     if !reply.ok {
         return Err(Error::new(
             Code::HelperProtocol,
-            reply.error.unwrap_or_else(|| "refused".to_owned()),
+            format!(
+                "{REFUSED}{}",
+                reply.error.unwrap_or_else(|| "no reason given".to_owned())
+            ),
         ));
     }
     Ok(Some(reply))

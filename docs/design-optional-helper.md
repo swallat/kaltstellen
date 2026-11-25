@@ -399,3 +399,33 @@ tray's use of them comes in part 3; `kaltstellen helper suspend|resume|terminate
   the helper (resuming a running process does nothing; a program somebody
   else suspended would be thawed).
 
+
+## M4d as built, part 3: the tray uses the hands **[assumed]**
+
+The engine gets an option `helper`, set only by the tray's worker (a
+long-lived caller: the helper thaws what it froze when its asker is gone, so
+a one-shot `kaltstellen switch` from a prompt does not use it).
+
+- `suspend`: a process that cannot be opened for lack of administrator
+  rights (`NeedsAdmin`, not a protected one) is recorded in the state like any
+  frozen process and then handed to the helper. If the helper refuses (not
+  installed, role off, not on the allow list, not the owner's), the record is
+  removed and the original refusal is reported as before.
+- `resume`: the same kind of refusal on a recorded process makes the engine
+  ask the helper to resume it; if that fails the record stays for the next
+  attempt.
+- `stop`: elevated processes are ended by the helper at once (no graceful
+  close, as the spec says `stop` is `terminate` for them); the others take
+  the normal path. A refusal by the helper leaves the process to the normal
+  step, which reports `NeedsAdmin`.
+- The preview (dry run) still reports an elevated program as a problem even
+  if the helper would take it; it does not ask the helper.
+- If the tray ends (crash), the helper thaws its programs within seconds.
+  The tray's own record then names processes that are no longer frozen;
+  resuming those does nothing.
+- An answer of the helper that says no is told from a lost connection: after
+  a lost connection the record of a frozen program stays (the helper may have
+  frozen it; a later resume asks again). An elevated program ended by the
+  helper counts as stopped for the restart record even if another process of
+  the program reports an error.
+

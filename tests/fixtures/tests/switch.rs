@@ -408,7 +408,10 @@ fn warn_list_needs_force() {
         &w.config,
         "p",
         &mut w.state,
-        Options { force: true },
+        Options {
+            force: true,
+            ..Default::default()
+        },
         &mut |s| store.save(s),
     )
     .unwrap();
