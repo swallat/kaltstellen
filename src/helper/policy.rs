@@ -41,6 +41,79 @@ pub struct Allow {
     pub programs: Vec<String>,
 }
 
+/// The most services on the allow list.
+pub const MAX_SERVICES: usize = 64;
+
+/// Services that are never stopped, listed or not: the helper itself and
+/// the ones Windows cannot run without (lower case).
+const NEVER_SERVICES: &[&str] = &[
+    "kaltstellen-helper",
+    "rpcss",
+    "rpceptmapper",
+    "dcomlaunch",
+    "lsm",
+    "samss",
+    "eventlog",
+    "plugplay",
+    "power",
+    "profsvc",
+    "gpsvc",
+    "wininit",
+    "winlogon",
+    "schedule",
+    "wudfpf",
+    "trustedinstaller",
+    "windefend",
+    "mpssvc",
+    "bfe",
+    "cryptsvc",
+    "wscsvc",
+    "sens",
+    "winmgmt",
+    "appinfo",
+    "keyiso",
+    "brokerinfrastructure",
+    "usermanager",
+    "dhcp",
+    "dnscache",
+    "nsi",
+    "lanmanserver",
+    "lanmanworkstation",
+    "termservice",
+    "systemeventsbroker",
+    "timebrokersvc",
+    "coremessagingregistrar",
+    "securityhealthservice",
+    "sense",
+    "netlogon",
+    "winrm",
+    "sshd",
+];
+
+/// The key name of a service: no path characters, no control characters,
+/// at most 256 characters, and not one of the services that are never touched.
+pub fn normalize_service(name: &str) -> Result<String> {
+    let name = name.trim();
+    let bad = name.is_empty()
+        || name.chars().count() > 256
+        || name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '/' | '\\' | '"' | '*' | '?'));
+    if bad {
+        return Err(Error::new(
+            Code::HelperPolicy,
+            "a service is named by its short key name, like Spooler",
+        ));
+    }
+    if NEVER_SERVICES.contains(&name.to_lowercase().as_str()) {
+        return Err(Error::new(
+            Code::HelperPolicy,
+            format!("{name} is never stopped by the helper"),
+        ));
+    }
+    Ok(name.to_owned())
+}
+
 /// The most programs on the allow list, so a policy stays small.
 pub const MAX_PROGRAMS: usize = 256;
 
@@ -170,13 +243,50 @@ impl Policy {
         self.allow.programs.len() != before
     }
 
+    /// Puts a Windows service on the allow list; `false` if it was there.
+    pub fn allow_service(&mut self, name: &str) -> Result<bool> {
+        let name = normalize_service(name)?;
+        if self
+            .allow
+            .services
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(&name))
+        {
+            return Ok(false);
+        }
+        if self.allow.services.len() >= MAX_SERVICES {
+            return Err(Error::new(
+                Code::HelperPolicy,
+                format!("the allow list holds {MAX_SERVICES} services already"),
+            ));
+        }
+        self.allow.services.push(name);
+        Ok(true)
+    }
+
+    /// Takes a service off the allow list (text as given, ignoring case).
+    pub fn disallow_service(&mut self, name: &str) -> bool {
+        let before = self.allow.services.len();
+        self.allow
+            .services
+            .retain(|s| !s.eq_ignore_ascii_case(name.trim()));
+        self.allow.services.len() != before
+    }
+
+    pub fn allows_service(&self, name: &str) -> bool {
+        self.allow
+            .services
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(name))
+    }
+
     /// Whether `path` (a process's full image path) is on the allow list.
     pub fn allows_program(&self, path: &str) -> bool {
         self.allow.programs.iter().any(|p| same_path(p, path))
     }
 
     pub fn parse(text: &str) -> Result<Policy> {
-        let policy: Policy = toml::from_str(text)
+        let mut policy: Policy = toml::from_str(text)
             .map_err(|e| Error::new(Code::HelperPolicy, format!("helper.toml: {e}")))?;
         if policy.version != 1 {
             return Err(Error::new(
@@ -190,6 +300,13 @@ impl Policy {
                 "helper.toml: owner_sid is not a SID",
             ));
         }
+        // Entries that could not be put on the list by the commands never
+        // work (the helper checks again); they are not carried along.
+        policy
+            .allow
+            .services
+            .retain(|s| normalize_service(s).is_ok());
+        policy.allow.services.truncate(MAX_SERVICES);
         Ok(policy)
     }
 
@@ -326,5 +443,32 @@ mod tests {
             assert!(!plain_text(bad), "{bad:?}");
         }
         assert!(!plain_text(&"a".repeat(521)));
+    }
+
+    #[test]
+    fn m4e_services_are_key_names_never_critical_ones() {
+        let mut policy = Policy::initial("S-1-5-21-1-2-3-1001");
+        assert!(policy.allow_service("Spooler").unwrap());
+        assert!(!policy.allow_service("spooler").unwrap());
+        assert!(policy.allows_service("SPOOLER"));
+        for bad in [
+            "",
+            "  ",
+            r"C:\x",
+            "a/b",
+            "a\"b",
+            "Wild*",
+            "RpcSs",
+            "kaltstellen-helper",
+            "WinDefend",
+        ] {
+            assert!(policy.allow_service(bad).is_err(), "{bad:?}");
+        }
+        assert!(policy.disallow_service(" SPOOLER "));
+        assert!(!policy.disallow_service("Spooler"));
+        for i in 0..MAX_SERVICES {
+            policy.allow_service(&format!("svc{i}")).unwrap();
+        }
+        assert!(policy.allow_service("one-too-many").is_err());
     }
 }

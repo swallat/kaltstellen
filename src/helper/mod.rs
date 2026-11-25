@@ -20,6 +20,7 @@ pub mod events;
 pub mod policy;
 pub mod protocol;
 pub mod run;
+pub mod services;
 pub mod setup;
 
 use std::path::PathBuf;

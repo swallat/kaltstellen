@@ -430,3 +430,32 @@ a one-shot `kaltstellen switch` from a prompt does not use it).
   helper counts as stopped for the restart record even if another process of
   the program reports an error.
 
+
+## M4e as built, part 1: the helper's side of *services* **[assumed]**
+
+Decision of the owner (2026-11-25): a service gets its own entry kind
+`service = "Name"` in a profile (part 2, not built yet).
+
+- Policy: `kaltstellen helper services on|off` and `helper allow
+  add-service|remove-service <key name>` (UAC, as for programs); `allow
+  list` shows both lists. A service is named by its short key name
+  (`Spooler`), at most 256 characters, no path, wildcard or control
+  characters, at most 64 entries. A short list of services is never accepted
+  and never touched even if a file lists them (the helper itself, RPC, DCOM,
+  event log, security accounts, firewall, Defender, the task scheduler and a
+  few more).
+- Pipe verbs `stop_service` and `start_service` with the field `service`;
+  the helper waits up to 1.8 s for the wanted state and answers `reached`
+  (`false`: asked, not there yet; the caller asks again later). Refused with
+  a reason: role off, not on the allow list, no such service, a refusal of
+  Windows (for example a service with running dependents).
+- The wait covers only the polling; a start or stop that the service
+  control manager itself holds for long (a service slow to report) shows as
+  a timeout of the client (3 s) instead of `reached: false`. A service that
+  is already starting or stopping is waited for, not asked again.
+- Entries of `helper.toml` that the commands would refuse (a bad name, one
+  on the never-list, beyond 64) are dropped when the file is read.
+- The helper keeps no record. Starting what was stopped is the tray's job
+  through its own record, as for a stopped program (part 2).
+- `kaltstellen helper stop-service|start-service --name N` for checking
+  by hand.

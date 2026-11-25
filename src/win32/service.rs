@@ -441,6 +441,57 @@ pub fn stop(name: &str) -> Result<()> {
     }
 }
 
+/// M4e: asks the service `name` to start (`start`) or stop and waits up to
+/// `wait` for that. `Ok(None)` if it is not installed, else whether the
+/// wanted state was reached in time (it may still be pending).
+pub fn control(name: &str, start: bool, wait: Duration) -> Result<Option<bool>> {
+    let manager = manager(SC_MANAGER_CONNECT)?;
+    let Some(service) = open(
+        &manager,
+        name,
+        SERVICE_START | SERVICE_STOP | SERVICE_QUERY_STATUS,
+    )?
+    else {
+        return Ok(None);
+    };
+    let wanted = if start {
+        State::Running
+    } else {
+        State::Stopped
+    };
+    let now = status_of(&service)?.state;
+    // A service that is on its way (or on its way out, for a start) takes
+    // no new control: wait for it below.
+    if now != wanted && !matches!(now, State::Starting | State::Stopping) {
+        if start {
+            // SAFETY: valid handle, no arguments.
+            match unsafe { StartServiceW(service.0, None) } {
+                Ok(()) => {}
+                Err(e) if e.code() == ERROR_SERVICE_ALREADY_RUNNING.to_hresult() => {}
+                Err(e) => return Err(service_error("cannot start the service", e)),
+            }
+        } else {
+            let mut status = SERVICE_STATUS::default();
+            // SAFETY: valid handle and out pointer.
+            match unsafe { ControlService(service.0, SERVICE_CONTROL_STOP, &mut status) } {
+                Ok(()) => {}
+                Err(e) if e.code() == ERROR_SERVICE_NOT_ACTIVE.to_hresult() => {}
+                Err(e) => return Err(service_error("cannot stop the service", e)),
+            }
+        }
+    }
+    let deadline = Instant::now() + wait;
+    loop {
+        if status_of(&service)?.state == wanted {
+            return Ok(Some(true));
+        }
+        if Instant::now() >= deadline {
+            return Ok(Some(false));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// Stops the service if it runs and starts it again, so that it reads its
 /// files anew; a stopped one stays stopped, nothing if it is not installed.
 pub fn restart(name: &str) -> Result<()> {

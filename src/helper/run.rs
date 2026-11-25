@@ -109,7 +109,7 @@ fn serve(stop: Stop) -> Result<()> {
         }
     };
     info!(
-        "helper {} serves {} (roles: observe {}, act {}, services {}; observe and act are implemented)",
+        "helper {} serves {} (roles: observe {}, act {}, services {}; observe, act and services are implemented)",
         version(),
         policy.owner_sid,
         policy.roles.observe,
@@ -171,6 +171,14 @@ fn serve(stop: Stop) -> Result<()> {
     } else {
         None
     };
+    // The role services: stop and start the services of the allow list.
+    let services = policy.roles.services.then(|| {
+        info!("services: the role runs");
+        Arc::new(super::services::Services::new(
+            &policy,
+            Arc::new(super::services::RealOs),
+        ))
+    });
     let context = Arc::new(Context {
         version: version().to_owned(),
         pid: std::process::id(),
@@ -178,6 +186,7 @@ fn serve(stop: Stop) -> Result<()> {
         events: session.as_ref().map(|_| Arc::clone(&ring)),
         session_of: pipe::session_of,
         act: actor.clone(),
+        services,
     });
     let active = Arc::new(AtomicUsize::new(0));
     let accepting = stop.clone();
