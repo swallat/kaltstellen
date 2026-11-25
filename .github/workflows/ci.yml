@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets a maintenance run start the checks by hand on a branch.
+  workflow_dispatch:
   # Lets the release workflow run the same checks before it builds.
   workflow_call:
 
