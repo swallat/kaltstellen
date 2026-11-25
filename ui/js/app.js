@@ -991,7 +991,7 @@ $('forget-learned').addEventListener('click', async () => {
 
 let suggestions = [];
 
-const suggestionVerb = { stop: 'Stop', suspend: 'Freeze', start: 'Keep running (start)' };
+const suggestionVerb = { stop: 'Stop', suspend: 'Freeze', start: 'Keep running (start)', ignore: 'Leave as it is' };
 
 function renderSuggestions() {
   const items = suggestions.map((s) => el('li', { class: 'suggestion' },
