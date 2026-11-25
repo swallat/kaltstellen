@@ -158,20 +158,24 @@ if ($observe) {
 
 # M4b 6: traffic (a local download is enough: loopback is counted too)
 if ($network) {
-    # Loopback traffic between two sockets of this script is counted too.
-    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
-    $listener.Start()
-    $client = [Net.Sockets.TcpClient]::new('127.0.0.1', $listener.LocalEndpoint.Port)
-    $peer = $listener.AcceptTcpClient()
-    $buffer = New-Object byte[] 65536
-    $reader = $peer.GetStream().ReadAsync($buffer, 0, $buffer.Length)
-    $client.GetStream().Write((New-Object byte[] 65536), 0, 65536)
-    [void]$reader.Wait(5000)
-    $client.Close(); $peer.Close(); $listener.Stop()
+    # Real network traffic of this script (loopback is not counted by the
+    # network provider). Needs an internet connection; without one the
+    # check says so instead of failing for the wrong reason.
+    $online = $false
+    foreach ($i in 1..5) {
+        try {
+            Invoke-WebRequest -Uri 'https://www.msftconnecttest.com/connecttest.txt' -UseBasicParsing -TimeoutSec 10 | Out-Null
+            $online = $true
+        } catch { }
+    }
     $out = Ks @('helper', 'traffic', '--seconds', '10')
     $rows = @(($out -split "`r?`n") | Where-Object { $_ -like '{*' } | ForEach-Object { try { $_ | ConvertFrom-Json } catch { } })
     $mine = $rows | Where-Object { $_.pid -eq $PID }
-    Check 'traffic: this script shows up with bytes' (($Code -eq 0) -and $mine -and (($mine.up + $mine.down) -gt 0)) ($mine | ConvertTo-Json -Compress)
+    if ($online) {
+        Check 'traffic: this script shows up with bytes' (($Code -eq 0) -and $mine -and (($mine.up + $mine.down) -gt 0)) ($mine | ConvertTo-Json -Compress)
+    } else {
+        Skip 'traffic' 'no internet connection for the test request'
+    }
 } else {
     Skip 'traffic' 'network counters are not running'
 }

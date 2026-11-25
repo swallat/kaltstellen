@@ -25,6 +25,10 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+/// M4c: starts since the profile was applied still count when `watch` is
+/// noticed within this many seconds of it.
+const WATCH_NOTICE: u64 = 60;
+
 /// M4c: the shortest time between two applications of a watching profile.
 const WATCH_GAP: Duration = Duration::from_secs(30);
 
@@ -1045,7 +1049,16 @@ impl App {
             // from now on count, not those since the profile was applied.
             self.was_watching = watching;
             self.watch_due = false;
-            if watching {
+            info!(
+                "tray: watching \"{}\" is {}",
+                self.status.active,
+                if watching { "on" } else { "off" }
+            );
+            // Right after the profile was applied the starts since then
+            // count (the poll that notices `watch` may come a few
+            // seconds later); a profile that was applied long ago starts
+            // counting now.
+            if watching && self.starts.age(crate::unassigned::now()) > WATCH_NOTICE {
                 self.activate_starts();
             }
         }
