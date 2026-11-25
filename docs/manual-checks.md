@@ -453,3 +453,19 @@ With the helper installed, `allow add` for an elevated Notepad's path
    another user (second account), the helper's own pid, `explorer.exe`.
 5. `terminate --pid <id>` ends the elevated Notepad.
 
+
+## Background helper: the tray with elevated programs (M4d part 3)
+
+With the helper installed, the role act on, and an elevated copy of
+Notepad (see above) on the allow list. Make a profile with that program as
+`suspend`, and another with it as `stop`; the tray runs the profile.
+
+1. Switch to the `suspend` profile from the tray: the elevated Notepad
+   window stops responding; the tray menu's list of paused programs names it.
+   Switch to neutral: it responds again.
+2. Without the helper (or `act off`): the same switch reports the program as
+   needing administrator rights, as before.
+3. Switch to the `stop` profile: the elevated Notepad ends at once.
+4. End the tray (Quit) while the elevated Notepad is frozen: within a few
+   seconds the helper thaws it.
+5. `kaltstellen switch <profile>` from a prompt does not use the helper.

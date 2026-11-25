@@ -25,6 +25,10 @@ const MINIMIZE_WAIT: Duration = Duration::from_secs(1);
 pub struct Options {
     /// Confirms programs on the warn list (P6).
     pub force: bool,
+    /// M4d: elevated programs the engine cannot open are handed to the
+    /// background helper (role act). Only for a long-lived caller (the
+    /// tray): the helper thaws what it froze when its asker is gone.
+    pub helper: bool,
 }
 
 /// Something a switch did.
@@ -539,7 +543,7 @@ impl Run<'_> {
             return;
         }
         for record in resume {
-            match resume_record(snapshot, &record) {
+            match resume_record(snapshot, &record, self.options.helper) {
                 Ok(true) => self
                     .report
                     .done(Step::Resume, &record.exe, Some(record.pid)),
@@ -614,7 +618,23 @@ impl Run<'_> {
             }
             let image = app.path.clone().or_else(|| image_of(&processes, &app.exe));
             let timeout = Duration::from_secs(u64::from(self.settings.stop_timeout_s));
-            match process::stop(&processes, timeout, *on_timeout) {
+            // M4d: what is elevated is ended by the helper (no graceful close
+            // for it: `stop` is `terminate` there).
+            let (processes, ended) = if self.options.helper {
+                end_elevated(processes)
+            } else {
+                (processes, 0)
+            };
+            let result = if processes.is_empty() {
+                Ok(StopOutcome::NotRunning)
+            } else {
+                process::stop(&processes, timeout, *on_timeout)
+            };
+            let result = match result {
+                Ok(StopOutcome::NotRunning) if ended > 0 => Ok(StopOutcome::Killed),
+                other => other,
+            };
+            match result {
                 Ok(StopOutcome::NotRunning) => {}
                 Ok(StopOutcome::Closed | StopOutcome::Killed) => {
                     self.report.done(Step::Stop, &app.exe, None);
@@ -732,13 +752,18 @@ impl Run<'_> {
 
     fn freeze(&mut self, app: &App, processes: &[ProcessInfo], trim: bool) {
         let mut targets = Vec::new();
+        let mut elevated = Vec::new();
         for info in processes {
             match Target::open(info, Access::Suspend) {
                 Ok(Some(target)) => targets.push(target),
                 Ok(None) => {}
+                Err(err) if self.options.helper && err.code == Code::NeedsAdmin => {
+                    elevated.push((info.clone(), err));
+                }
                 Err(err) => self.report.failed(err.step(Step::Suspend)),
             }
         }
+        self.freeze_elevated(app, elevated);
         // Record first, then freeze: a crash in between leaves a record that
         // recovery resumes, never a frozen process nobody knows about.
         for target in &targets {
@@ -769,6 +794,40 @@ impl Run<'_> {
                 }
             }
         }
+    }
+
+    /// M4d: freezes elevated programs through the helper. The record is
+    /// written first, as for a program frozen directly; the original
+    /// refusal is reported when the helper does not do it (not installed,
+    /// role off, program not on the allow list).
+    fn freeze_elevated(&mut self, app: &App, elevated: Vec<(ProcessInfo, Error)>) {
+        for (info, refusal) in elevated {
+            self.state.suspended.push(Suspended {
+                pid: info.pid,
+                created: info.created,
+                image: String::new(),
+                exe: app.exe.clone(),
+                path: app.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            });
+            self.save();
+            match crate::helper::client::ask_act(
+                crate::helper::protocol::Command::Suspend,
+                info.pid,
+                info.created,
+            ) {
+                Ok(Some(_)) => self.report.done(Step::Suspend, &info.name, Some(info.pid)),
+                other => {
+                    if let Err(err) = other {
+                        info!("helper: {err}");
+                    }
+                    self.state
+                        .suspended
+                        .retain(|s| !(s.pid == info.pid && s.created == info.created));
+                    self.report.failed(refusal.step(Step::Suspend));
+                }
+            }
+        }
+        self.save();
     }
 
     /// H4: what starting `exe` from `path` would do. Whether it needs
@@ -878,13 +937,25 @@ impl Run<'_> {
 
 /// Resumes one recorded process. `Ok(false)` if it is not the recorded
 /// process any more (S6, S10).
-fn resume_record(snapshot: &Snapshot, record: &Suspended) -> Result<bool> {
+fn resume_record(snapshot: &Snapshot, record: &Suspended, helper: bool) -> Result<bool> {
     let Some(info) = snapshot.find(record.pid, record.created) else {
         return Ok(false);
     };
-    let Some(target) = Target::open(info, Access::Suspend).map_err(|e| e.program(&record.exe))?
-    else {
-        return Ok(false);
+    let target = match Target::open(info, Access::Suspend) {
+        Ok(Some(target)) => target,
+        Ok(None) => return Ok(false),
+        // An elevated program frozen by the helper is thawed by it.
+        Err(err) if helper && err.code == Code::NeedsAdmin => {
+            return match crate::helper::client::ask_act(
+                crate::helper::protocol::Command::Resume,
+                info.pid,
+                info.created,
+            ) {
+                Ok(Some(_)) => Ok(true),
+                _ => Err(err.program(&record.exe)),
+            };
+        }
+        Err(err) => return Err(err.program(&record.exe)),
     };
     if !record.image.is_empty()
         && let Ok(image) = target.image_path()
@@ -894,6 +965,36 @@ fn resume_record(snapshot: &Snapshot, record: &Suspended) -> Result<bool> {
     }
     target.resume()?;
     Ok(true)
+}
+
+/// M4d: ends the processes that need administrator rights through the
+/// helper. Returns the others and how many were ended; one the helper
+/// refuses stays in the list so the normal step reports the refusal.
+fn end_elevated(processes: Vec<ProcessInfo>) -> (Vec<ProcessInfo>, usize) {
+    let mut rest = Vec::new();
+    let mut ended = 0;
+    for info in processes {
+        let elevated = matches!(
+            Target::open(&info, Access::Stop),
+            Err(ref err) if err.code == Code::NeedsAdmin
+        );
+        if elevated
+            && matches!(
+                crate::helper::client::ask_act(
+                    crate::helper::protocol::Command::Terminate,
+                    info.pid,
+                    info.created,
+                ),
+                Ok(Some(_))
+            )
+        {
+            info!("ended {} (pid {}) through the helper", info.name, info.pid);
+            ended += 1;
+        } else {
+            rest.push(info);
+        }
+    }
+    (rest, ended)
 }
 
 /// Image path of the first process that is the program itself, not a child.
