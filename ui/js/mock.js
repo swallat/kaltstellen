@@ -328,6 +328,8 @@ function handle(message) {
         exe, frozen: exe === 'chat.exe', private_bytes: 0,
         cpu: exe === 'chat.exe' ? null : [0.12, 0.004, 0.03, 0.0][i % 4],
         io_per_s: exe === 'chat.exe' ? null : [3_500_000, 2048, 90_000, 0][i % 4],
+        net_down_per_s: exe === 'chat.exe' ? null : [2_400_000, 0, 51_200, null][i % 4],
+        net_up_per_s: exe === 'chat.exe' ? null : [120_000, 0, 2048, null][i % 4],
         tcp: i % 3, udp: i % 2,
         heavy: i === 0 ? '12 % CPU, 3.3 MB/s I/O' : (exe === 'browser.exe' ? '1.2 GB memory' : null),
       }));

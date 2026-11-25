@@ -39,7 +39,8 @@ pub fn ask_after(command: Command, after: Option<u64>) -> Result<Option<Reply>> 
 
 /// [`ask`] for `network` with the window in seconds.
 pub fn ask_network(seconds: Option<u32>) -> Result<Option<Reply>> {
-    ask_with(Command::Network, None, seconds, None, DEADLINE)
+    // Also asked on the window's bridge thread: the short limit.
+    ask_with(Command::Network, None, seconds, None, QUICK_DEADLINE)
 }
 
 /// [`ask`] for an acting verb on the process `pid` created at `created`.

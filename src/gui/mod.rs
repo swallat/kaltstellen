@@ -292,6 +292,15 @@ impl Host for RealHost {
         views
     }
 
+    fn traffic(&self, seconds: u32) -> Option<Vec<crate::helper::events::Usage>> {
+        // No pipe, a pipe that is not the helper's, or a helper without the
+        // counters: no figures, and nothing is said about it here.
+        crate::helper::client::ask_network(Some(seconds))
+            .ok()
+            .flatten()
+            .and_then(|reply| reply.traffic)
+    }
+
     fn sample(&self) -> crate::load::Sample {
         let state = Store::new(&self.data).peek().unwrap_or_default();
         crate::load::Sample {
