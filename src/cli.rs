@@ -223,6 +223,22 @@ enum HelperAction {
         #[command(subcommand)]
         action: AllowAction,
     },
+    /// Freeze an elevated program on the allow list (role act; for tests
+    /// by hand, the tray does this itself)
+    Suspend {
+        #[arg(long)]
+        pid: u32,
+    },
+    /// Thaw a program the helper froze
+    Resume {
+        #[arg(long)]
+        pid: u32,
+    },
+    /// End an elevated program on the allow list
+    Terminate {
+        #[arg(long)]
+        pid: u32,
+    },
     /// The service itself (started by Windows, not by hand)
     #[command(hide = true)]
     Run,
@@ -1019,6 +1035,31 @@ fn refused(err: Error) -> u8 {
     }
 }
 
+/// One acting verb of the helper on the process `pid`, found by its
+/// creation time so a reused id is never touched.
+fn helper_act(command: crate::helper::protocol::Command, pid: u32) -> u8 {
+    use crate::helper::client;
+    let snapshot = match crate::process::Snapshot::take() {
+        Ok(snapshot) => snapshot,
+        Err(err) => return refused(err),
+    };
+    let Some(info) = snapshot.get(pid) else {
+        eprintln!("no process with id {pid}");
+        return exit::ERRORS;
+    };
+    match client::ask_act(command, pid, info.created) {
+        Ok(Some(_)) => {
+            println!("done");
+            exit::OK
+        }
+        Ok(None) => {
+            eprintln!("the helper is not running (no pipe)");
+            exit::ERRORS
+        }
+        Err(err) => refused(err),
+    }
+}
+
 /// `kaltstellen helper …` (M4a, docs/design-optional-helper.md).
 fn helper(action: HelperAction) -> u8 {
     use crate::helper::{client, protocol, setup};
@@ -1035,6 +1076,9 @@ fn helper(action: HelperAction) -> u8 {
             }
             exit::OK
         }
+        HelperAction::Suspend { pid } => helper_act(protocol::Command::Suspend, pid),
+        HelperAction::Resume { pid } => helper_act(protocol::Command::Resume, pid),
+        HelperAction::Terminate { pid } => helper_act(protocol::Command::Terminate, pid),
         HelperAction::Traffic { seconds } => match client::ask_network(Some(seconds)) {
             Ok(Some(reply)) => {
                 for usage in reply.traffic.iter().flatten() {

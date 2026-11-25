@@ -435,3 +435,21 @@ With the helper installed (see above), from a normal prompt:
 5. `allow remove` the notepad path (UAC), `act off` (UAC): back to the
    start. The helper keeps serving events throughout.
 
+## Background helper: acting verbs (M4d part 2)
+
+With the helper installed, `allow add` for an elevated Notepad's path
+(copy `notepad.exe` to a folder, start the copy as administrator) and `act on`:
+
+1. As a normal user, `kaltstellen helper suspend --pid <id of that Notepad>`
+   prints `done`; the Notepad window stops responding. The command ends at
+   once, so its process (the asker) is gone: within about 5 s the helper
+   releases the program by itself and the window responds again. Until
+   then `%ProgramData%\kaltstellen\helper-state.json` lists it.
+2. `suspend`, then quickly `resume --pid <id>`: the window responds
+   again and the record is gone.
+3. Suspend and at once `kaltstellen helper uninstall` (UAC): if the
+   program is still frozen it is thawed by the service stop.
+4. Refused with a reason: a pid that is not on the allow list, a program of
+   another user (second account), the helper's own pid, `explorer.exe`.
+5. `terminate --pid <id>` ends the elevated Notepad.
+

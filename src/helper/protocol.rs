@@ -28,6 +28,13 @@ pub struct Request {
     /// With `network`: the window in seconds, 1 to 600 (default 10).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seconds: Option<u32>,
+    /// With `suspend`, `resume` and `terminate`: the process id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// With the same verbs: the creation time of that process (`FILETIME`),
+    /// so a reused id is never touched (S6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -43,6 +50,23 @@ pub enum Command {
     /// M4b: bytes sent and received per process of the caller's own
     /// Windows session over the last `seconds`; needs the role *observe*.
     Network,
+    /// M4d: freeze an elevated program on the allow list; needs the role *act*.
+    Suspend,
+    /// M4d: thaw a program this helper froze.
+    Resume,
+    /// M4d: end an elevated program on the allow list.
+    Terminate,
+}
+
+impl Command {
+    fn acts(&self) -> Option<super::act::Verb> {
+        match self {
+            Command::Suspend => Some(super::act::Verb::Suspend),
+            Command::Resume => Some(super::act::Verb::Resume),
+            Command::Terminate => Some(super::act::Verb::Terminate),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -115,11 +139,23 @@ pub struct Context {
     pub events: Option<std::sync::Arc<super::events::Ring>>,
     /// The Windows session of a process id, `None` if it cannot be told.
     pub session_of: fn(u32) -> Option<u32>,
+    /// The hands of the role *act*, when it runs.
+    pub act: Option<std::sync::Arc<super::act::Actor>>,
 }
 
 /// Answers one request line. Never panics on bad input. `session` is the
 /// Windows session of the client, as far as it could be told.
 pub fn answer(line: &str, context: &Context, session: Option<u32>) -> Reply {
+    answer_from(line, context, session, None)
+}
+
+/// [`answer`] knowing the process id of the client.
+pub fn answer_from(
+    line: &str,
+    context: &Context,
+    session: Option<u32>,
+    client_pid: Option<u32>,
+) -> Reply {
     let request: Request = match serde_json::from_str(line) {
         Ok(request) => request,
         Err(e) => return Reply::failure(format!("malformed request: {e}")),
@@ -136,6 +172,9 @@ pub fn answer(line: &str, context: &Context, session: Option<u32>) -> Reply {
     if request.seconds.is_some() && request.cmd != Command::Network {
         return Reply::failure("`seconds` belongs to `network` only");
     }
+    if (request.pid.is_some() || request.created.is_some()) && request.cmd.acts().is_none() {
+        return Reply::failure("`pid` and `created` belong to the acting verbs only");
+    }
     let mut reply = Reply {
         v: VERSION,
         ok: true,
@@ -144,7 +183,7 @@ pub fn answer(line: &str, context: &Context, session: Option<u32>) -> Reply {
         roles: Some(context.roles.clone()),
         active: Some(Roles {
             observe: context.events.as_ref().is_some_and(|ring| ring.running()),
-            act: false,
+            act: context.act.is_some(),
             services: false,
         }),
         error: None,
@@ -171,6 +210,28 @@ pub fn answer(line: &str, context: &Context, session: Option<u32>) -> Reply {
             reply.next = Some(batch.next);
             reply.lost = Some(batch.lost);
             reply
+        }
+        Command::Suspend | Command::Resume | Command::Terminate => {
+            let Some(verb) = request.cmd.acts() else {
+                return Reply::failure("not an acting verb");
+            };
+            let Some(actor) = context.act.as_ref() else {
+                return Reply::failure("the role act is not running");
+            };
+            let (Some(session), Some(client_pid)) = (session, client_pid) else {
+                return Reply::failure("the caller is not known");
+            };
+            let (Some(pid), Some(created)) = (request.pid, request.created) else {
+                return Reply::failure("`pid` and `created` are needed");
+            };
+            let caller = super::act::Caller {
+                pid: client_pid,
+                session,
+            };
+            match actor.act(verb, pid, created, caller) {
+                Ok(()) => reply,
+                Err(text) => Reply::failure(text),
+            }
         }
         Command::Network => {
             let Some(ring) = context
@@ -234,9 +295,10 @@ pub fn serve(
     conn: &mut (impl BufRead + Write),
     context: &Context,
     session: Option<u32>,
+    client_pid: Option<u32>,
 ) -> Result<()> {
     let reply = match read_line(conn, MAX_REQUEST) {
-        Ok(Some(line)) => answer(&line, context, session),
+        Ok(Some(line)) => answer_from(&line, context, session, client_pid),
         Ok(None) => return Ok(()),
         Err(e) => Reply::failure(e.reason),
     };
@@ -269,6 +331,7 @@ mod tests {
             },
             events: None,
             session_of: |_| Some(1),
+            act: None,
         }
     }
 
@@ -293,7 +356,9 @@ mod tests {
     #[test]
     fn unknown_verbs_fields_and_versions_are_refused() {
         for line in [
-            r#"{"v":1,"cmd":"terminate","pid":1}"#,
+            r#"{"v":1,"cmd":"kill","pid":1}"#,
+            r#"{"v":1,"cmd":"terminate"}"#,
+            r#"{"v":1,"cmd":"hello","pid":1}"#,
             r#"{"v":1,"cmd":"hello","after":3}"#,
             r#"{"v":1,"cmd":"events"}"#,
             r#"{"v":1,"cmd":"hello","extra":true}"#,
@@ -341,7 +406,7 @@ mod tests {
             input: Cursor::new(b"{\"v\":1,\"cmd\":\"status\"}\n".to_vec()),
             output: Vec::new(),
         };
-        serve(&mut duplex, &context(), Some(1)).unwrap();
+        serve(&mut duplex, &context(), Some(1), None).unwrap();
         let text = String::from_utf8(duplex.output).unwrap();
         assert_eq!(text.matches('\n').count(), 1);
         let reply: Reply = serde_json::from_str(text.trim()).unwrap();
@@ -423,6 +488,24 @@ mod tests {
                 .active
                 .unwrap()
                 .observe
+        );
+    }
+
+    #[test]
+    fn m4d_acting_verbs_need_the_role_a_pid_and_a_known_caller() {
+        // No actor in this context: the role does not run.
+        let line = r#"{"v":1,"cmd":"suspend","pid":100,"created":5}"#;
+        let reply = answer_from(line, &context(), Some(1), Some(7));
+        assert!(!reply.ok);
+        assert!(reply.error.unwrap().contains("not running"));
+        // `pid` belongs to the acting verbs only.
+        assert!(!answer(r#"{"v":1,"cmd":"status","created":5}"#, &context(), Some(1)).ok);
+        // The status says the role does not run.
+        assert!(
+            !answer(r#"{"v":1,"cmd":"status"}"#, &context(), Some(1))
+                .active
+                .unwrap()
+                .act
         );
     }
 }
