@@ -332,3 +332,25 @@ Hardening from the review of M4a (same day):
 - Under heavy load the kernel may drop events; `lost` of the `events` verb
   counts buffers lost for the whole session. Values are counters, not a
   record of traffic (R14).
+
+## M4d as built, part 1: the policy commands **[assumed]**
+
+The first part of *act* is only the administrator's side: who may be acted
+on, and the switch for the role. The helper does not suspend or end
+anything yet.
+
+- `kaltstellen helper allow list` (no elevation; the owner reads the
+  file) shows the role and the allow list.
+- `kaltstellen helper allow add <full path>` and `allow remove <full path>`,
+  and `kaltstellen helper act on|off`, ask for administrator rights through
+  the same UAC relaunch as `install` (decision 5: the allow list changes
+  only from an elevated prompt). The elevated step edits `helper.toml` and
+  restarts the service so that it reads the file again; nothing is created
+  for a helper that is not installed.
+- An entry is a full path on a drive to an `.exe`: no wildcards, quotes,
+  relative parts or network paths, at most 520 characters, at most 256
+  entries, and not a hard-protected program. It is checked before the UAC
+  prompt (and the file must exist) and again by the elevated step. Entries
+  compare case-insensitively with either slash. `remove` takes the text as
+  given so that an entry that became invalid can still be removed.
+- The window shows the same later (not part of this step).

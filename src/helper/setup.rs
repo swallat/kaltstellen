@@ -137,6 +137,40 @@ fn write_policy(owner_sid: &str) -> Result<()> {
     fs::write(&path, policy.to_toml()).map_err(|e| io_error("cannot write", &path, e))
 }
 
+/// What an edit of the policy did: whether the file changed and what to say.
+pub struct Edit {
+    pub changed: bool,
+    pub message: String,
+}
+
+/// Changes `helper.toml` (the roles, the allow lists) and restarts the
+/// service so that it reads the file again. Only from an elevated process
+/// (the data folder's access list lets no one else write it), and only for
+/// an installed helper: the file is never created here.
+pub fn edit_policy(change: impl FnOnce(&mut Policy) -> Result<Edit>) -> Result<String> {
+    if !service::is_elevated() {
+        return Err(Error::new(
+            Code::HelperNeedsAdmin,
+            "changing the helper's policy needs an elevated process",
+        ));
+    }
+    let path = policy_file().ok_or_else(|| Error::new(Code::HelperService, "no data folder"))?;
+    if !path.exists() {
+        return Err(Error::new(
+            Code::HelperPolicy,
+            "the helper is not installed (no helper.toml); run `kaltstellen helper install` first",
+        ));
+    }
+    let mut policy = Policy::read(&path)?;
+    let edit = change(&mut policy)?;
+    if edit.changed {
+        fs::write(&path, policy.to_toml()).map_err(|e| io_error("cannot write", &path, e))?;
+        service::restart(SERVICE_NAME)?;
+        info!("helper policy changed: {}", edit.message);
+    }
+    Ok(edit.message)
+}
+
 fn open_source(source: &Path) -> Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
     const FILE_SHARE_READ: u32 = 1;

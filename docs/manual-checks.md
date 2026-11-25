@@ -416,3 +416,21 @@ With the helper installed and running (see above), signed in as the owner:
    download; a second account's programs are not listed. Traffic between
    two programs on this computer (the loopback address) is not counted by
    the network provider.
+
+## Background helper: policy commands (M4d part 1)
+
+With the helper installed (see above), from a normal prompt:
+
+1. `kaltstellen helper allow list`: `role act: off`, `allowed elevated
+   programs: none`.
+2. `kaltstellen helper allow add C:\Windows\System32\notepad.exe`: a UAC
+   prompt, then a window says the program is on the allow list and that the
+   role act is off. `allow list` shows the path. `helper status` still says
+   running (the service was restarted and reads the file).
+3. `kaltstellen helper act on` (UAC): `allow list` says `role act: on`;
+   `helper status` shows the roles with act.
+4. `kaltstellen helper allow add C:\Windows\explorer.exe` and
+   `...\*.exe` and `tool.dll` are refused before any prompt.
+5. `allow remove` the notepad path (UAC), `act off` (UAC): back to the
+   start. The helper keeps serving events throughout.
+

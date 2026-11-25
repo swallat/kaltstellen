@@ -41,6 +41,68 @@ pub struct Allow {
     pub programs: Vec<String>,
 }
 
+/// The most programs on the allow list, so a policy stays small.
+pub const MAX_PROGRAMS: usize = 256;
+
+/// Whether two Windows paths name the same file, ignoring case and the
+/// kind of slash.
+fn same_path(a: &str, b: &str) -> bool {
+    let key = |p: &str| p.replace('/', "\\").to_lowercase();
+    key(a) == key(b)
+}
+
+/// The text of an allow-list entry: a full path of an `.exe` on a drive,
+/// without wildcards, relative parts, quotes or control characters, and not
+/// a program kaltstellen never touches (the hard-protected list). Checked
+/// again by the elevated step, so the unelevated caller cannot slip
+/// anything in.
+pub fn normalize_program(path: &str) -> Result<String> {
+    let path = path.trim().replace('/', "\\");
+    let bad = |why: &str| {
+        Err(Error::new(
+            Code::HelperPolicy,
+            format!("{path:?} cannot go on the allow list: {why}"),
+        ))
+    };
+    let bytes = path.as_bytes();
+    if bytes.len() < 7
+        || bytes.len() > 520
+        || !bytes[0].is_ascii_alphabetic()
+        || bytes[1] != b':'
+        || bytes[2] != b'\\'
+    {
+        return bad("it must be a full path on a drive, like C:\\Tools\\tool.exe");
+    }
+    if path
+        .chars()
+        .any(|c| c.is_control() || "*?\"<>|".contains(c))
+    {
+        return bad("it has wildcards, quotes or control characters");
+    }
+    let mut parts = path[3..].split('\\').peekable();
+    let mut file = "";
+    while let Some(part) = parts.next() {
+        if part.is_empty()
+            || part == "."
+            || part == ".."
+            || part.ends_with(' ')
+            || part.ends_with('.')
+        {
+            return bad("it has an empty or relative part");
+        }
+        if parts.peek().is_none() {
+            file = part;
+        }
+    }
+    if !file.to_lowercase().ends_with(".exe") {
+        return bad("it must end in .exe");
+    }
+    if crate::protection::is_hard_protected(file) {
+        return bad("kaltstellen never touches this program");
+    }
+    Ok(path)
+}
+
 impl Policy {
     /// The policy written at install: observing on, acting and services off
     /// until the administrator allows them.
@@ -55,6 +117,36 @@ impl Policy {
             },
             allow: Allow::default(),
         }
+    }
+
+    /// Adds an elevated program to the allow list; `false` if it was there.
+    pub fn allow_program(&mut self, path: &str) -> Result<bool> {
+        let path = normalize_program(path)?;
+        if self.allow.programs.iter().any(|p| same_path(p, &path)) {
+            return Ok(false);
+        }
+        if self.allow.programs.len() >= MAX_PROGRAMS {
+            return Err(Error::new(
+                Code::HelperPolicy,
+                format!("the allow list holds {MAX_PROGRAMS} programs already"),
+            ));
+        }
+        self.allow.programs.push(path);
+        Ok(true)
+    }
+
+    /// Takes a program off the allow list; `false` if it was not there. The
+    /// text is compared as given (case-insensitively), so an entry that
+    /// became invalid can still be removed.
+    pub fn disallow_program(&mut self, path: &str) -> bool {
+        let before = self.allow.programs.len();
+        self.allow.programs.retain(|p| !same_path(p, path.trim()));
+        self.allow.programs.len() != before
+    }
+
+    /// Whether `path` (a process's full image path) is on the allow list.
+    pub fn allows_program(&self, path: &str) -> bool {
+        self.allow.programs.iter().any(|p| same_path(p, path))
     }
 
     pub fn parse(text: &str) -> Result<Policy> {
@@ -137,5 +229,66 @@ mod tests {
                 .code,
             Code::HelperPolicy
         );
+    }
+
+    #[test]
+    fn m4d_allow_list_entries_are_full_exe_paths_only() {
+        for good in [r"C:\Tools\tool.exe", "d:/games/Sim/sim.EXE"] {
+            assert!(normalize_program(good).is_ok(), "{good}");
+        }
+        assert_eq!(
+            normalize_program("d:/games/Sim/sim.exe").unwrap(),
+            r"d:\games\Sim\sim.exe"
+        );
+        for bad in [
+            "",
+            "tool.exe",
+            r"\\server\share\tool.exe",
+            r"C:\Tools\*.exe",
+            r"C:\Tools\..\Windows\tool.exe",
+            r"C:\Tools\.\tool.exe",
+            r"C:\Tools\tool.dll",
+            r"C:\Tools\tool.exe ",
+            "C:\\Tools\\\"tool\".exe",
+            r"C:\Windows\explorer.exe",
+            r"C:\Tools\\tool.exe",
+        ] {
+            // The one with trailing space is trimmed and fine; the rest not.
+            let result = normalize_program(bad);
+            if bad == r"C:\Tools\tool.exe " {
+                assert!(result.is_ok());
+            } else {
+                assert!(result.is_err(), "{bad:?} was accepted");
+            }
+        }
+    }
+
+    #[test]
+    fn m4d_allow_and_disallow_ignore_case_and_slashes() {
+        let mut policy = Policy::initial(SID);
+        assert!(policy.allow_program(r"C:\Tools\Tool.exe").unwrap());
+        assert!(
+            !policy.allow_program("c:/tools/tool.EXE").unwrap(),
+            "same file"
+        );
+        assert!(policy.allows_program(r"c:\TOOLS\tool.exe"));
+        assert!(!policy.allows_program(r"C:\Tools\other.exe"));
+        assert!(!policy.disallow_program(r"C:\Tools\other.exe"));
+        assert!(policy.disallow_program("C:/TOOLS/tool.exe"));
+        assert!(policy.allow.programs.is_empty());
+        // The list survives the file round trip.
+        policy.allow_program(r"C:\Tools\Tool.exe").unwrap();
+        assert_eq!(Policy::parse(&policy.to_toml()).unwrap(), policy);
+    }
+
+    #[test]
+    fn m4d_the_allow_list_is_bounded() {
+        let mut policy = Policy::initial(SID);
+        for n in 0..MAX_PROGRAMS {
+            policy
+                .allow_program(&format!(r"C:\Tools\t{n}.exe"))
+                .unwrap();
+        }
+        assert!(policy.allow_program(r"C:\Tools\one-more.exe").is_err());
     }
 }

@@ -208,9 +208,44 @@ enum HelperAction {
         #[arg(long, default_value_t = 0)]
         after: u64,
     },
+    /// Switch the role act (suspend and end elevated programs on the allow
+    /// list) on or off; asks for administrator rights
+    Act {
+        #[arg(value_enum)]
+        state: OnOff,
+        #[arg(long, hide = true)]
+        relaunched: bool,
+        #[arg(long, hide = true)]
+        from_window: bool,
+    },
+    /// The elevated programs the helper may suspend and end (role act)
+    Allow {
+        #[command(subcommand)]
+        action: AllowAction,
+    },
     /// The service itself (started by Windows, not by hand)
     #[command(hide = true)]
     Run,
+}
+
+#[derive(Subcommand)]
+enum AllowAction {
+    /// Show the allow list and whether the role act is on
+    List,
+    /// Put an elevated program on the allow list (full path; asks for
+    /// administrator rights)
+    Add {
+        /// Full path of the .exe, like C:\Tools\tool.exe
+        path: String,
+        #[arg(long, hide = true)]
+        relaunched: bool,
+    },
+    /// Take a program off the allow list (asks for administrator rights)
+    Remove {
+        path: String,
+        #[arg(long, hide = true)]
+        relaunched: bool,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -1083,7 +1118,136 @@ fn helper(action: HelperAction) -> u8 {
             }
             code
         }
+        HelperAction::Act {
+            state,
+            relaunched,
+            from_window,
+        } => {
+            let on = matches!(state, OnOff::On);
+            let code = if service::is_elevated() {
+                policy_edit(|policy| {
+                    let changed = policy.roles.act != on;
+                    policy.roles.act = on;
+                    Ok(setup::Edit {
+                        changed,
+                        message: format!(
+                            "the role act is {}{}",
+                            if on { "on" } else { "off" },
+                            if changed { "" } else { " already" }
+                        ),
+                    })
+                })
+            } else {
+                relaunch_elevated(
+                    |_| format!("helper act {}", if on { "on" } else { "off" }),
+                    None,
+                )
+            };
+            if relaunched || from_window {
+                finish_console(code);
+            }
+            code
+        }
+        HelperAction::Allow { action } => match action {
+            AllowAction::List => match setup::report() {
+                Ok(report) => match &report.policy {
+                    Ok(policy) => {
+                        println!("role act: {}", if policy.roles.act { "on" } else { "off" });
+                        if policy.allow.programs.is_empty() {
+                            println!("allowed elevated programs: none");
+                        }
+                        for program in &policy.allow.programs {
+                            println!("allowed: {program}");
+                        }
+                        exit::OK
+                    }
+                    Err(reason) => {
+                        eprintln!("the policy cannot be read: {reason}");
+                        exit::ERRORS
+                    }
+                },
+                Err(err) => refused(err),
+            },
+            AllowAction::Add { path, relaunched } => {
+                let path = match crate::helper::policy::normalize_program(&path) {
+                    Ok(path) => path,
+                    Err(err) => return refused(err),
+                };
+                if !std::path::Path::new(&path).is_file() {
+                    return refused(Error::new(
+                        Code::HelperPolicy,
+                        format!("{path} is not a file on this computer"),
+                    ));
+                }
+                let code = if service::is_elevated() {
+                    policy_edit(|policy| {
+                        let changed = policy.allow_program(&path)?;
+                        Ok(setup::Edit {
+                            changed,
+                            message: format!(
+                                "{path} is {}on the allow list{}",
+                                if changed { "now " } else { "" },
+                                if policy.roles.act {
+                                    ""
+                                } else {
+                                    " (the role act is off: `kaltstellen helper act on`)"
+                                }
+                            ),
+                        })
+                    })
+                } else {
+                    relaunch_elevated(|_| format!("helper allow add \"{path}\""), None)
+                };
+                if relaunched {
+                    finish_console(code);
+                }
+                code
+            }
+            AllowAction::Remove { path, relaunched } => {
+                let path = path.trim().to_owned();
+                if path.is_empty() || path.contains('"') {
+                    return refused(Error::new(
+                        Code::HelperPolicy,
+                        "name the program's full path",
+                    ));
+                }
+                let code = if service::is_elevated() {
+                    policy_edit(|policy| {
+                        let changed = policy.disallow_program(&path);
+                        Ok(setup::Edit {
+                            changed,
+                            message: if changed {
+                                format!("{path} is off the allow list")
+                            } else {
+                                format!("{path} was not on the allow list")
+                            },
+                        })
+                    })
+                } else {
+                    relaunch_elevated(|_| format!("helper allow remove \"{path}\""), None)
+                };
+                if relaunched {
+                    finish_console(code);
+                }
+                code
+            }
+        },
         HelperAction::Run => unreachable!("handled in main"),
+    }
+}
+
+/// An elevated edit of the helper's policy; prints what it did.
+fn policy_edit(
+    change: impl FnOnce(
+        &mut crate::helper::policy::Policy,
+    ) -> crate::error::Result<crate::helper::setup::Edit>,
+) -> u8 {
+    match crate::helper::setup::edit_policy(change) {
+        Ok(message) => {
+            println!("{message}");
+            exit::OK
+        }
+        Err(err) => refused(err),
     }
 }
 
@@ -1543,7 +1707,45 @@ fn for_each(
 
 #[cfg(test)]
 mod tests {
-    use super::frozen_line;
+    use super::{Cli, frozen_line};
+    use clap::Parser;
+
+    #[test]
+    fn m4d_the_act_and_allow_commands_parse() {
+        for line in [
+            "kaltstellen helper act on",
+            "kaltstellen helper act off --relaunched",
+            "kaltstellen helper allow list",
+            r#"kaltstellen helper allow add "C:\Program Files\Tool\tool.exe""#,
+            r#"kaltstellen helper allow add "C:\Program Files\Tool\tool.exe" --relaunched"#,
+            r#"kaltstellen helper allow remove "C:\Tool\tool.exe""#,
+        ] {
+            let words: Vec<String> = shell_words(line);
+            assert!(Cli::try_parse_from(&words).is_ok(), "{line}");
+        }
+        for line in [
+            "kaltstellen helper act maybe",
+            "kaltstellen helper allow add",
+        ] {
+            assert!(Cli::try_parse_from(shell_words(line)).is_err(), "{line}");
+        }
+    }
+
+    /// Splits at spaces outside double quotes.
+    fn shell_words(line: &str) -> Vec<String> {
+        let mut words = Vec::new();
+        let mut current = String::new();
+        let mut quoted = false;
+        for c in line.chars() {
+            match c {
+                '"' => quoted = !quoted,
+                ' ' if !quoted => words.push(std::mem::take(&mut current)),
+                c => current.push(c),
+            }
+        }
+        words.push(current);
+        words
+    }
 
     #[test]
     fn status_names_the_frozen_process_and_its_entry() {

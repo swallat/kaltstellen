@@ -37,7 +37,7 @@ use windows::Win32::System::Services::{
     SERVICE_CONTROL_INTERROGATE, SERVICE_CONTROL_SHUTDOWN, SERVICE_CONTROL_STOP,
     SERVICE_DELAYED_AUTO_START_INFO, SERVICE_DESCRIPTIONW, SERVICE_ERROR_NORMAL,
     SERVICE_FAILURE_ACTIONS_FLAG, SERVICE_FAILURE_ACTIONSW, SERVICE_NO_CHANGE,
-    SERVICE_QUERY_STATUS, SERVICE_REQUIRED_PRIVILEGES_INFOW, SERVICE_RUNNING,
+    SERVICE_QUERY_STATUS, SERVICE_REQUIRED_PRIVILEGES_INFOW, SERVICE_RUNNING, SERVICE_START,
     SERVICE_START_PENDING, SERVICE_STATUS, SERVICE_STATUS_CURRENT_STATE, SERVICE_STATUS_HANDLE,
     SERVICE_STATUS_PROCESS, SERVICE_STOP, SERVICE_STOP_PENDING, SERVICE_STOPPED,
     SERVICE_TABLE_ENTRYW, SERVICE_WIN32_OWN_PROCESS, StartServiceCtrlDispatcherW, StartServiceW,
@@ -437,6 +437,23 @@ pub fn stop(name: &str) -> Result<()> {
     let manager = manager(SC_MANAGER_CONNECT)?;
     match open(&manager, name, SERVICE_STOP | SERVICE_QUERY_STATUS)? {
         Some(service) => stop_service(&service),
+        None => Ok(()),
+    }
+}
+
+/// Stops the service if it runs and starts it again, so that it reads its
+/// files anew; nothing if it is not installed.
+pub fn restart(name: &str) -> Result<()> {
+    let manager = manager(SC_MANAGER_CONNECT)?;
+    match open(
+        &manager,
+        name,
+        SERVICE_STOP | SERVICE_START | SERVICE_QUERY_STATUS,
+    )? {
+        Some(service) => {
+            stop_service(&service)?;
+            start_service(&service)
+        }
         None => Ok(()),
     }
 }
