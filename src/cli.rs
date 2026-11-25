@@ -1690,11 +1690,13 @@ fn suggestions(only: Option<&str>) -> u8 {
         eprintln!("warning: {problem}");
     }
     let mut any = false;
+    // The running programs are read once, for all profiles.
+    let mut probe = None;
     for profile in &loaded.config.profiles {
         if only.is_some_and(|name| !profile.name.eq_ignore_ascii_case(name)) {
             continue;
         }
-        let list = usage.suggestions_now(&profile.name, &profile.apps);
+        let list = usage.suggestions_cached(&profile.name, &profile.apps, &mut probe);
         if list.is_empty() {
             continue;
         }

@@ -135,9 +135,14 @@ impl Probe {
             return Self::default();
         };
         let visible = crate::process::pids_with_visible_windows();
+        // The counters come from the owner's own session; so does this.
+        let session = snapshot.own_session();
         let mut bytes: HashMap<String, u64> = HashMap::new();
         let mut probe = Self::default();
         for p in snapshot.processes() {
+            if Some(p.session_id) != session {
+                continue;
+            }
             let name = p.name.to_lowercase();
             if visible.contains(&p.pid) {
                 probe.windowed.insert(name.clone());
@@ -291,9 +296,11 @@ impl Usage {
         usage.paths.retain(|k, _| known.contains(k));
     }
 
-    /// Whether a suggestion for `profile` could use the running programs
-    /// (a `stayed` or `came back` result that repeated).
-    pub fn needs_probe(&self, profile: &str) -> bool {
+    /// Whether a suggestion for `profile` could use the running programs:
+    /// a `stayed` result that repeated for a program without a say, or a
+    /// `came back` one for a stopped program, not marked `never` and not
+    /// protected.
+    pub fn needs_probe(&self, profile: &str, apps: &[App]) -> bool {
         let Some(usage) = self.profiles.get(&profile.to_lowercase()) else {
             return false;
         };
@@ -306,18 +313,40 @@ impl Usage {
                 }
             }
         }
-        counts.values().any(|n| *n >= REPEATS)
+        counts.iter().any(|((exe, result), n)| {
+            *n >= REPEATS
+                && !usage.never.contains(*exe)
+                && protection::of(exe) == Protection::None
+                && match result {
+                    Finding::Stayed => has_no_say(apps, exe),
+                    _ => matches!(
+                        entry(apps, exe).map(|a| &a.action),
+                        Some(AppAction::Stop { .. })
+                    ),
+                }
+        })
     }
 
     /// [`suggestions_with`](Self::suggestions_with) with what the running
     /// programs say, read only when a suggestion could use it.
     pub fn suggestions_now(&self, profile: &str, apps: &[App]) -> Vec<Suggestion> {
-        let probe = if self.needs_probe(profile) {
-            Probe::take()
-        } else {
-            Probe::default()
-        };
-        self.suggestions_with(profile, apps, &probe)
+        let mut probe = None;
+        self.suggestions_cached(profile, apps, &mut probe)
+    }
+
+    /// [`suggestions_now`](Self::suggestions_now) that keeps the probe in
+    /// `probe`, so a caller that asks for several profiles reads it once.
+    pub fn suggestions_cached(
+        &self,
+        profile: &str,
+        apps: &[App],
+        probe: &mut Option<Probe>,
+    ) -> Vec<Suggestion> {
+        if self.needs_probe(profile, apps) && probe.is_none() {
+            *probe = Some(Probe::take());
+        }
+        let known = probe.clone().unwrap_or_default();
+        self.suggestions_with(profile, apps, &known)
     }
 
     /// Suggestions for `profile` with its current entries, from the
@@ -371,7 +400,7 @@ impl Usage {
                 {
                     (
                         Proposal::Ignore,
-                        "was running again when you switched back after it was stopped, and it has no window",
+                        "was running again when you switched back after it was stopped, and it has no window now",
                     )
                 }
                 (Finding::CameBack, Some(AppAction::Stop { .. })) => (
@@ -748,7 +777,7 @@ mod tests {
     fn h5_stayed_and_heavy_proposes_a_freeze() {
         let mut usage = Usage::default();
         record_n(&mut usage, 3, Finding::Stayed);
-        assert!(usage.needs_probe("focus"));
+        assert!(usage.needs_probe("focus", &[]));
         // Without anything known, or not heavy: nothing.
         assert!(usage.suggestions("focus", &[]).is_empty());
         let light = probe(&["chat.exe"], &["chat.exe"], &[]);
@@ -768,14 +797,20 @@ mod tests {
         assert!(usage.suggestions_with("focus", &decided, &heavy).is_empty());
         let ignored = vec![app("chat.exe", AppAction::Ignore)];
         assert_eq!(usage.suggestions_with("focus", &ignored, &heavy).len(), 1);
+        assert!(usage.needs_probe("focus", &ignored));
+        assert!(!usage.needs_probe("focus", &decided));
+        usage.never("focus", "chat.exe");
+        assert!(!usage.needs_probe("focus", &[]));
     }
 
     #[test]
     fn h5_came_back_without_a_window_is_left_as_it_is() {
         let mut usage = Usage::default();
         record_n(&mut usage, 3, Finding::CameBack);
-        assert!(usage.needs_probe("focus"));
         let apps = vec![app("chat.exe", stop())];
+        assert!(usage.needs_probe("focus", &apps));
+        // No stop entry, or a program marked `never`: nothing to pick.
+        assert!(!usage.needs_probe("focus", &[]));
         // A window: freeze. No window: leave it. Not running now: unknown,
         // so the counters' answer (freeze) stands.
         let with = probe(&["chat.exe"], &["chat.exe"], &[]);
@@ -796,7 +831,7 @@ mod tests {
         // Other results never ask for the probe.
         let mut other = Usage::default();
         record_n(&mut other, 3, Finding::Gone);
-        assert!(!other.needs_probe("focus"));
+        assert!(!other.needs_probe("focus", &[]));
     }
 
     #[test]
