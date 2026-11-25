@@ -1091,6 +1091,19 @@ impl<H: Host> Bridge<H> {
                 let launch = self
                     .host
                     .launch_of(exe.trim(), path.as_deref().map(Path::new));
+                // Arguments that `update_entry` would refuse (too many, too
+                // long, control characters) count as unknown.
+                let launch = launch.map(|mut l| {
+                    let fits = l.args.len() <= 64
+                        && l.args
+                            .iter()
+                            .all(|a| a.len() <= MAX_TEXT && !a.chars().any(char::is_control));
+                    if !fits {
+                        l.args.clear();
+                        l.args_known = false;
+                    }
+                    l
+                });
                 Ok(Some(match launch {
                     Some(launch) => json!({
                         "found": true,

@@ -628,8 +628,12 @@ impl Run<'_> {
             // Where it was started from and with which arguments, read now,
             // while it runs: that is what the restart on neutral uses unless
             // the entry names its own arguments.
-            let launch = process::launch_of(&processes, &app.exe, app.path.as_deref());
-            if *restart_on_neutral && launch.as_ref().is_some_and(|l| !l.args_known) {
+            // Not for a program that is never restarted: its arguments may hold
+            // secrets and would be written to the state file for nothing.
+            let launch = (*restart_on_neutral)
+                .then(|| process::launch_of(&processes, &app.exe, app.path.as_deref()))
+                .flatten();
+            if args.is_empty() && launch.as_ref().is_some_and(|l| !l.args_known) {
                 warn!(
                     "{}: its command line cannot be read; it will be restarted without arguments",
                     app.exe

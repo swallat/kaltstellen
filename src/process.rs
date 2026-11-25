@@ -1060,13 +1060,26 @@ pub fn launch_of(processes: &[ProcessInfo], exe: &str, path: Option<&Path>) -> O
     order.sort_by_key(|p| p.created);
     let rest = named.iter().copied().filter(|p| !order.contains(p));
     let order: Vec<&ProcessInfo> = order.iter().copied().chain(rest).collect();
-    order.into_iter().find_map(|info| {
-        let launch = Target::open(info, Access::Query).ok()??.launch().ok()?;
-        match path {
-            Some(wanted) if !same_path(wanted, &launch.image) => None,
-            _ => Some(launch),
+    // The first process whose command line can be read wins; one whose
+    // arguments are unknown is the fallback.
+    let mut fallback = None;
+    for info in order {
+        let Some(launch) = Target::open(info, Access::Query)
+            .ok()
+            .flatten()
+            .and_then(|t| t.launch().ok())
+        else {
+            continue;
+        };
+        if path.is_some_and(|wanted| !same_path(wanted, &launch.image)) {
+            continue;
         }
-    })
+        if launch.args_known {
+            return Some(launch);
+        }
+        fallback.get_or_insert(launch);
+    }
+    fallback
 }
 
 /// The arguments of a command line, without the program (the first word).

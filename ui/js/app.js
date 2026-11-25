@@ -675,6 +675,7 @@ async function entrySet(keys, change) {
   // are read from the running program. One that does not run and has no
   // path cannot be set to start (nothing is known about it).
   const launches = new Map();
+  let lackingText = null;
   if (change.action === 'start') {
     const lacking = [];
     for (const e of todo) {
@@ -685,7 +686,7 @@ async function entrySet(keys, change) {
     }
     if (lacking.length) {
       const one = lacking.length === 1;
-      notice(`${lacking.map((e) => e.exe).join(', ')} ${one ? 'does' : 'do'} not run, so ${one ? 'its' : 'their'} path cannot be read. Start ${one ? 'it' : 'them'} once, or set the path in Details.`);
+      lackingText = (`${lacking.map((e) => e.exe).join(', ')} ${one ? 'does' : 'do'} not run, so ${one ? 'its' : 'their'} path cannot be read. Start ${one ? 'it' : 'them'} once, or set the path in Details.`);
       todo = todo.filter((e) => !lacking.includes(e));
     }
   }
@@ -713,7 +714,15 @@ async function entrySet(keys, change) {
     }
     const reply = await call('update_entry', { profile: name, index, entry: entryPayload(here.entries[index], patch) });
     if (!reply.ok) return;
+    // The path is part of the key: carry selection and memory over.
+    if (launch && !e0.path) {
+      const next = `${e0.exe.toLowerCase()}|${launch.path.toLowerCase()}`;
+      if (entrySel.delete(key)) entrySel.add(next);
+      if (entryMemory.has(key)) entryMemory.set(next, entryMemory.get(key));
+      if (entryLast === key) entryLast = next;
+    }
   }
+  if (lackingText) notice(lackingText);
 }
 
 /** How the running program of entry `e` was started: `{path, args}`, or
@@ -1863,7 +1872,7 @@ $('e-detect').addEventListener('click', () => detectIntoForm(true));
 async function detectIntoForm(overwrite) {
   const exe = $('e-exe').value.trim();
   if (!exe) return;
-  const found = await detectLaunch({ exe, path: overwrite ? null : ($('e-path').value.trim() || null) });
+  const found = await detectLaunch({ exe, path: $('e-path').value.trim() || null });
   if (!found) {
     if (overwrite) $('entry-error').textContent = `${exe} does not run (or cannot be read), so there is nothing to take over.`;
     return;
@@ -1871,7 +1880,7 @@ async function detectIntoForm(overwrite) {
   $('entry-error').textContent = '';
   if (overwrite || !$('e-path').value.trim()) $('e-path').value = found.path;
   if (overwrite || !$('e-args').value.trim()) $('e-args').value = found.args.join('\n');
-  if (!found.args_known) $('entry-error').textContent = 'Its arguments cannot be read (the program is protected or elevated); the path was taken over.';
+  if (!found.args_known) $('entry-error').textContent = 'Its arguments cannot be read (the program is protected, elevated or has unusual arguments); only the path is taken over where it was empty.';
 }
 $('e-restart').addEventListener('change', showOptions);
 
