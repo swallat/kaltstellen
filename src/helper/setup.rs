@@ -137,6 +137,56 @@ fn write_policy(owner_sid: &str) -> Result<()> {
     fs::write(&path, policy.to_toml()).map_err(|e| io_error("cannot write", &path, e))
 }
 
+/// What an edit of the policy did: whether the file changed and what to say.
+pub struct Edit {
+    pub changed: bool,
+    pub message: String,
+}
+
+/// Changes `helper.toml` (the roles, the allow lists) and restarts the
+/// service so that it reads the file again. Only from an elevated process
+/// (the data folder's access list lets no one else write it), and only for
+/// an installed helper: the file is never created here.
+pub fn edit_policy(change: impl FnOnce(&mut Policy) -> Result<Edit>) -> Result<String> {
+    if !service::is_elevated() {
+        return Err(Error::new(
+            Code::HelperNeedsAdmin,
+            "changing the helper's policy needs an elevated process",
+        ));
+    }
+    let path = policy_file().ok_or_else(|| Error::new(Code::HelperService, "no data folder"))?;
+    if !path.exists() {
+        return Err(Error::new(
+            Code::HelperPolicy,
+            "the helper is not installed (no helper.toml); run `kaltstellen helper install` first",
+        ));
+    }
+    let mut policy = Policy::read(&path)?;
+    let edit = change(&mut policy)?;
+    if edit.changed {
+        // Through a file of its own, so that a crash never leaves a half
+        // written policy that the service refuses at its next start.
+        let temporary = path.with_extension("toml.tmp");
+        fs::write(&temporary, policy.to_toml())
+            .and_then(|()| fs::rename(&temporary, &path))
+            .map_err(|e| {
+                let _ = fs::remove_file(&temporary);
+                io_error("cannot write", &path, e)
+            })?;
+        info!("helper policy changed: {}", edit.message);
+        service::restart(SERVICE_NAME).map_err(|e| {
+            Error::new(
+                Code::HelperService,
+                format!(
+                    "the policy is saved, but the service did not restart ({}); start it with `net start kaltstellen-helper` from an elevated prompt",
+                    e.reason
+                ),
+            )
+        })?;
+    }
+    Ok(edit.message)
+}
+
 fn open_source(source: &Path) -> Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
     const FILE_SHARE_READ: u32 = 1;
