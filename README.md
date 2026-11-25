@@ -10,10 +10,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/swallat/kaltstellen/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/swallat/kaltstellen/ci.yml?branch=main&label=CI&labelColor=12324B" alt="CI status"></a>
-  <img src="https://img.shields.io/badge/status-prototype-FF8A1F?labelColor=12324B" alt="Status: prototype">
-  <img src="https://img.shields.io/badge/platform-Windows-1593AF?labelColor=12324B" alt="Platform: Windows">
-  <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-1593AF?labelColor=12324B" alt="License: MIT or Apache-2.0"></a>
+  <a href="https://github.com/swallat/kaltstellen/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/swallat/kaltstellen/ci.yml?branch=main&label=CI&labelColor=0F0C33" alt="CI status"></a>
+  <img src="https://img.shields.io/badge/status-prototype-FF7A1A?labelColor=0F0C33" alt="Status: prototype">
+  <img src="https://img.shields.io/badge/platform-Windows-3322B8?labelColor=0F0C33" alt="Platform: Windows">
+  <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-3322B8?labelColor=0F0C33" alt="License: MIT or Apache-2.0"></a>
 </p>
 
 A small Windows tool that switches between app profiles to free up CPU and RAM.
