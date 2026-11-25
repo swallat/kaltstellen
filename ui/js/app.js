@@ -362,10 +362,12 @@ function aboutKey(exe, path) {
 
 /** An empty line under the program's name; `loadAbout` fills it. `path`
  * only for entries of the configuration, as for icons. */
-function programAbout(exe, path) {
+function programAbout(exe, path, withKind = false) {
   const holder = el('span', { class: 'about' });
   holder.dataset.exe = exe;
   if (path) holder.dataset.path = path;
+  // H3: also say what kind of program it probably is, and the mildest action.
+  if (withKind) holder.dataset.kind = '1';
   return holder;
 }
 
@@ -392,8 +394,19 @@ function aboutTitle(v) {
 /** Description (else product), the company where no valid signature names
  * a publisher, then the signature: the publisher with a check mark, a
  * warning for a broken signature, a discreet "unsigned". */
+function kindChip(v) {
+  if (!v.kind || !v.kind.known) return null;
+  const text = v.suggestion
+    ? `probably ${v.kind.label} · Suggested: ${snapActionLabel[v.suggestion.action]} (${v.suggestion.reason})`
+    : `probably ${v.kind.label}`;
+  return el('span', { class: 'kind-chip', text });
+}
+
 function showAbout(holder, v) {
   if (!v) {
+    // No file to read: the guess by name alone, if the list had one.
+    const chip = holder.dataset.kind && holder.fallback ? kindChip(holder.fallback) : null;
+    if (chip) holder.replaceChildren(chip);
     holder.classList.add('loaded');
     return;
   }
@@ -416,6 +429,8 @@ function showAbout(holder, v) {
     if (i > 0) children.push(' · ');
     children.push(part);
   });
+  const chip = holder.dataset.kind ? kindChip(v) : null;
+  if (chip) children.push(chip);
   holder.replaceChildren(...children);
   holder.title = aboutTitle(v);
   if (!v.pending) holder.classList.add('loaded');
@@ -1073,7 +1088,7 @@ async function acceptSuggestion(s) {
 function renderUnassigned() {
   const rows = unassigned.map((u) => el('tr', {},
     el('td', {}, el('div', { class: 'program' }, programIcon(u.exe, null),
-      el('span', { class: 'names' }, el('span', { class: 'exe', text: u.exe }), u.tray ? trayTag() : null, programAbout(u.exe, null), u.path ? el('span', { class: 'path', text: u.path }) : null))),
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: u.exe }), u.tray ? trayTag() : null, programAbout(u.exe, null, true), u.path ? el('span', { class: 'path', text: u.path }) : null))),
     el('td', {}, u.started ? el('span', { class: 'tag new', title: 'Started while this profile was active', text: 'started' }) : u.new ? el('span', { class: 'tag new', text: 'new' }) : 'earlier'),
     el('td', {},
       el('button', { type: 'button', class: 'button small', 'aria-label': `Add ${u.exe}`, onclick: () => addProgram(u.exe, null), text: 'Add' }),
@@ -1857,7 +1872,30 @@ function editEntry(index) {
   $('e-confirmed').checked = e.confirmed;
   $('entry-error').textContent = '';
   showOptions();
+  showEntrySuggestion(e);
   openDialog($('entry-dialog'));
+}
+
+/** H3: the mildest action for what the program probably is, offered next to
+ * the action. Only when it differs from the entry's choice. */
+async function showEntrySuggestion(e) {
+  const box = $('e-suggest');
+  box.hidden = true;
+  const program = { exe: e.exe };
+  if (e.path) program.path = e.path;
+  const reply = await call('program_info', { programs: [program] }, { quiet: true });
+  const view = reply.ok ? reply.data[0] : null;
+  // The dialog may have moved on to another entry meanwhile.
+  if (!view || !editing || $('e-exe').value !== e.exe) return;
+  const s = view.suggestion;
+  if (!s || s.action === $('e-action').value || !view.kind || !view.kind.known) return;
+  $('e-suggest-text').textContent = `Probably ${view.kind.label}. Suggested: ${snapActionLabel[s.action]} (${s.reason}).`;
+  $('e-suggest-use').onclick = () => {
+    $('e-action').value = s.action;
+    $('e-action').dispatchEvent(new Event('change'));
+    box.hidden = true;
+  };
+  box.hidden = false;
 }
 
 $('e-action').addEventListener('change', () => {
@@ -2012,10 +2050,9 @@ async function openAdd() {
   const running = reply.ok ? reply.data : [];
   const rows = running.map((p) => el('tr', {},
     el('td', {}, el('div', { class: 'program' }, programIcon(p.exe, null),
-      el('span', { class: 'names' }, el('span', { class: 'exe', text: p.exe }), programAbout(p.exe, null),
-        p.kind && p.kind.known ? el('span', { class: 'hint', text: `probably ${p.kind.label}` }) : null,
-        p.suggestion ? el('span', { class: 'hint', text: `Suggested: ${snapActionLabel[p.suggestion.action]} (${p.suggestion.reason})` }) : null))),
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: p.exe }), Object.assign(programAbout(p.exe, null, true), { fallback: p })))),
     el('td', { class: 'num', text: megabytes(p.private_bytes) }),
+    el('td', { class: 'load', 'data-exe': p.exe.toLowerCase(), text: 'measuring…' }),
     el('td', { class: `protection ${p.protection}`, text: protectionText[p.protection] }),
     el('td', {}, el('button', {
       type: 'button', class: 'button small', disabled: p.protection === 'hard',
@@ -2027,6 +2064,38 @@ async function openAdd() {
   loadIcons($('running'));
   loadAbout($('running'));
   openDialog($('add-dialog'));
+  measureRunning(running);
+}
+
+let addMeasure = null;
+
+/** H2 for `Add a program`: what each listed program costs right now, from
+ * two samples about 1.5 s apart. Skipped while the snapshot dialog measures
+ * (the host keeps one first sample). */
+async function measureRunning(running) {
+  const token = {};
+  addMeasure = token;
+  const cells = () => [...$('running').querySelectorAll('td.load')];
+  const fill = (text) => cells().forEach((c) => { c.textContent = text; });
+  if (snap && snap.busy) {
+    fill('');
+    return;
+  }
+  await call('measure_start', {}, { quiet: true });
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  if (addMeasure !== token || !$('add-dialog').open) return;
+  const reply = await call('measure', { programs: [...new Set(running.map((r) => r.exe))].slice(0, 256) }, { quiet: true });
+  if (addMeasure !== token || !$('add-dialog').open) return;
+  if (!reply.ok) {
+    fill('');
+    return;
+  }
+  const byExe = new Map(reply.data.programs.map((r) => [r.exe.toLowerCase(), r]));
+  for (const cell of cells()) {
+    const row = byExe.get(cell.dataset.exe);
+    cell.textContent = row ? loadText(row) : '';
+    cell.title = row && row.heavy ? 'Heavy' : '';
+  }
 }
 
 $('pick-file').addEventListener('click', async () => {

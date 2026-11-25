@@ -186,6 +186,7 @@ input[type="checkbox"] { min-height: auto; width: 1rem; height: 1rem; accent-col
 .about .publisher { color: var(--color-primary); font-weight: 600; white-space: nowrap; }
 .about .sig-invalid { color: var(--color-accent); font-weight: 600; }
 .about .sig-none { font-style: italic; }
+.about .kind-chip { display: block; }
 .table td .button + .button { margin-left: var(--space-1); }
 .action { display: inline-block; padding: 0 var(--space-2); border-radius: 999px; font-size: 0.8125rem; border: 1px solid var(--color-line); }
 .action.suspend { border-color: var(--color-frost); color: var(--color-frost); }

@@ -561,6 +561,34 @@ fn preview_json(plan: &crate::engine::Plan) -> Value {
     })
 }
 
+/// H3: a `program_info` view with the kind and the mildest fitting action,
+/// now that the file description is known (names and folders alone place
+/// fewer programs). A guess, like every kind.
+fn program_info_json(wanted: &Wanted, view: &crate::program_info::View) -> Value {
+    let mut value = json!(view);
+    let path = wanted.path.as_deref().and_then(Path::to_str);
+    let description = view.description.as_deref().or(view.product.as_deref());
+    let guess = crate::kinds::classify(&wanted.exe, path, description);
+    if let Value::Object(map) = &mut value {
+        map.insert(
+            "kind".to_owned(),
+            json!({
+                "id": guess.kind.id(),
+                "plural": guess.kind.plural(),
+                "label": guess.kind.label(),
+                "known": guess.kind != crate::kinds::Kind::Unknown,
+            }),
+        );
+        map.insert(
+            "suggestion".to_owned(),
+            json!(guess.kind.suggestion().map(|(action, reason)| {
+                json!({"action": action_name(action), "reason": reason})
+            })),
+        );
+    }
+    value
+}
+
 fn protection_name(exe: &str) -> &'static str {
     match protection::of(exe) {
         Protection::None => "none",
@@ -1600,11 +1628,12 @@ impl<H: Host> Bridge<H> {
                     return Err(format!("at most {MAX_ICONS} programs per request"));
                 }
                 let wanted = self.wanted(programs)?;
+                let views = self.host.program_info(&wanted);
                 Ok(Some(Value::Array(
-                    self.host
-                        .program_info(&wanted)
-                        .into_iter()
-                        .map(|view| view.map_or(Value::Null, |v| json!(v)))
+                    wanted
+                        .iter()
+                        .zip(views)
+                        .map(|(w, view)| view.map_or(Value::Null, |v| program_info_json(w, &v)))
                         .collect(),
                 )))
             }
@@ -2287,6 +2316,19 @@ mod tests {
             json!({"v": 1, "id": 9, "type": "add_entry", "profile": "focus", "exe": "a.exe", "path": "C:\\A\\a.exe"}),
         );
         assert_eq!(added["ok"], true, "{added}");
+        let added = send(
+            &mut b,
+            json!({"v": 1, "id": 10, "type": "add_entry", "profile": "focus", "exe": "tool.exe", "path": "C:\\Sync\\tool.exe"}),
+        );
+        assert_eq!(added["ok"], true, "{added}");
+        // H3: the description places a program that its name does not.
+        let placed = send(
+            &mut b,
+            json!({"v": 1, "id": 11, "type": "program_info", "programs": [{"exe": "tool.exe", "path": "C:\\Sync\\tool.exe"}]}),
+        );
+        assert_eq!(placed["data"][0]["kind"]["id"], "cloud_sync", "{placed}");
+        assert_eq!(placed["data"][0]["kind"]["known"], true);
+        assert_eq!(placed["data"][0]["suggestion"]["action"], "suspend");
         let reply = send(
             &mut b,
             json!({"v": 1, "id": 1, "type": "program_info", "programs": [
@@ -2303,6 +2345,8 @@ mod tests {
         assert_eq!(data[0]["description"], "a.exe at c:\\a\\A.EXE");
         assert_eq!(data[0]["signature"], "unsigned");
         assert_eq!(data[0]["pending"], false);
+        assert_eq!(data[0]["kind"]["known"], false);
+        assert_eq!(data[0]["suggestion"], Value::Null);
         assert_eq!(data[1]["signature"], "pending");
         assert_eq!(data[1]["pending"], true);
         assert_eq!((&data[2], &data[3]), (&Value::Null, &Value::Null));
