@@ -125,6 +125,19 @@
         <p class="hint" id="entries-empty" hidden>No programs yet. Programs without an entry are left as they are.</p>
 
         <div class="section-head">
+          <h3 id="services-title">Services</h3>
+        </div>
+        <p class="hint" id="services-help">Windows services this profile stops while it is active (they start again when you switch back to neutral) or starts. Needs the optional background helper with the services role; without it a switch reports the step as not done. Use the short key name, for example Spooler.</p>
+        <ul class="services" id="services" aria-labelledby="services-title"></ul>
+        <form class="service-add" id="service-form">
+          <label for="service-name">Service</label>
+          <input id="service-name" name="service" placeholder="for example Spooler" autocomplete="off" spellcheck="false" maxlength="256">
+          <label for="service-action" class="visually-hidden">Action</label>
+          <select id="service-action"><option value="stop">Stop</option><option value="start">Start</option></select>
+          <button type="submit" class="button small">Add</button>
+        </form>
+
+        <div class="section-head">
           <h3>Unassigned programs</h3>
           <button type="button" class="button small" id="refresh-unassigned">Refresh</button>
         </div>

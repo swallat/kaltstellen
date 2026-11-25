@@ -329,6 +329,23 @@ pub enum Request {
         profile: String,
         on: bool,
     },
+    /// M4e: add a service entry to a profile.
+    AddService {
+        profile: String,
+        name: String,
+        action: String,
+    },
+    /// M4e: remove a service entry.
+    RemoveService {
+        profile: String,
+        index: usize,
+    },
+    /// M4e: `stop` or `start` for a service entry.
+    SetServiceAction {
+        profile: String,
+        index: usize,
+        action: String,
+    },
     SetUpdateMode {
         mode: String,
     },
@@ -366,6 +383,16 @@ pub enum Request {
     },
 }
 
+fn service_action(text: &str) -> Result<crate::config::ServiceAction, String> {
+    match text.trim() {
+        "stop" => Ok(crate::config::ServiceAction::Stop),
+        "start" => Ok(crate::config::ServiceAction::Start),
+        other => Err(format!(
+            "the action of a service is stop or start, not \"{other}\""
+        )),
+    }
+}
+
 /// One entry as the page shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EntryView {
@@ -384,6 +411,14 @@ pub struct EntryView {
     pub errors: Vec<Failure>,
 }
 
+/// M4e: one service entry as the page shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ServiceView {
+    pub name: String,
+    /// `stop` or `start`.
+    pub action: &'static str,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProfileView {
     pub name: String,
@@ -395,6 +430,8 @@ pub struct ProfileView {
     pub priority: i32,
     /// M4c: handle later starts of this profile's programs at once.
     pub watch: bool,
+    /// M4e: services this profile stops or starts.
+    pub services: Vec<ServiceView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -784,6 +821,17 @@ impl<H: Host> Bridge<H> {
                     triggers: p.triggers.iter().map(|t| t.text()).collect(),
                     priority: p.priority,
                     watch: p.watch,
+                    services: p
+                        .services
+                        .iter()
+                        .map(|s| ServiceView {
+                            name: s.name.clone(),
+                            action: match s.action {
+                                crate::config::ServiceAction::Stop => "stop",
+                                crate::config::ServiceAction::Start => "start",
+                            },
+                        })
+                        .collect(),
                 })
                 .collect(),
             active,
@@ -1012,6 +1060,34 @@ impl<H: Host> Bridge<H> {
                     format!("\"{profile}\" no longer handles programs that start later")
                 };
                 self.saved(what, result)
+            }
+            Request::AddService {
+                profile,
+                name,
+                action,
+            } => {
+                check_text(&[&profile, &name, &action])?;
+                let action = service_action(&action)?;
+                let result = self.document.add_service(&profile, &name, action);
+                self.saved(
+                    format!("Service {} added to \"{profile}\"", name.trim()),
+                    result,
+                )
+            }
+            Request::RemoveService { profile, index } => {
+                check_text(&[&profile])?;
+                let result = self.document.remove_service(&profile, index);
+                self.saved(format!("Service removed from \"{profile}\""), result)
+            }
+            Request::SetServiceAction {
+                profile,
+                index,
+                action,
+            } => {
+                check_text(&[&profile, &action])?;
+                let action = service_action(&action)?;
+                let result = self.document.set_service_action(&profile, index, action);
+                self.saved(format!("Service of \"{profile}\" changed"), result)
             }
             Request::SetDefaults {
                 default_action,
@@ -3324,5 +3400,61 @@ mod tests {
             json!({"v": 1, "id": 5, "type": "set_watch", "profile": "focus", "on": "yes"}),
         );
         assert_eq!(bad["ok"], false);
+    }
+
+    #[test]
+    fn m4e_services_are_edited_through_the_bridge() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _fake) = bridge(&dir);
+        let find = |state: &Value| -> Value {
+            state["state"]["profiles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["name"] == "focus")
+                .unwrap()["services"]
+                .clone()
+        };
+        let add = send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "add_service", "profile": "focus",
+                   "name": "Spooler", "action": "stop"}),
+        );
+        assert_eq!(add["ok"], true, "{add}");
+        let add = send(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "add_service", "profile": "focus",
+                   "name": "Fax", "action": "start"}),
+        );
+        assert_eq!(add["ok"], true, "{add}");
+        let state = send(&mut b, json!({"v": 1, "id": 3, "type": "get_state"}));
+        assert_eq!(
+            find(&state),
+            json!([{"name": "Spooler", "action": "stop"}, {"name": "Fax", "action": "start"}])
+        );
+        let set = send(
+            &mut b,
+            json!({"v": 1, "id": 4, "type": "set_service_action", "profile": "focus",
+                   "index": 0, "action": "start"}),
+        );
+        assert_eq!(set["ok"], true, "{set}");
+        let refused = [
+            json!({"v": 1, "id": 5, "type": "add_service", "profile": "focus", "name": "spooler", "action": "stop"}),
+            json!({"v": 1, "id": 6, "type": "add_service", "profile": "focus", "name": "X", "action": "pause"}),
+            json!({"v": 1, "id": 7, "type": "add_service", "profile": "nope", "name": "X", "action": "stop"}),
+            json!({"v": 1, "id": 8, "type": "remove_service", "profile": "focus", "index": 9}),
+            json!({"v": 1, "id": 9, "type": "add_service", "profile": "focus", "name": "a\\b", "action": "stop"}),
+        ];
+        for request in refused {
+            let reply = send(&mut b, request.clone());
+            assert_eq!(reply["ok"], false, "{request}: {reply}");
+        }
+        let removed = send(
+            &mut b,
+            json!({"v": 1, "id": 10, "type": "remove_service", "profile": "focus", "index": 0}),
+        );
+        assert_eq!(removed["ok"], true, "{removed}");
+        let state = send(&mut b, json!({"v": 1, "id": 11, "type": "get_state"}));
+        assert_eq!(find(&state), json!([{"name": "Fax", "action": "start"}]));
     }
 }

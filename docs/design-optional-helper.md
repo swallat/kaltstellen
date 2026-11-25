@@ -471,5 +471,5 @@ a service is read through the service control manager as any user, the
 change goes through the helper. The preview says `will stop the service
 (needs the helper)`. Without the helper, or when it refuses (role off, not on
 the allow list, a dependent service runs), the step is reported as `KS114`
-and nothing is recorded. The window does not edit service entries yet; it
-keeps them when it saves (it edits the file in place).
+and nothing is recorded. The window lists, adds, changes and removes service entries (it edits the file
+in place; other keys and comments stay).

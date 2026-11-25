@@ -507,4 +507,7 @@ name = "Spooler"
 4. A name that does not exist, `RpcSs`, `action = "pause"`: `check-config`
    refuses with the line.
 5. The window opens the profile and saves another change without losing the
-   service entry.
+   service entry. Under Services the profile page lists Spooler; changing
+   it to Start, adding `Fax`, removing it again and adding `spooler` (a
+   duplicate) or `RpcSs` (refused, the error is shown) all show in the file
+   at once, and a copy of the profile carries its services.

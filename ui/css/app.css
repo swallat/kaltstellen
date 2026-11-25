@@ -114,6 +114,17 @@ input, textarea { caret-color: var(--color-primary); }
 .section-head { display: flex; align-items: center; justify-content: space-between; margin-top: var(--space-4); }
 .section-head + .hint { margin-top: calc(var(--space-2) * -1); }
 
+/* Services (M4e) */
+.services { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: grid; gap: var(--space-2); }
+.services li {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3); border: 1px solid var(--color-line); border-radius: var(--radius);
+  background: var(--color-surface);
+}
+.services .name { font-weight: 600; overflow-wrap: anywhere; }
+.service-add { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+.service-add input { flex: 1 1 12rem; min-width: 0; }
+
 /* Suggestions from use (H5) */
 .suggestions { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: grid; gap: var(--space-2); }
 .suggestion {
