@@ -585,7 +585,14 @@ mod tests {
 
     #[test]
     fn m4d_never_the_helper_the_caller_system_or_protected_programs() {
-        let (actor, os) = setup(true, &[TOOL, r"C:\Windows\explorer.exe"]);
+        let os = Arc::new(FakeOs::default());
+        os.add(50, 5, r"C:\Kalt\kaltstellen.exe", OWNER, 1);
+        let mut hand_edited = policy(true, &[TOOL]);
+        hand_edited
+            .allow
+            .programs
+            .push(r"C:\Windows\explorer.exe".to_owned());
+        let actor = Actor::new(&hand_edited, os.clone(), None, 9);
         os.add(200, 3, r"C:\Windows\explorer.exe", OWNER, 1);
         // Protected programs cannot even get on the list; a policy file
         // edited by hand is stopped here as well.
