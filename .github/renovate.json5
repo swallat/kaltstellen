@@ -2,17 +2,36 @@
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["config:recommended", ":dependencyDashboard", "helpers:pinGitHubActionDigests"],
   timezone: "Europe/Berlin",
-  schedule: ["before 6am on monday"],
-  // Security fixes are raised immediately, regardless of the schedule.
+  // Normal updates are raised on weekday nights only.
+  schedule: ["after 10pm every weekday", "before 5am every weekday"],
+  // A new release must be 3 days old before it is proposed (supply-chain
+  // protection). Security fixes skip this wait, see vulnerabilityAlerts.
+  minimumReleaseAge: "3 days",
+  prConcurrentLimit: 5,
+  prHourlyLimit: 2,
+  labels: ["dependencies"],
+  // Renovate merges the PR itself once EVERY check on it is green (also the
+  // ones that are not required by the ruleset, such as the ARM64 job).
+  // GitHub's own auto-merge would only wait for the required checks.
+  platformAutomerge: false,
+  automergeType: "pr",
+  automergeStrategy: "squash",
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ["before 5am on monday"],
+    automerge: true,
+  },
+  // Security fixes are raised immediately, regardless of the schedule. They
+  // follow the package rules below: a security fix to a package that is
+  // excluded from automerge still waits for review.
   vulnerabilityAlerts: {
     enabled: true,
     schedule: ["at any time"],
+    minimumReleaseAge: "0 days",
     labels: ["security"],
   },
   osvVulnerabilityAlerts: true,
-  lockFileMaintenance: { enabled: true },
-  prConcurrentLimit: 5,
-  labels: ["dependencies"],
+  // Later rules win over earlier ones.
   packageRules: [
     {
       description: "Group Windows API crates, they are released together",
@@ -23,6 +42,58 @@
       description: "Group GitHub Actions updates",
       matchManagers: ["github-actions"],
       groupName: "github actions",
+    },
+    {
+      description: "Merge patch, minor, pin and digest updates when all checks pass",
+      matchUpdateTypes: ["patch", "minor", "pin", "pinDigest", "digest"],
+      automerge: true,
+    },
+    {
+      description: "0.x versions: a minor step may break the API, treat it like a major",
+      matchCurrentVersion: "/^0\\./",
+      matchUpdateTypes: ["minor"],
+      automerge: false,
+      addLabels: ["needs-review"],
+    },
+    {
+      description: "Major updates are never merged automatically",
+      matchUpdateTypes: ["major"],
+      automerge: false,
+      addLabels: ["needs-review"],
+    },
+    {
+      description: "Core libraries: unsafe Windows FFI, the window host, and the config and pipe formats",
+      matchPackageNames: [
+        "windows",
+        "windows-*",
+        "webview2-com",
+        "webview2-com-*",
+        "serde",
+        "serde_json",
+        "toml",
+        "toml_edit",
+      ],
+      automerge: false,
+      addLabels: ["needs-review"],
+    },
+    {
+      description: "The Rust toolchain is raised deliberately, in a change of its own",
+      matchFileNames: ["rust-toolchain.toml"],
+      groupName: "rust toolchain",
+      automerge: false,
+      addLabels: ["needs-review"],
+    },
+    {
+      description: "Actions of the release chain (artifacts, provenance) stay under review",
+      matchManagers: ["github-actions"],
+      matchPackageNames: [
+        "actions/attest-build-provenance",
+        "actions/upload-artifact",
+        "actions/download-artifact",
+      ],
+      groupName: "release chain actions",
+      automerge: false,
+      addLabels: ["needs-review"],
     },
   ],
 }
