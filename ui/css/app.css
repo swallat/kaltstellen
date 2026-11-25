@@ -297,7 +297,8 @@ label.inline { display: inline-flex; align-items: center; gap: var(--space-1); f
 .chip:hover { color: var(--color-text); background: var(--color-row-hover); }
 .chip:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 .chip[aria-pressed="true"] { background: var(--color-frost-bg); border-color: var(--color-frost); color: var(--color-frost); }
-.chip:disabled { cursor: default; }
+.chip[aria-disabled="true"] { cursor: default; }
+.seg button[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
 .chip.static { cursor: default; border-style: dashed; }
 .undo-bar { position: sticky; bottom: var(--space-3); display: flex; gap: var(--space-3); align-items: center; margin: var(--space-2) 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius); background: var(--color-topbar); color: var(--color-on-topbar); }
 .undo-bar[hidden] { display: none; }

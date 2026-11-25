@@ -525,6 +525,7 @@ function renderDetail() {
       : inTable.dataset.o ? `[data-o="${inTable.dataset.o}"]`
       : inTable.dataset.x ? `[data-x="${inTable.dataset.x}"]` : null,
   } : null;
+  entryRemember(profile.entries);
   const rows = profile.entries.map((e, index) => entryRow(e, index));
   $('entries').tBodies[0].replaceChildren(...rows);
   if (focusAt) entryFocus(focusAt.key, focusAt.selector);
@@ -548,6 +549,18 @@ let entryLast = null;
 let undoTimer = null;
 let undoRemoved = null;
 
+/** What a switch of the action would otherwise forget: `Trim` of a frozen
+ * entry and `Restart on neutral` of a stopped one, by key. */
+const entryMemory = new Map();
+function entryRemember(entries) {
+  for (const e of entries) {
+    const memory = entryMemory.get(entryKey(e)) || {};
+    if (e.action === 'suspend') memory.trim = e.trim ?? state.default_trim;
+    if (e.action === 'stop') memory.restart = e.restart_on_neutral;
+    entryMemory.set(entryKey(e), memory);
+  }
+}
+
 const entryTouches = (action) => action === 'stop' || action === 'suspend';
 const entryNeedsConfirm = (e, action) => e.protection === 'warn' && entryTouches(action) && !e.confirmed;
 
@@ -565,6 +578,9 @@ function entryPayload(e, change = {}) {
     confirmed: e.confirmed,
     ...change,
   };
+  const memory = entryMemory.get(entryKey(e)) || {};
+  if (next.action === 'stop' && e.action !== 'stop' && change.restart_on_neutral === undefined) next.restart_on_neutral = !!memory.restart;
+  if (next.action === 'suspend' && e.action !== 'suspend' && change.trim === undefined) next.trim = memory.trim ?? null;
   next.restart_on_neutral = next.action === 'stop' && next.restart_on_neutral;
   next.trim = next.action === 'suspend' ? (next.trim ?? state.default_trim) : null;
   return next;
@@ -574,7 +590,7 @@ function entryChips(e) {
   const chip = (option, label, on, title) => el('button', {
     type: 'button', class: 'chip', 'data-o': option, 'aria-pressed': String(on), title,
     'aria-label': `${label}, ${e.exe}`, text: label,
-    onclick: () => entryToggle(entryKey(e), option),
+    onclick: () => (e.confirmed && option === 'confirmed' ? null : entryToggle(entryKey(e), option)),
   });
   const chips = [];
   if (e.action === 'suspend') chips.push(chip('trim', 'Trim', e.trim ?? state.default_trim, 'Move its memory out of RAM while frozen'));
@@ -586,7 +602,7 @@ function entryChips(e) {
   if (e.action === 'start' && e.cwd) chips.push(el('span', { class: 'chip static', title: 'Change in Details', text: `In ${e.cwd}` }));
   if (e.protection === 'warn' && entryTouches(e.action)) {
     const confirm = chip('confirmed', e.confirmed ? 'Confirmed' : 'Confirm', e.confirmed, 'On the warn list: kaltstellen touches it only after you confirm');
-    confirm.disabled = e.confirmed;
+    if (e.confirmed) confirm.setAttribute('aria-disabled', 'true');
     chips.push(confirm);
   }
   return chips.length ? chips : [el('span', { class: 'hint', text: '–' })];
@@ -599,7 +615,9 @@ function entryRow(e, index) {
   mark.addEventListener('click', (event) => entryMark(key, mark.checked, event.shiftKey));
   const segment = el('span', { class: 'seg', role: 'group', 'aria-label': `Action for ${e.exe}` },
     ...entryActions.map(([value, label], i) => el('button', {
-      type: 'button', 'data-a': value, 'aria-pressed': String(value === e.action), title: `${label} (key ${i + 1})`,
+      type: 'button', 'data-a': value, 'aria-pressed': String(value === e.action),
+      title: value === 'start' && !e.path ? 'Needs a path: set it in Details' : `${label} (key ${i + 1})`,
+      'aria-disabled': value === 'start' && !e.path && e.action !== 'start' ? 'true' : null,
       'aria-label': `${label}, ${e.exe}`, text: label,
       onclick: () => entrySet([key], { action: value }),
     })));
@@ -651,7 +669,10 @@ async function entrySet(keys, change) {
   const profile = current();
   if (!profile) return;
   const name = profile.name;
-  const todo = entriesOf(keys).filter((e) => !(change.trim !== undefined && e.action !== 'suspend'));
+  // Trim only matters for frozen entries; a program without a path cannot start.
+  const todo = entriesOf(keys)
+    .filter((e) => !(change.trim !== undefined && e.action !== 'suspend'))
+    .filter((e) => !(change.action === 'start' && !e.path && e.action !== 'start'));
   const needs = change.action ? todo.filter((e) => entryNeedsConfirm(e, change.action)) : [];
   const allowed = new Set();
   if (needs.length) {
@@ -751,6 +772,8 @@ $('entries-all').addEventListener('change', (event) => {
 $('entries-clear').addEventListener('click', () => {
   entrySel.clear();
   render();
+  const first = $('entries').tBodies[0].rows[0];
+  if (first) first.focus({ preventScroll: true });
 });
 $('entries-bulk-actions').addEventListener('click', (event) => {
   const action = event.target.dataset && event.target.dataset.a;
@@ -761,13 +784,15 @@ $('entries-trim-off').addEventListener('click', () => entrySet([...entrySel], { 
 $('entries-remove').addEventListener('click', () => entryRemove([...entrySel]));
 
 /** Keyboard: Up and Down move between rows, 1 to 4 set the action of the
- * marked rows (or of this row when none is marked), Space marks, Delete removes. */
+ * marked rows when this row is marked (else of this row), Space marks, Delete
+ * removes. */
 $('entries').addEventListener('keydown', (event) => {
   const rowNode = event.target.closest && event.target.closest('tr[data-key]');
   if (!rowNode || event.ctrlKey || event.altKey || event.metaKey) return;
   const nodes = [...$('entries').tBodies[0].rows];
   const at = nodes.indexOf(rowNode);
-  const keys = entrySel.size ? [...entrySel] : [rowNode.dataset.key];
+  // The marked rows when this one is among them, else only this row.
+  const keys = entrySel.has(rowNode.dataset.key) ? [...entrySel] : [rowNode.dataset.key];
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault();
     nodes[Math.max(0, Math.min(nodes.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)))].focus();
