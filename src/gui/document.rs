@@ -217,9 +217,11 @@ impl Document {
             copy.set_position(None);
             copy.decor_mut().clear();
             copy.decor_mut().set_prefix("\n");
-            if let Some(apps) = copy.get_mut("app").and_then(Item::as_array_of_tables_mut) {
-                for app in apps.iter_mut() {
-                    app.set_position(None);
+            for key in ["app", "service"] {
+                if let Some(list) = copy.get_mut(key).and_then(Item::as_array_of_tables_mut) {
+                    for item in list.iter_mut() {
+                        item.set_position(None);
+                    }
                 }
             }
             profiles.push(copy);
@@ -430,6 +432,70 @@ impl Document {
                 table.remove("priority");
             } else {
                 set_keep(table, "priority", priority);
+            }
+            Ok(())
+        })
+    }
+
+    /// M4e: adds a `[[profile.service]]` entry. `stop` is the default and
+    /// is not written. The name and duplicates are checked by the
+    /// configuration rules (C10).
+    pub fn add_service(
+        &mut self,
+        profile: &str,
+        name: &str,
+        action: config::ServiceAction,
+    ) -> Result<(), Error> {
+        self.edit(|doc| {
+            let table = profile_mut(doc, profile)?;
+            let mut entry = Table::new();
+            entry.insert("name", value(name.trim()));
+            if action == config::ServiceAction::Start {
+                entry.insert("action", value("start"));
+            }
+            services_mut(table)?.push(entry);
+            Ok(())
+        })
+    }
+
+    /// M4e: removes the `index`th service entry.
+    pub fn remove_service(&mut self, profile: &str, index: usize) -> Result<(), Error> {
+        self.edit(|doc| {
+            let table = profile_mut(doc, profile)?;
+            let list = services_mut(table)?;
+            if index >= list.len() {
+                return Err(format!(
+                    "profile \"{profile}\" has no service {}",
+                    index + 1
+                ));
+            }
+            list.remove(index);
+            if list.is_empty() {
+                table.remove("service");
+            }
+            Ok(())
+        })
+    }
+
+    /// M4e: sets the action of the `index`th service entry; `stop` (the
+    /// default) removes the key.
+    pub fn set_service_action(
+        &mut self,
+        profile: &str,
+        index: usize,
+        action: config::ServiceAction,
+    ) -> Result<(), Error> {
+        self.edit(|doc| {
+            let table = profile_mut(doc, profile)?;
+            let list = services_mut(table)?;
+            let entry = list
+                .get_mut(index)
+                .ok_or_else(|| format!("profile \"{profile}\" has no service {}", index + 1))?;
+            match action {
+                config::ServiceAction::Stop => {
+                    entry.remove("action");
+                }
+                config::ServiceAction::Start => set_keep(entry, "action", "start"),
             }
             Ok(())
         })
@@ -743,6 +809,26 @@ fn apps_mut(profile: &mut Table) -> Result<&mut ArrayOfTables, String> {
             Err(original) => {
                 *item = original;
                 return Err("\"app\" of this profile is not a list of entries".to_owned());
+            }
+        }
+    }
+    Ok(item.as_array_of_tables_mut().expect("just made"))
+}
+
+/// The service entries of a profile as a list of tables (as `apps_mut`).
+fn services_mut(profile: &mut Table) -> Result<&mut ArrayOfTables, String> {
+    let item = profile
+        .entry("service")
+        .or_insert(Item::ArrayOfTables(ArrayOfTables::new()));
+    if item.as_array_of_tables().is_none() {
+        let empty = item.as_array().is_some_and(toml_edit::Array::is_empty);
+        let taken = std::mem::replace(item, Item::None);
+        match taken.into_array_of_tables() {
+            Ok(tables) => *item = Item::ArrayOfTables(tables),
+            Err(_) if empty => *item = Item::ArrayOfTables(ArrayOfTables::new()),
+            Err(original) => {
+                *item = original;
+                return Err("\"service\" of this profile is not a list of entries".to_owned());
             }
         }
     }
@@ -1260,5 +1346,81 @@ name = "music"
         assert!(!saved.replace("\r\n", "").contains('\n'), "{saved:?}");
         assert!(saved.contains("name = \"music\"\r\n"), "{saved:?}");
         assert!(Document::open(&file).is_ok());
+    }
+
+    #[test]
+    fn m4e_services_are_added_changed_and_removed() {
+        let mut d = doc();
+        d.add_service("focus", " Spooler ", config::ServiceAction::Stop)
+            .unwrap();
+        d.add_service("focus", "Fax", config::ServiceAction::Start)
+            .unwrap();
+        let list = &d.config().profiles[0].services;
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].name, "Spooler");
+        assert_eq!(list[1].action, config::ServiceAction::Start);
+        assert!(!d.text().contains("action = \"stop\""), "{}", d.text());
+        d.set_service_action("focus", 0, config::ServiceAction::Start)
+            .unwrap();
+        d.set_service_action("focus", 1, config::ServiceAction::Stop)
+            .unwrap();
+        let list = &d.config().profiles[0].services;
+        assert_eq!(list[0].action, config::ServiceAction::Start);
+        assert_eq!(list[1].action, config::ServiceAction::Stop);
+        // Refused: duplicate, never-list, bad name, out of range; nothing changes.
+        let before = d.text();
+        assert!(
+            d.add_service("focus", "spooler", config::ServiceAction::Stop)
+                .is_err()
+        );
+        assert!(
+            d.add_service("focus", "kaltstellen-helper", config::ServiceAction::Stop)
+                .is_err()
+        );
+        assert!(
+            d.add_service("focus", "a\\b", config::ServiceAction::Stop)
+                .is_err()
+        );
+        assert!(d.remove_service("focus", 5).is_err());
+        assert!(
+            d.set_service_action("focus", 5, config::ServiceAction::Start)
+                .is_err()
+        );
+        assert!(
+            d.add_service("nope", "X", config::ServiceAction::Stop)
+                .is_err()
+        );
+        assert_eq!(d.text(), before);
+        d.remove_service("focus", 0).unwrap();
+        d.remove_service("focus", 0).unwrap();
+        assert!(d.config().profiles[0].services.is_empty());
+        assert!(!d.text().contains("service"), "{}", d.text());
+    }
+
+    #[test]
+    fn m4e_a_copy_of_a_profile_keeps_its_services_under_the_copy() {
+        let mut d = doc();
+        d.add_service("focus", "Spooler", config::ServiceAction::Stop)
+            .unwrap();
+        d.add_profile("other").unwrap();
+        d.copy_profile("focus", "twin").unwrap();
+        let profiles = &d.config().profiles;
+        let twin = profiles.iter().find(|p| p.name == "twin").unwrap();
+        assert_eq!(twin.services.len(), 1, "{}", d.text());
+        let other = profiles.iter().find(|p| p.name == "other").unwrap();
+        assert!(other.services.is_empty(), "{}", d.text());
+    }
+
+    #[test]
+    fn m4e_an_inline_list_of_services_is_kept_when_edited() {
+        let text = "[[profile]]\nname = \"a\"\nservice = [{ name = \"Spooler\" }]\n";
+        let mut d = Document::from_text(Path::new("C:\\cfg\\config.toml"), text).unwrap();
+        d.add_service("a", "Fax", config::ServiceAction::Start)
+            .unwrap();
+        let list = &d.config().profiles[0].services;
+        assert_eq!(list.len(), 2, "{}", d.text());
+        assert_eq!(list[0].name, "Spooler");
+        d.remove_service("a", 0).unwrap();
+        assert_eq!(d.config().profiles[0].services[0].name, "Fax");
     }
 }

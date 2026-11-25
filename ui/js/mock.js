@@ -172,6 +172,28 @@ function handle(message) {
       state.status = m.on ? `"${profile.name}" now handles its programs that start later; saved.` : `"${profile.name}" no longer handles programs that start later; saved.`;
       return { ok: true };
     }
+    case 'add_service': {
+      if (!profile) return fail('no such profile');
+      const name = String(m.name || '').trim();
+      if (!name || /[\\/"*?]/.test(name)) return fail('KS205: a service is named by its short key name, like Spooler');
+      profile.services = profile.services || [];
+      if (profile.services.some((s) => s.name.toLowerCase() === name.toLowerCase())) return fail(`KS205: service ${name} appears twice`);
+      profile.services.push({ name, action: m.action === 'start' ? 'start' : 'stop' });
+      state.status = `Service ${name} added to "${profile.name}"; saved.`;
+      return { ok: true };
+    }
+    case 'remove_service': {
+      if (!profile || !(profile.services || [])[m.index]) return fail('no such service');
+      profile.services.splice(m.index, 1);
+      state.status = `Service removed from "${profile.name}"; saved.`;
+      return { ok: true };
+    }
+    case 'set_service_action': {
+      if (!profile || !(profile.services || [])[m.index]) return fail('no such service');
+      profile.services[m.index].action = m.action === 'start' ? 'start' : 'stop';
+      state.status = `Service of "${profile.name}" changed; saved.`;
+      return { ok: true };
+    }
     case 'set_triggers': {
       if (!profile) return fail('no such profile');
       const triggers = (m.triggers || []).map((t) => String(t).trim()).filter(Boolean);

@@ -518,6 +518,7 @@ function renderDetail() {
     else field.removeAttribute('aria-invalid');
   }
   $('watch').checked = !!profile.watch;
+  renderServices(profile);
   $('apply').disabled = state.applying;
   $('preview-apply').disabled = state.applying;
   $('apply').textContent = state.applying ? 'Applying…' : 'Apply profile';
@@ -1007,6 +1008,52 @@ $('forget-learned').addEventListener('click', async () => {
 let suggestions = [];
 
 const suggestionVerb = { stop: 'Stop', suspend: 'Freeze', start: 'Keep running (start)', ignore: 'Leave as it is' };
+
+// Services (M4e) ---------------------------------------------------------------
+function renderServices(profile) {
+  const list = profile.services || [];
+  // The list always follows the file (a removed row must go, a refused
+  // change must be taken back); a select that had the focus gets it again.
+  const focused = document.activeElement;
+  const keep = focused && $('services').contains(focused) && focused.dataset.index != null ? focused.dataset.index : null;
+  $('services').replaceChildren(...list.map((service, index) => el('li', {},
+    el('span', { class: 'name', text: service.name }),
+    el('span', { class: 'commands' },
+      el('select', {
+        'data-index': String(index),
+        'aria-label': `Action for ${service.name}`,
+        onchange: (event) => changeService(index, event.target),
+      },
+        el('option', { value: 'stop', text: 'Stop while active', selected: service.action === 'stop' }),
+        el('option', { value: 'start', text: 'Start', selected: service.action === 'start' })),
+      el('button', {
+        type: 'button', class: 'button small danger',
+        'aria-label': `Remove service ${service.name}`,
+        onclick: () => call('remove_service', { profile: profile.name, index }),
+        text: 'Remove',
+      })))));
+  if (keep !== null) {
+    const select = $('services').querySelector(`select[data-index="${keep}"]`);
+    if (select) select.focus();
+  }
+}
+
+async function changeService(index, select) {
+  if (!current()) return;
+  const reply = await call('set_service_action', { profile: current().name, index, action: select.value });
+  // A refused change leaves the list as the file has it.
+  if (!reply.ok) renderServices(current());
+}
+
+$('service-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!current()) return;
+  const name = $('service-name');
+  if (!name.value.trim()) { name.setAttribute('aria-invalid', 'true'); return; }
+  const reply = await call('add_service', { profile: current().name, name: name.value, action: $('service-action').value });
+  if (reply.ok) { name.value = ''; name.removeAttribute('aria-invalid'); }
+  else name.setAttribute('aria-invalid', 'true');
+});
 
 function renderSuggestions() {
   const items = suggestions.map((s) => el('li', { class: 'suggestion' },
