@@ -285,6 +285,14 @@ function handle(message) {
       const data = m.programs.map((p) => {
         if (!p.path && !running.some((r) => r.exe === p.exe) && !mockAbout[p.exe.toLowerCase()]) return null;
         const about = { product: null, company: null, version: '1.0.0.0', catalog: false, problem: null, publisher: null, ...(mockAbout[p.exe.toLowerCase()] || { description: null, signature: 'unsigned' }) };
+        // H3: kind and suggestion, as the host does from name and description.
+        const text = `${p.exe} ${about.description || ''}`.toLowerCase();
+        const guess = /browser/.test(text) ? ['browser', 'a browser', 'suspend', 'state and sign-in stay, nothing is lost; notifications wait']
+          : /mail/.test(text) ? ['mail', 'a mail program', 'suspend', 'state and sign-in stay, nothing is lost; notifications wait']
+            : /chat/.test(text) ? ['chat', 'a chat program', 'suspend', 'state and sign-in stay, nothing is lost; notifications wait'] : /sync/.test(text) ? ['cloud_sync', 'a cloud sync program', 'suspend', 'syncing resumes later; a long freeze can expire a token']
+              : /updat/.test(text) ? ['updater', 'an updater or helper', 'stop', 'the program starts it again when it needs it'] : null;
+        about.kind = guess ? { id: guess[0], plural: guess[1], label: guess[1], known: true } : { id: 'unknown', plural: 'programs of unknown kind', label: 'a program', known: false };
+        about.suggestion = guess ? { action: guess[2], reason: guess[3] } : null;
         if (aboutChecked.has(p.exe.toLowerCase())) return { ...about, pending: false };
         if (!aboutWaiting) {
           aboutWaiting = setTimeout(() => {

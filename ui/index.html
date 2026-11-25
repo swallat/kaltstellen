@@ -391,6 +391,7 @@
           <option value="ignore">Ignore</option>
         </select>
       </div>
+      <p class="hint" id="e-suggest" hidden><span id="e-suggest-text"></span> <button type="button" class="button small" id="e-suggest-use">Use suggestion</button></p>
       <fieldset class="options" data-for="stop">
         <legend>When stopping</legend>
         <label for="e-timeout">If it does not close in time</label>
@@ -550,7 +551,7 @@
       <div class="scroll">
         <table class="table" id="running">
           <caption class="visually-hidden">Running programs</caption>
-          <thead><tr><th scope="col">Program</th><th scope="col" class="num">Memory</th><th scope="col">Protection</th><th scope="col"><span class="visually-hidden">Commands</span></th></tr></thead>
+          <thead><tr><th scope="col">Program</th><th scope="col" class="num">Memory</th><th scope="col">Load</th><th scope="col">Protection</th><th scope="col"><span class="visually-hidden">Commands</span></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
