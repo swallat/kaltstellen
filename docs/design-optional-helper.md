@@ -354,3 +354,12 @@ anything yet.
   compare case-insensitively with either slash. `remove` takes the text as
   given so that an entry that became invalid can still be removed.
 - The window shows the same later (not part of this step).
+- `helper.toml` is written through `helper.toml.tmp` and renamed, so a crash
+  never leaves a half written policy. A service that was stopped on purpose
+  stays stopped; if the restart fails the message says the policy is saved
+  and how to start the service. Two simultaneous elevated edits can lose
+  one update (no lock); the edits are rare and each needs a UAC prompt.
+- Entries with a stream (`:` after the drive) or a short name (`~1`) are
+  refused, so the protected-program check cannot be passed by spelling. The
+  later enforcement compares with the process's final path.
+

@@ -429,8 +429,9 @@ With the helper installed (see above), from a normal prompt:
    running (the service was restarted and reads the file).
 3. `kaltstellen helper act on` (UAC): `allow list` says `role act: on`;
    `helper status` shows the roles with act.
-4. `kaltstellen helper allow add C:\Windows\explorer.exe` and
-   `...\*.exe` and `tool.dll` are refused before any prompt.
+4. These are refused before any prompt: `kaltstellen helper allow add
+   C:\Windows\explorer.exe`, `allow add C:\Tools\*.exe`, `allow add
+   C:\Tools\tool.dll`, and a short name like `C:\Windows\EXPLOR~1.EXE`.
 5. `allow remove` the notepad path (UAC), `act off` (UAC): back to the
    start. The helper keeps serving events throughout.
 
