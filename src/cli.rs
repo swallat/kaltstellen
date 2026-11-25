@@ -1761,8 +1761,13 @@ fn check_config(file: Option<PathBuf>) -> u8 {
                         profile.priority
                     )
                 };
+                let services = if profile.services.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {} service(s)", profile.services.len())
+                };
                 println!(
-                    "  profile \"{}\": {} program(s){hotkey}{triggers}",
+                    "  profile \"{}\": {} program(s){services}{hotkey}{triggers}",
                     profile.name,
                     profile.apps.len()
                 );

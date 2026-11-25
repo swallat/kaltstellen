@@ -20,6 +20,7 @@ when they apply. Codes are never renumbered or reused. The source of truth is
 | `KS111` | Starting a program failed because it requires elevation (P7). |
 | `KS112` | Minimising the windows of a process failed (W7). |
 | `KS113` | Warn-list program selected without confirmation (`--force`) (P6). |
+| `KS114` | Stopping or starting a Windows service through the background helper failed, or the helper is not there (M4e). |
 | `KS199` | Other operating-system error while handling a process. |
 | `KS201` | Configuration file could not be read. |
 | `KS202` | Configuration file is not valid TOML or has unknown keys (C3). |

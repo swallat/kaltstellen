@@ -463,6 +463,10 @@ impl Run<'_> {
             }
             self.state.suspended.clear();
         }
+        // Services mostly come up again by themselves after a reboot.
+        if self.state.boot != 0 && boot != 0 && self.state.boot != boot {
+            self.state.stopped_services.clear();
+        }
     }
 
     /// P6: a program on the warn list needs confirmation.
@@ -882,8 +886,10 @@ impl Run<'_> {
 
     /// M4e: stops and starts Windows services through the helper. Services
     /// this tool stopped are started again on a switch to neutral (the
-    /// record goes only when that worked); a `stop` entry is stopped if it
-    /// runs and recorded, a `start` entry is started if it does not run.
+    /// record goes when that worked, or when there is nothing to restore:
+    /// the service runs already or is gone); a `stop` entry is stopped if
+    /// it runs and recorded, a `start` entry is started if it does not run.
+    /// The record is saved right after each change.
     fn services(&mut self, target: &[ServiceEntry], to_neutral: bool) {
         use crate::config::ServiceAction;
         if self.halt() {
@@ -898,10 +904,16 @@ impl Run<'_> {
             if self.halt() {
                 return;
             }
-            if self.service_step(&name, true, false) {
+            let done = match self.service_step(&name, true) {
+                Service::Asked(reached) => reached,
+                Service::Already | Service::Gone => true,
+                Service::Failed => false,
+            };
+            if done && !self.dry {
                 self.state
                     .stopped_services
                     .retain(|s| !s.eq_ignore_ascii_case(&name));
+                self.save();
             }
         }
         for entry in target {
@@ -910,26 +922,31 @@ impl Run<'_> {
             }
             match entry.action {
                 ServiceAction::Stop => {
-                    let known = self
-                        .state
-                        .stopped_services
-                        .iter()
-                        .any(|s| s.eq_ignore_ascii_case(&entry.name));
-                    if !known && self.service_step(&entry.name, false, true) && !self.dry {
+                    // A recorded service that runs again (started by hand or
+                    // by a reboot) is stopped again like any other.
+                    if matches!(self.service_step(&entry.name, false), Service::Asked(_))
+                        && !self.dry
+                        && !self
+                            .state
+                            .stopped_services
+                            .iter()
+                            .any(|s| s.eq_ignore_ascii_case(&entry.name))
+                    {
                         self.state.stopped_services.push(entry.name.clone());
+                        self.save();
                     }
                 }
                 ServiceAction::Start => {
-                    self.service_step(&entry.name, true, false);
+                    self.service_step(&entry.name, true);
                 }
             }
         }
     }
 
-    /// One service step. Returns whether the service was asked (stopped or
-    /// started now, or on its way); `false` when it was in the wanted state
-    /// already, does not exist, or the step failed (reported).
-    fn service_step(&mut self, name: &str, start: bool, record: bool) -> bool {
+    /// One service step: ask for the state of the service, then the helper
+    /// to change it if needed (nothing in a preview, which only plans).
+    fn service_step(&mut self, name: &str, start: bool) -> Service {
+        use crate::win32::service::State as Svc;
         let step = if start { Step::Start } else { Step::Stop };
         let now = match crate::win32::service::query(name) {
             Ok(Some(info)) => info.state,
@@ -939,30 +956,29 @@ impl Run<'_> {
                         .program(name)
                         .step(step),
                 );
-                return false;
+                return Service::Gone;
             }
             Err(err) => {
                 self.report.failed(err.step(step));
-                return false;
+                return Service::Failed;
             }
         };
-        use crate::win32::service::State as Svc;
         let wanted = if start { Svc::Running } else { Svc::Stopped };
-        if now == wanted || (!start && now == Svc::Stopping) || (start && now == Svc::Starting) {
+        if now == wanted {
             if self.dry {
-                self.planned(
-                    step,
-                    name,
-                    Outcome::NoChange,
-                    if start {
-                        "service already running"
-                    } else {
-                        "service not running"
-                    },
-                    &[],
-                );
+                let text = if start {
+                    "service already running"
+                } else {
+                    "service not running"
+                };
+                self.planned(step, name, Outcome::NoChange, text, &[]);
             }
-            return false;
+            return Service::Already;
+        }
+        // On its way already (maybe by an earlier request of ours): wait
+        // for it, do not ask again.
+        if (start && now == Svc::Starting) || (!start && now == Svc::Stopping) {
+            return Service::Asked(false);
         }
         if self.dry {
             let text = if start {
@@ -971,7 +987,7 @@ impl Run<'_> {
                 "will stop the service (needs the helper)"
             };
             self.planned(step, name, Outcome::Will, text, &[]);
-            return record;
+            return Service::Asked(false);
         }
         let command = if start {
             crate::helper::protocol::Command::StartService
@@ -979,9 +995,9 @@ impl Run<'_> {
             crate::helper::protocol::Command::StopService
         };
         match crate::helper::client::ask_service(command, name) {
-            Ok(Some(_)) => {
+            Ok(Some(reply)) => {
                 self.report.done(step, name, None);
-                true
+                Service::Asked(reply.reached == Some(true))
             }
             Ok(None) => {
                 self.report.failed(
@@ -992,7 +1008,7 @@ impl Run<'_> {
                     .program(name)
                     .step(step),
                 );
-                false
+                Service::Failed
             }
             Err(err) => {
                 self.report.failed(
@@ -1000,7 +1016,7 @@ impl Run<'_> {
                         .program(name)
                         .step(step),
                 );
-                false
+                Service::Failed
             }
         }
     }
@@ -1078,6 +1094,20 @@ impl Run<'_> {
         }
         Ok(())
     }
+}
+
+/// What a service step came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Service {
+    /// The helper was asked (or it is on its way already); whether the
+    /// wanted state was reached by now.
+    Asked(bool),
+    /// It was in the wanted state.
+    Already,
+    /// There is no such service.
+    Gone,
+    /// The step failed (reported).
+    Failed,
 }
 
 /// Resumes one recorded process. `Ok(false)` if it is not the recorded
