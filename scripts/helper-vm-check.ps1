@@ -13,7 +13,7 @@ FAIL and SKIP lines; the exit code is the number of failures.
 
 Covers docs/manual-checks.md: helper steps 1 to 5 and 8 (new install,
 service data, status, uninstall) and "process events" steps 1, 2 and 6
-(Notepad start and stop, traffic). Left to a person: another user account,
+(Notepad start and stop, traffic from real web requests). Left to a person: another user account,
 killing the service process, the declined prompt (KS1005), the tray and
 window with the helper, watch mode (run a profile with watch = true and
 start a program it stops).
@@ -156,7 +156,7 @@ if ($observe) {
     Skip 'events' 'observe is not running'
 }
 
-# M4b 6: traffic (a local download is enough: loopback is counted too)
+# M4b 6: traffic (real web requests; loopback is not counted)
 if ($network) {
     # Real network traffic of this script (loopback is not counted by the
     # network provider). Needs an internet connection; without one the
@@ -164,11 +164,11 @@ if ($network) {
     $online = $false
     foreach ($i in 1..5) {
         try {
-            Invoke-WebRequest -Uri 'https://www.msftconnecttest.com/connecttest.txt' -UseBasicParsing -TimeoutSec 10 | Out-Null
+            Invoke-WebRequest -Uri 'https://www.msftconnecttest.com/connecttest.txt' -UseBasicParsing -TimeoutSec 5 | Out-Null
             $online = $true
         } catch { }
     }
-    $out = Ks @('helper', 'traffic', '--seconds', '10')
+    $out = Ks @('helper', 'traffic', '--seconds', '60')
     $rows = @(($out -split "`r?`n") | Where-Object { $_ -like '{*' } | ForEach-Object { try { $_ | ConvertFrom-Json } catch { } })
     $mine = $rows | Where-Object { $_.pid -eq $PID }
     if ($online) {
