@@ -49,6 +49,29 @@ unsafe extern "system" {
         length: u32,
         return_length: *mut u32,
     ) -> NTSTATUS;
+    fn NtQueryInformationProcess(
+        process: HANDLE,
+        class: u32,
+        info: *mut c_void,
+        length: u32,
+        return_length: *mut u32,
+    ) -> NTSTATUS;
+}
+
+/// `ProcessCommandLineInformation`: the command line of a process, readable
+/// with query-limited rights (Windows 8.1 and later).
+const PROCESS_COMMAND_LINE_INFORMATION: u32 = 60;
+const STATUS_BUFFER_OVERFLOW: NTSTATUS = NTSTATUS(0x8000_0005_u32 as i32);
+const STATUS_BUFFER_TOO_SMALL: NTSTATUS = NTSTATUS(0xC000_0023_u32 as i32);
+
+/// Head of the answer for `ProcessCommandLineInformation`: a
+/// `UNICODE_STRING` whose text follows in the same buffer.
+#[repr(C)]
+struct RawUnicodeString {
+    /// Length in bytes, without a terminator.
+    length: u16,
+    maximum_length: u16,
+    buffer: *const u16,
 }
 
 const SYSTEM_PROCESS_INFORMATION: u32 = 5;
@@ -516,6 +539,79 @@ impl Target {
         )))
     }
 
+    /// The command line the process was started with, as one string.
+    pub fn command_line(&self) -> Result<String> {
+        // u64 elements keep the buffer aligned for the header.
+        let mut buffer: Vec<u64> = vec![0; 1024];
+        for _ in 0..4 {
+            let bytes = (buffer.len() * 8) as u32;
+            let mut needed = 0u32;
+            // SAFETY: the buffer is writable for `bytes` bytes, `needed` is a
+            // valid out pointer and the handle has query rights.
+            let status = unsafe {
+                NtQueryInformationProcess(
+                    self.handle.0,
+                    PROCESS_COMMAND_LINE_INFORMATION,
+                    buffer.as_mut_ptr().cast(),
+                    bytes,
+                    &mut needed,
+                )
+            };
+            if status == STATUS_INFO_LENGTH_MISMATCH
+                || status == STATUS_BUFFER_OVERFLOW
+                || status == STATUS_BUFFER_TOO_SMALL
+            {
+                buffer.resize((needed as usize).div_ceil(8).max(buffer.len() * 2), 0);
+                continue;
+            }
+            if status.is_err() {
+                return Err(os_error(
+                    Code::ProcessOs,
+                    &self.info,
+                    &windows::core::Error::from(status.to_hresult()),
+                ));
+            }
+            let head = buffer.as_ptr().cast::<RawUnicodeString>();
+            // SAFETY: the buffer is at least as large as the header and
+            // aligned for it; the call filled it in.
+            let (length, text) = unsafe { ((*head).length as usize, (*head).buffer as usize) };
+            let start = buffer.as_ptr() as usize + size_of::<RawUnicodeString>();
+            let end = buffer.as_ptr() as usize + buffer.len() * 8;
+            if length == 0 {
+                return Ok(String::new());
+            }
+            if length % 2 != 0 || text < start || text % 2 != 0 || text + length > end {
+                break;
+            }
+            // SAFETY: the range was checked to lie inside the buffer, and
+            // the text is 2-byte aligned.
+            let units = unsafe { std::slice::from_raw_parts(text as *const u16, length / 2) };
+            return Ok(String::from_utf16_lossy(units));
+        }
+        Err(Error::new(
+            Code::ProcessOs,
+            "the command line of the process could not be read",
+        )
+        .program(&self.info.name))
+    }
+
+    /// Where the process was started from and with which arguments (the
+    /// command line without the program itself). Arguments that cannot be
+    /// read (the process may be protected) come back empty with
+    /// `args_known` false; the image path alone is enough to start it.
+    pub fn launch(&self) -> Result<Launch> {
+        let image = self.image_path()?;
+        let (args, args_known) = match self.command_line() {
+            Ok(line) => (command_line_args(&line), true),
+            Err(_) => (Vec::new(), false),
+        };
+        Ok(Launch {
+            image,
+            args,
+            args_known,
+        })
+    }
+
     /// The user SID of the process, as `S-1-5-…`.
     pub fn owner_sid(&self) -> Result<String> {
         crate::win32::pipe::user_sid_of(self.handle.0)
@@ -929,6 +1025,124 @@ pub fn start(path: &Path, args: &[String], cwd: Option<&Path>) -> Result<u32> {
     Ok(created.dwProcessId)
 }
 
+/// How a running program was started: enough to start it again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launch {
+    /// Full path of the executable.
+    pub image: PathBuf,
+    /// Arguments, split the way the program sees them (`quote_argument`
+    /// joins them again).
+    pub args: Vec<String>,
+    /// Whether the command line could be read; if not, `args` is empty
+    /// because nothing is known, not because there were none.
+    pub args_known: bool,
+}
+
+/// How the program `exe` (a name, with `path` also its folder) was started,
+/// read from the main process of the program: the oldest one that is not a
+/// child of another process of the same name, so a browser's helper
+/// processes do not count. `None` if no such process can be read.
+pub fn launch_of(processes: &[ProcessInfo], exe: &str, path: Option<&Path>) -> Option<Launch> {
+    let exe = with_extension(exe);
+    let named: Vec<&ProcessInfo> = processes
+        .iter()
+        .filter(|p| p.name.eq_ignore_ascii_case(&exe))
+        .collect();
+    let mut order: Vec<&ProcessInfo> = named
+        .iter()
+        .copied()
+        .filter(|p| {
+            !named
+                .iter()
+                .any(|q| q.pid == p.parent_pid && q.created < p.created)
+        })
+        .collect();
+    order.sort_by_key(|p| p.created);
+    let rest = named.iter().copied().filter(|p| !order.contains(p));
+    let order: Vec<&ProcessInfo> = order.iter().copied().chain(rest).collect();
+    // The first process whose command line can be read wins; one whose
+    // arguments are unknown is the fallback.
+    let mut fallback = None;
+    for info in order {
+        let Some(launch) = Target::open(info, Access::Query)
+            .ok()
+            .flatten()
+            .and_then(|t| t.launch().ok())
+        else {
+            continue;
+        };
+        if path.is_some_and(|wanted| !same_path(wanted, &launch.image)) {
+            continue;
+        }
+        if launch.args_known {
+            return Some(launch);
+        }
+        fallback.get_or_insert(launch);
+    }
+    fallback
+}
+
+/// The arguments of a command line, without the program (the first word).
+/// The first word ends at the closing quote or at the first white space,
+/// the rest follows the rules of `CommandLineToArgvW`.
+pub(crate) fn command_line_args(line: &str) -> Vec<String> {
+    let mut chars = line.trim_start_matches([' ', '\t']).chars().peekable();
+    if chars.peek() == Some(&'"') {
+        chars.next();
+        for c in chars.by_ref() {
+            if c == '"' {
+                break;
+            }
+        }
+    } else {
+        while chars.peek().is_some_and(|c| !matches!(c, ' ' | '\t')) {
+            chars.next();
+        }
+    }
+    let mut args = Vec::new();
+    loop {
+        while chars.peek().is_some_and(|c| matches!(c, ' ' | '\t')) {
+            chars.next();
+        }
+        if chars.peek().is_none() {
+            return args;
+        }
+        let mut arg = String::new();
+        let mut quoted = false;
+        loop {
+            let mut backslashes = 0;
+            while chars.peek() == Some(&'\\') {
+                chars.next();
+                backslashes += 1;
+            }
+            if chars.peek() == Some(&'"') {
+                arg.extend(std::iter::repeat_n('\\', backslashes / 2));
+                chars.next();
+                if backslashes % 2 == 1 {
+                    arg.push('"');
+                } else if quoted && chars.peek() == Some(&'"') {
+                    // A doubled quote inside quotes is one quote.
+                    chars.next();
+                    arg.push('"');
+                } else {
+                    quoted = !quoted;
+                }
+                continue;
+            }
+            arg.extend(std::iter::repeat_n('\\', backslashes));
+            match chars.peek() {
+                None => break,
+                Some(' ' | '\t') if !quoted => break,
+                Some(&c) => {
+                    arg.push(c);
+                    chars.next();
+                }
+            }
+        }
+        args.push(arg);
+    }
+}
+
 fn wide(text: &OsStr) -> Vec<u16> {
     text.encode_wide().chain(std::iter::once(0)).collect()
 }
@@ -1153,6 +1367,75 @@ mod tests {
         assert_eq!(quote(r"C:\my dir\"), r#""C:\my dir\\""#);
         assert_eq!(quote(r#"say "hi""#), r#""say \"hi\"""#);
         assert_eq!(quote(r#"a\"b"#), r#""a\\\"b""#);
+    }
+
+    #[test]
+    fn command_line_args_drop_the_program_and_split_like_windows() {
+        let args = |line: &str| command_line_args(line);
+        assert_eq!(args(r#"C:\App\app.exe"#), Vec::<String>::new());
+        assert_eq!(
+            args(r#""C:\Program Files\App\app.exe""#),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            args(r#""C:\Program Files\App\app.exe" --minimized -x"#),
+            ["--minimized", "-x"]
+        );
+        assert_eq!(args(r#"app.exe   a   "b c"  "" d"#), ["a", "b c", "", "d"]);
+        assert_eq!(
+            args(r#"app.exe "say \"hi\"" a\\b"#),
+            [r#"say "hi""#, r"a\\b"]
+        );
+        assert_eq!(args(r#"app.exe "C:\my dir\\" x"#), [r"C:\my dir\", "x"]);
+    }
+
+    #[test]
+    fn command_line_args_round_trip_with_quoting() {
+        let original: Vec<String> = [
+            "plain",
+            "",
+            "two words",
+            r"C:\dir\",
+            r"C:\my dir\",
+            r#"say "hi""#,
+            r#"a\"b"#,
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let mut line = String::from("app.exe");
+        for arg in &original {
+            line.push(' ');
+            quote_argument(arg, &mut line);
+        }
+        assert_eq!(command_line_args(&line), original);
+    }
+
+    #[test]
+    fn launch_of_reads_the_path_and_arguments_of_a_running_program() {
+        let snapshot = Snapshot::take().unwrap();
+        let own = snapshot.get(std::process::id()).unwrap();
+        let launch = launch_of(snapshot.processes(), &own.name, None).expect("own process");
+        assert_eq!(
+            normalize_path(&launch.image),
+            normalize_path(&std::env::current_exe().unwrap())
+        );
+        assert!(launch.args_known);
+        // The test runner got arguments of its own (the filter, flags).
+        let line = Target::open(own, Access::Query)
+            .unwrap()
+            .unwrap()
+            .command_line()
+            .unwrap();
+        assert!(line.to_lowercase().contains(".exe"), "{line}");
+        // Another folder never matches.
+        assert!(
+            launch_of(
+                snapshot.processes(),
+                &own.name,
+                Some(Path::new(r"C:\nowhere\x.exe"))
+            )
+            .is_none()
+        );
     }
 
     #[test]

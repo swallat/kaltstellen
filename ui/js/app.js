@@ -616,8 +616,7 @@ function entryRow(e, index) {
   const segment = el('span', { class: 'seg', role: 'group', 'aria-label': `Action for ${e.exe}` },
     ...entryActions.map(([value, label], i) => el('button', {
       type: 'button', 'data-a': value, 'aria-pressed': String(value === e.action),
-      title: value === 'start' && !e.path ? 'Needs a path: set it in Details' : `${label} (key ${i + 1})`,
-      'aria-disabled': value === 'start' && !e.path && e.action !== 'start' ? 'true' : null,
+      title: value === 'start' && !e.path ? 'Takes the path and arguments from the running program' : `${label} (key ${i + 1})`,
       'aria-label': `${label}, ${e.exe}`, text: label,
       onclick: () => entrySet([key], { action: value }),
     })));
@@ -669,10 +668,28 @@ async function entrySet(keys, change) {
   const profile = current();
   if (!profile) return;
   const name = profile.name;
-  // Trim only matters for frozen entries; a program without a path cannot start.
-  const todo = entriesOf(keys)
-    .filter((e) => !(change.trim !== undefined && e.action !== 'suspend'))
-    .filter((e) => !(change.action === 'start' && !e.path && e.action !== 'start'));
+  // Trim only matters for frozen entries.
+  let todo = entriesOf(keys)
+    .filter((e) => !(change.trim !== undefined && e.action !== 'suspend'));
+  // A program that is to start needs its path; both it and the arguments
+  // are read from the running program. One that does not run and has no
+  // path cannot be set to start (nothing is known about it).
+  const launches = new Map();
+  let lackingText = null;
+  if (change.action === 'start') {
+    const lacking = [];
+    for (const e of todo) {
+      if (e.action === 'start') continue;
+      const found = await detectLaunch(e);
+      if (found) launches.set(entryKey(e), found);
+      else if (!e.path) lacking.push(e);
+    }
+    if (lacking.length) {
+      const one = lacking.length === 1;
+      lackingText = (`${lacking.map((e) => e.exe).join(', ')} ${one ? 'does' : 'do'} not run, so ${one ? 'its' : 'their'} path cannot be read. Start ${one ? 'it' : 'them'} once, or set the path in Details.`);
+      todo = todo.filter((e) => !lacking.includes(e));
+    }
+  }
   const needs = change.action ? todo.filter((e) => entryNeedsConfirm(e, change.action)) : [];
   const allowed = new Set();
   if (needs.length) {
@@ -689,10 +706,31 @@ async function entrySet(keys, change) {
     if (!here || here.name !== name) return;
     const index = here.entries.findIndex((e) => entryKey(e) === key);
     if (index < 0) continue;
-    const patch = allowed.has(key) ? { ...change, confirmed: true } : change;
+    let patch = allowed.has(key) ? { ...change, confirmed: true } : change;
+    const launch = launches.get(key);
+    if (launch) {
+      const e = here.entries[index];
+      patch = { ...patch, path: e.path || launch.path, args: e.args.length ? e.args : launch.args };
+    }
     const reply = await call('update_entry', { profile: name, index, entry: entryPayload(here.entries[index], patch) });
     if (!reply.ok) return;
+    // The path is part of the key: carry selection and memory over.
+    if (launch && !e0.path) {
+      const next = `${e0.exe.toLowerCase()}|${launch.path.toLowerCase()}`;
+      if (entrySel.delete(key)) entrySel.add(next);
+      if (entryMemory.has(key)) entryMemory.set(next, entryMemory.get(key));
+      if (entryLast === key) entryLast = next;
+    }
   }
+  if (lackingText) notice(lackingText);
+}
+
+/** How the running program of entry `e` was started: `{path, args}`, or
+ * `null` if it does not run or cannot be read. Only its own file counts when
+ * the entry has a path. */
+async function detectLaunch(e) {
+  const reply = await call('launch_of', { exe: e.exe, path: e.path || null });
+  return reply.ok && reply.data && reply.data.found ? reply.data : null;
 }
 
 /** The switch of one option of an entry (chips). */
@@ -1822,7 +1860,28 @@ function editEntry(index) {
   openDialog($('entry-dialog'));
 }
 
-$('e-action').addEventListener('change', showOptions);
+$('e-action').addEventListener('change', () => {
+  showOptions();
+  // Switched to Start in the dialog: fill what is still empty.
+  if ($('e-action').value === 'start' && (!$('e-path').value.trim() || !$('e-args').value.trim())) detectIntoForm(false);
+});
+$('e-detect').addEventListener('click', () => detectIntoForm(true));
+
+/** Fills path and arguments of the dialog from the running program. Fields
+ * that already have a value are kept unless `overwrite`. */
+async function detectIntoForm(overwrite) {
+  const exe = $('e-exe').value.trim();
+  if (!exe) return;
+  const found = await detectLaunch({ exe, path: $('e-path').value.trim() || null });
+  if (!found) {
+    if (overwrite) $('entry-error').textContent = `${exe} does not run (or cannot be read), so there is nothing to take over.`;
+    return;
+  }
+  $('entry-error').textContent = '';
+  if (overwrite || !$('e-path').value.trim()) $('e-path').value = found.path;
+  if (overwrite || !$('e-args').value.trim()) $('e-args').value = found.args.join('\n');
+  if (!found.args_known) $('entry-error').textContent = 'Its arguments cannot be read (the program is protected, elevated or has unusual arguments); only the path is taken over where it was empty.';
+}
 $('e-restart').addEventListener('change', showOptions);
 
 $('entry-form').addEventListener('submit', async (event) => {

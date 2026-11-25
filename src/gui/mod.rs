@@ -248,6 +248,11 @@ impl Host for RealHost {
             .unwrap_or_default()
     }
 
+    fn launch_of(&self, exe: &str, path: Option<&Path>) -> Option<crate::process::Launch> {
+        let snapshot = Snapshot::take().ok()?;
+        crate::process::launch_of(&snapshot.program(exe), exe, path)
+    }
+
     fn icons(&self, wanted: &[bridge::Wanted], size: u32) -> Vec<Option<String>> {
         let started = std::time::Instant::now();
         let running = Snapshot::take()

@@ -37,6 +37,10 @@ const MAX_STOP_TIMEOUT_S: u32 = 300;
 pub trait Host {
     fn active_profile(&self) -> String;
     fn running(&self) -> Vec<Candidate>;
+    /// How the running program `exe` was started (its path and arguments),
+    /// `None` if it does not run or cannot be read. With `path` only the
+    /// program from that file counts.
+    fn launch_of(&self, exe: &str, path: Option<&Path>) -> Option<crate::process::Launch>;
     fn unassigned(&self, config: &Config, profile: &str) -> Vec<Unassigned>;
     fn dismiss(&self, profile: &str, exe: &str) -> Result<(), String>;
     /// Names (lower case) of the running programs that have an entry in the
@@ -210,6 +214,13 @@ pub enum Request {
     },
     CheckProgram {
         exe: String,
+    },
+    /// How the running program was started, to fill the path and arguments
+    /// of a `start` entry (or of the restart of a `stop` entry).
+    LaunchOf {
+        exe: String,
+        #[serde(default)]
+        path: Option<String>,
     },
     AddEntry {
         profile: String,
@@ -1072,6 +1083,37 @@ impl<H: Host> Bridge<H> {
                 };
                 Ok(Some(check))
             }
+            Request::LaunchOf { exe, path } => {
+                check_text(&[&exe])?;
+                if let Some(path) = &path {
+                    check_text(&[path])?;
+                }
+                let launch = self
+                    .host
+                    .launch_of(exe.trim(), path.as_deref().map(Path::new));
+                // Arguments that `update_entry` would refuse (too many, too
+                // long, control characters) count as unknown.
+                let launch = launch.map(|mut l| {
+                    let fits = l.args.len() <= 64
+                        && l.args
+                            .iter()
+                            .all(|a| a.len() <= MAX_TEXT && !a.chars().any(char::is_control));
+                    if !fits {
+                        l.args.clear();
+                        l.args_known = false;
+                    }
+                    l
+                });
+                Ok(Some(match launch {
+                    Some(launch) => json!({
+                        "found": true,
+                        "path": launch.image.to_string_lossy(),
+                        "args": launch.args,
+                        "args_known": launch.args_known,
+                    }),
+                    None => json!({"found": false}),
+                }))
+            }
             Request::AddEntry {
                 profile,
                 exe,
@@ -1756,6 +1798,13 @@ mod tests {
                 private_bytes: 1 << 20,
                 protection: protection::of("anydesk.exe"),
             }]
+        }
+        fn launch_of(&self, exe: &str, path: Option<&Path>) -> Option<crate::process::Launch> {
+            (exe == "anydesk.exe" && path.is_none()).then(|| crate::process::Launch {
+                image: PathBuf::from(r"C:\Tools\AnyDesk\anydesk.exe"),
+                args: vec!["--tray".into(), "two words".into()],
+                args_known: true,
+            })
         }
         fn traffic(&self, _seconds: u32) -> Option<Vec<crate::helper::events::Usage>> {
             Some(vec![crate::helper::events::Usage {
@@ -2708,6 +2757,29 @@ mod tests {
             json!({"v": 1, "id": 4, "type": "compare", "a": "focus", "b": "nope"}),
         );
         assert_eq!(unknown["ok"], false);
+    }
+
+    #[test]
+    fn launch_of_tells_how_a_running_program_was_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, _fake) = bridge(&dir);
+        let found = send(
+            &mut b,
+            json!({"v": 1, "id": 1, "type": "launch_of", "exe": "anydesk.exe"}),
+        );
+        assert_eq!(found["data"]["found"], true, "{found}");
+        assert_eq!(found["data"]["path"], r"C:\Tools\AnyDesk\anydesk.exe");
+        assert_eq!(found["data"]["args"], json!(["--tray", "two words"]));
+        let missing = send(
+            &mut b,
+            json!({"v": 1, "id": 2, "type": "launch_of", "exe": "other.exe"}),
+        );
+        assert_eq!(missing["data"]["found"], false);
+        let elsewhere = send(
+            &mut b,
+            json!({"v": 1, "id": 3, "type": "launch_of", "exe": "anydesk.exe", "path": r"C:\Else\anydesk.exe"}),
+        );
+        assert_eq!(elsewhere["data"]["found"], false);
     }
 
     #[test]
