@@ -404,6 +404,9 @@ function kindChip(v) {
 
 function showAbout(holder, v) {
   if (!v) {
+    // No file to read: the guess by name alone, if the list had one.
+    const chip = holder.dataset.kind && holder.fallback ? kindChip(holder.fallback) : null;
+    if (chip) holder.replaceChildren(chip);
     holder.classList.add('loaded');
     return;
   }
@@ -2047,7 +2050,7 @@ async function openAdd() {
   const running = reply.ok ? reply.data : [];
   const rows = running.map((p) => el('tr', {},
     el('td', {}, el('div', { class: 'program' }, programIcon(p.exe, null),
-      el('span', { class: 'names' }, el('span', { class: 'exe', text: p.exe }), programAbout(p.exe, null, true)))),
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: p.exe }), Object.assign(programAbout(p.exe, null, true), { fallback: p })))),
     el('td', { class: 'num', text: megabytes(p.private_bytes) }),
     el('td', { class: 'load', 'data-exe': p.exe.toLowerCase(), text: 'measuring…' }),
     el('td', { class: `protection ${p.protection}`, text: protectionText[p.protection] }),
@@ -2081,7 +2084,7 @@ async function measureRunning(running) {
   await call('measure_start', {}, { quiet: true });
   await new Promise((resolve) => setTimeout(resolve, 1500));
   if (addMeasure !== token || !$('add-dialog').open) return;
-  const reply = await call('measure', { programs: [...new Set(running.map((r) => r.exe))] }, { quiet: true });
+  const reply = await call('measure', { programs: [...new Set(running.map((r) => r.exe))].slice(0, 256) }, { quiet: true });
   if (addMeasure !== token || !$('add-dialog').open) return;
   if (!reply.ok) {
     fill('');
