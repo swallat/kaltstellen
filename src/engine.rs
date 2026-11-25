@@ -634,6 +634,15 @@ impl Run<'_> {
                 Ok(StopOutcome::NotRunning) if ended > 0 => Ok(StopOutcome::Killed),
                 other => other,
             };
+            // An elevated program ended by the helper counts as stopped even
+            // if another process of the program then reports an error.
+            let result = match result {
+                Err(err) if ended > 0 => {
+                    self.report.failed(err);
+                    Ok(StopOutcome::Killed)
+                }
+                other => other,
+            };
             match result {
                 Ok(StopOutcome::NotRunning) => {}
                 Ok(StopOutcome::Closed | StopOutcome::Killed) => {
@@ -816,6 +825,12 @@ impl Run<'_> {
                 info.created,
             ) {
                 Ok(Some(_)) => self.report.done(Step::Suspend, &info.name, Some(info.pid)),
+                // Lost connection or timeout: the helper may have frozen it
+                // already, so the record stays and a later resume tries.
+                Err(err) if !crate::helper::client::was_refused(&err) => {
+                    warn!("helper: {err}");
+                    self.report.failed(refusal.step(Step::Suspend));
+                }
                 other => {
                     if let Err(err) = other {
                         info!("helper: {err}");

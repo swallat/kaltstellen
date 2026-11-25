@@ -423,3 +423,9 @@ a one-shot `kaltstellen switch` from a prompt does not use it).
 - If the tray ends (crash), the helper thaws its programs within seconds.
   The tray's own record then names processes that are no longer frozen;
   resuming those does nothing.
+- An answer of the helper that says no is told from a lost connection: after
+  a lost connection the record of a frozen program stays (the helper may have
+  frozen it; a later resume asks again). An elevated program ended by the
+  helper counts as stopped for the restart record even if another process of
+  the program reports an error.
+
