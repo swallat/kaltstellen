@@ -49,6 +49,30 @@ pub struct Load {
     pub heavy: Option<String>,
 }
 
+/// H2 with the helper: bytes per second sent and received by the processes
+/// of `exe`, from the per-process byte counts of the last `window` seconds.
+pub fn network(
+    processes: &[ProcessInfo],
+    usage: &[crate::helper::events::Usage],
+    exe: &str,
+    window: u32,
+) -> (u64, u64) {
+    let name = exe.to_lowercase();
+    let pids: HashSet<u32> = processes
+        .iter()
+        .filter(|p| p.name.to_lowercase() == name)
+        .map(|p| p.pid)
+        .collect();
+    let (up, down) = usage
+        .iter()
+        .filter(|u| pids.contains(&u.pid))
+        .fold((0u64, 0u64), |(up, down), u| {
+            (up.saturating_add(u.up), down.saturating_add(u.down))
+        });
+    let seconds = u64::from(window.max(1));
+    (up / seconds, down / seconds)
+}
+
 /// The figures of the program `exe` (all its processes) between `before`
 /// and `after`, which lie `elapsed` apart.
 pub fn measure(before: &Sample, after: &Sample, elapsed: Duration, exe: &str) -> Load {
@@ -190,6 +214,40 @@ mod tests {
         after.connections.insert(9, Connections { tcp: 5, udp: 5 });
         let load = measure(&before, &after, Duration::from_secs(1), "a.exe");
         assert_eq!((load.tcp, load.udp), (3, 1));
+    }
+
+    #[test]
+    fn h2_network_bytes_are_summed_per_program_and_made_per_second() {
+        use crate::helper::events::Usage;
+        let processes = vec![
+            p(1, "a.exe", 0, 0, 0),
+            p(2, "A.exe", 0, 0, 0),
+            p(3, "b.exe", 0, 0, 0),
+        ];
+        let usage = vec![
+            Usage {
+                pid: 1,
+                up: 100,
+                down: 1000,
+            },
+            Usage {
+                pid: 2,
+                up: 300,
+                down: 3000,
+            },
+            Usage {
+                pid: 3,
+                up: 9,
+                down: 9,
+            },
+            Usage {
+                pid: 99,
+                up: 7,
+                down: 7,
+            },
+        ];
+        assert_eq!(network(&processes, &usage, "a.exe", 2), (200, 2000));
+        assert_eq!(network(&processes, &usage, "none.exe", 2), (0, 0));
     }
 
     #[test]

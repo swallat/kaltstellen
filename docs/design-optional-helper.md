@@ -327,8 +327,9 @@ Hardening from the review of M4a (same day):
   processes of the **caller's own Windows session** (each process id is
   looked up when asked), processes without traffic left out.
 - `kaltstellen helper traffic [--seconds N]` prints the same as JSON lines.
-- H2 in the tray can show `Network down/up` next to `I/O` and
-  `Connections` from this; the tray side is not built yet.
+- H2: the window shows `Network ↓ ↑` next to `I/O` and `Connections` when
+  the helper's counters run (built, see `measure` in gui-bridge.md); the
+  tray menu itself shows no figures.
 - Under heavy load the kernel may drop events; `lost` of the `events` verb
   counts buffers lost for the whole session. Values are counters, not a
   record of traffic (R14).

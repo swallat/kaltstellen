@@ -112,6 +112,11 @@ pub trait Host {
     fn snapshot(&self, entries: &[crate::config::App]) -> crate::snapshot::Groups;
     /// H2: the process list, connections and frozen records now.
     fn sample(&self) -> crate::load::Sample;
+    /// H2 with the background helper: bytes sent and received per process
+    /// over the last `seconds`; `None` without a running helper.
+    fn traffic(&self, _seconds: u32) -> Option<Vec<crate::helper::events::Usage>> {
+        None
+    }
     /// H4: what switching to `profile` would do, changing nothing. Run as
     /// `kaltstellen switch --dry-run` would, with the saved state.
     fn preview(&self, config: &Config, profile: &str) -> Result<crate::engine::Plan, String>;
@@ -1312,9 +1317,24 @@ impl<H: Host> Bridge<H> {
                 }
                 let after = self.host.sample();
                 let elapsed = started.elapsed();
+                // The helper counts over whole seconds ending now; the window
+                // is the interval rounded up, the figure its average.
+                let window = u32::try_from(elapsed.as_secs_f64().ceil() as u64)
+                    .unwrap_or(600)
+                    .clamp(1, 600);
+                let traffic = self.host.traffic(window);
                 let rows: Vec<Value> = programs
                     .iter()
-                    .map(|exe| load_json(exe, &crate::load::measure(&before, &after, elapsed, exe)))
+                    .map(|exe| {
+                        let load = crate::load::measure(&before, &after, elapsed, exe);
+                        let mut row = load_json(exe, &load);
+                        let net = traffic.as_deref().filter(|_| !load.frozen).map(|usage| {
+                            crate::load::network(&after.processes, usage, exe, window)
+                        });
+                        row["net_up_per_s"] = json!(net.map(|n| n.0));
+                        row["net_down_per_s"] = json!(net.map(|n| n.1));
+                        row
+                    })
                     .collect();
                 Ok(Some(json!({
                     "interval_ms": u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
@@ -1737,6 +1757,14 @@ mod tests {
                 protection: protection::of("anydesk.exe"),
             }]
         }
+        fn traffic(&self, _seconds: u32) -> Option<Vec<crate::helper::events::Usage>> {
+            Some(vec![crate::helper::events::Usage {
+                pid: 1,
+                up: 3000,
+                down: 6000,
+            }])
+        }
+
         fn sample(&self) -> crate::load::Sample {
             let n = self.samples.get();
             self.samples.set(n + 1);
@@ -2807,6 +2835,11 @@ mod tests {
         assert!(rows[0]["cpu"].as_f64().unwrap() > 0.0);
         assert!(rows[0]["heavy"].as_str().unwrap().contains("memory"));
         assert_eq!(rows[1]["private_bytes"], 0);
+        // With the helper's counters (the stub host has them): per second
+        // over the window of a whole second.
+        assert_eq!(rows[0]["net_down_per_s"], 6000);
+        assert_eq!(rows[0]["net_up_per_s"], 3000);
+        assert_eq!(rows[1]["net_down_per_s"], 0);
     }
 
     #[test]

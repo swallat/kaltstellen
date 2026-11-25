@@ -913,6 +913,8 @@ function loadText(load) {
   const parts = [];
   if (load.cpu !== null) parts.push(`${(load.cpu * 100).toFixed(load.cpu < 0.1 ? 1 : 0)} % CPU`);
   if (load.io_per_s !== null) parts.push(`I/O ${load.io_per_s >= 1048576 ? `${(load.io_per_s / 1048576).toFixed(1)} MB/s` : `${Math.round(load.io_per_s / 1024)} KB/s`}`);
+  const rate = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB/s` : `${Math.round(n / 1024)} KB/s`);
+  if (load.net_down_per_s != null) parts.push(`Network ↓ ${rate(load.net_down_per_s)} ↑ ${rate(load.net_up_per_s)}`);
   if (load.tcp || load.udp) parts.push(`${load.tcp} TCP, ${load.udp} UDP`);
   return parts.join(' · ') || 'idle';
 }
