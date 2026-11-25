@@ -449,6 +449,12 @@ Decision of the owner (2026-11-25): a service gets its own entry kind
   (`false`: asked, not there yet; the caller asks again later). Refused with
   a reason: role off, not on the allow list, no such service, a refusal of
   Windows (for example a service with running dependents).
+- The wait covers only the polling; a start or stop that the service
+  control manager itself holds for long (a service slow to report) shows as
+  a timeout of the client (3 s) instead of `reached: false`. A service that
+  is already starting or stopping is waited for, not asked again.
+- Entries of `helper.toml` that the commands would refuse (a bad name, one
+  on the never-list, beyond 64) are dropped when the file is read.
 - The helper keeps no record. Starting what was stopped is the tray's job
   through its own record, as for a stopped program (part 2).
 - `kaltstellen helper stop-service|start-service --name N` for checking

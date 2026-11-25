@@ -459,7 +459,10 @@ pub fn control(name: &str, start: bool, wait: Duration) -> Result<Option<bool>> 
     } else {
         State::Stopped
     };
-    if status_of(&service)?.state != wanted {
+    let now = status_of(&service)?.state;
+    // A service that is on its way (or on its way out, for a start) takes
+    // no new control: wait for it below.
+    if now != wanted && !matches!(now, State::Starting | State::Stopping) {
         if start {
             // SAFETY: valid handle, no arguments.
             match unsafe { StartServiceW(service.0, None) } {

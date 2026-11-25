@@ -69,6 +69,25 @@ const NEVER_SERVICES: &[&str] = &[
     "cryptsvc",
     "wscsvc",
     "sens",
+    "winmgmt",
+    "appinfo",
+    "keyiso",
+    "brokerinfrastructure",
+    "usermanager",
+    "dhcp",
+    "dnscache",
+    "nsi",
+    "lanmanserver",
+    "lanmanworkstation",
+    "termservice",
+    "systemeventsbroker",
+    "timebrokersvc",
+    "coremessagingregistrar",
+    "securityhealthservice",
+    "sense",
+    "netlogon",
+    "winrm",
+    "sshd",
 ];
 
 /// The key name of a service: no path characters, no control characters,
@@ -267,7 +286,7 @@ impl Policy {
     }
 
     pub fn parse(text: &str) -> Result<Policy> {
-        let policy: Policy = toml::from_str(text)
+        let mut policy: Policy = toml::from_str(text)
             .map_err(|e| Error::new(Code::HelperPolicy, format!("helper.toml: {e}")))?;
         if policy.version != 1 {
             return Err(Error::new(
@@ -281,6 +300,13 @@ impl Policy {
                 "helper.toml: owner_sid is not a SID",
             ));
         }
+        // Entries that could not be put on the list by the commands never
+        // work (the helper checks again); they are not carried along.
+        policy
+            .allow
+            .services
+            .retain(|s| normalize_service(s).is_ok());
+        policy.allow.services.truncate(MAX_SERVICES);
         Ok(policy)
     }
 
