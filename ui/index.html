@@ -100,11 +100,28 @@
           <button type="button" class="button" id="add-program">Add program…</button>
         </div>
         <p class="hint">Or drop .exe files from Explorer onto this window.</p>
+        <p class="hint">Click an action per program, or select rows to set several at once. Keys: Up and Down, 1 to 4 for the action, Space to select, Delete to remove.</p>
+        <div class="bulk-bar" id="entries-bulk" hidden>
+          <strong id="entries-count" role="status">0 selected</strong>
+          <span class="hint">For all:</span>
+          <span class="seg" id="entries-bulk-actions" role="group" aria-label="Action for the selected programs">
+            <button type="button" data-a="ignore">Ignore</button>
+            <button type="button" data-a="suspend">Freeze</button>
+            <button type="button" data-a="stop">Stop</button>
+            <button type="button" data-a="start">Start</button>
+          </span>
+          <button type="button" class="chip" id="entries-trim-on">Trim on</button>
+          <button type="button" class="chip" id="entries-trim-off">Trim off</button>
+          <span class="spacer"></span>
+          <button type="button" class="button small danger" id="entries-remove">Remove</button>
+          <button type="button" class="button small" id="entries-clear">Clear selection</button>
+        </div>
         <table class="table" id="entries">
           <caption class="visually-hidden">Programs of the profile</caption>
-          <thead><tr><th scope="col">Program</th><th scope="col">Action</th><th scope="col">Options</th><th scope="col"><span class="visually-hidden">Commands</span></th></tr></thead>
+          <thead><tr><th scope="col" class="mark"><input type="checkbox" id="entries-all" aria-label="Select all programs"></th><th scope="col">Program</th><th scope="col">Action</th><th scope="col">Options</th><th scope="col"><span class="visually-hidden">Commands</span></th></tr></thead>
           <tbody></tbody>
         </table>
+        <p class="undo-bar" id="entries-undo" role="status" hidden><span id="entries-undo-text"></span> <button type="button" class="button small" id="entries-undo-button">Undo</button></p>
         <p class="hint" id="entries-empty" hidden>No programs yet. Programs without an entry are left as they are.</p>
 
         <div class="section-head">
