@@ -516,6 +516,11 @@ impl Target {
         )))
     }
 
+    /// The user SID of the process, as `S-1-5-…`.
+    pub fn owner_sid(&self) -> Result<String> {
+        crate::win32::pipe::user_sid_of(self.handle.0)
+    }
+
     /// Freezes every thread. Each call raises the suspend count, so the
     /// caller must pair it with exactly one [`Target::resume`] (S2).
     pub fn suspend(&self) -> Result<()> {

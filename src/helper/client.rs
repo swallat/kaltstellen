@@ -19,23 +19,29 @@ const QUICK_DEADLINE: Duration = Duration::from_millis(1000);
 /// installed or not running); an error if something answers that is not the
 /// helper (wrong account, wrong protocol).
 pub fn ask(command: Command) -> Result<Option<Reply>> {
-    ask_with(command, None, None, DEADLINE)
+    ask_with(command, None, None, None, DEADLINE)
 }
 
 /// [`ask`] with the `after` of an `events` request.
 pub fn ask_after(command: Command, after: Option<u64>) -> Result<Option<Reply>> {
-    ask_with(command, after, None, QUICK_DEADLINE)
+    ask_with(command, after, None, None, QUICK_DEADLINE)
 }
 
 /// [`ask`] for `network` with the window in seconds.
 pub fn ask_network(seconds: Option<u32>) -> Result<Option<Reply>> {
-    ask_with(Command::Network, None, seconds, DEADLINE)
+    ask_with(Command::Network, None, seconds, None, DEADLINE)
+}
+
+/// [`ask`] for an acting verb on the process `pid` created at `created`.
+pub fn ask_act(command: Command, pid: u32, created: u64) -> Result<Option<Reply>> {
+    ask_with(command, None, None, Some((pid, created)), DEADLINE)
 }
 
 fn ask_with(
     command: Command,
     after: Option<u64>,
     seconds: Option<u32>,
+    target: Option<(u32, u64)>,
     deadline: Duration,
 ) -> Result<Option<Reply>> {
     let Some(mut conn) = pipe::connect_peer(PIPE_NAME, Duration::from_secs(1), Peer::Helper)?
@@ -56,6 +62,8 @@ fn ask_with(
         cmd: command,
         after,
         seconds,
+        pid: target.map(|t| t.0),
+        created: target.map(|t| t.1),
     };
     let reply = pipe::with_deadline(deadline, || -> Result<Option<String>> {
         protocol::write_line(&mut conn, &request)?;

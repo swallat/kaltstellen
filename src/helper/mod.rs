@@ -14,6 +14,7 @@
 //! *services* are switched in the policy file but not implemented yet
 //! (M4b to M4e).
 
+pub mod act;
 pub mod client;
 pub mod events;
 pub mod policy;

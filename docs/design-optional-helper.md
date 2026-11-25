@@ -363,3 +363,29 @@ anything yet.
   refused, so the protected-program check cannot be passed by spelling. The
   later enforcement compares with the process's final path.
 
+
+## M4d as built, part 2: the helper's hands **[assumed]**
+
+With the role *act* on, the helper answers `suspend`, `resume` and
+`terminate` for one process (`pid` and its creation time `created`). The
+tray's use of them comes in part 3; `kaltstellen helper suspend|resume|terminate
+--pid N` exist for checking by hand.
+
+- Every request is checked on one opened handle (so the process cannot
+  change in between): the role is on; the pid is above 4 and not the
+  helper's own or the caller's; the creation time matches (S6); the program
+  runs as the owner recorded at install, in the Windows session of the
+  caller; it is not hard-protected; its full image path is on the allow
+  list. Anything else is refused with a reason.
+- `suspend` is recorded in `%ProgramData%\kaltstellen\helper-state.json`
+  before the process is touched (and removed again if the freeze fails or
+  the process is gone). `resume` only thaws what this helper froze, so the
+  helper cannot be used to resume somebody else's suspended program.
+  `terminate` ends the process (for an elevated program `stop` is
+  terminate, as the spec says).
+- At most 64 programs are frozen at once.
+- A frozen program is thawed when the process that asked is gone (checked
+  every 5 s, by pid and creation time), when the service stops, and after a
+  crash at the next start (from the record). A record that does not match a
+  running process is dropped.
+- The status shows `act` among the active roles only when it runs.

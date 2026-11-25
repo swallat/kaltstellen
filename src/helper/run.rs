@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use log::{error, info, warn};
 
+use super::act;
 use super::events;
 use super::protocol::{self, Context};
 use super::{PIPE_NAME, SERVICE_NAME, data_dir, policy, policy_file, version};
@@ -108,7 +109,7 @@ fn serve(stop: Stop) -> Result<()> {
         }
     };
     info!(
-        "helper {} serves {} (roles: observe {}, act {}, services {}; only observe is implemented)",
+        "helper {} serves {} (roles: observe {}, act {}, services {}; observe and act are implemented)",
         version(),
         policy.owner_sid,
         policy.roles.observe,
@@ -153,12 +154,28 @@ fn serve(stop: Stop) -> Result<()> {
             }
         }
     }
+    // The role act: the hands for elevated programs on the allow list.
+    // What an earlier run froze and left behind is thawed first.
+    let actor = if policy.roles.act {
+        let actor = Arc::new(act::Actor::new(
+            &policy,
+            Arc::new(act::RealOs),
+            data_dir().map(|dir| act::state_file(&dir)),
+            std::process::id(),
+        ));
+        actor.recover();
+        info!("act: the role runs");
+        Some(actor)
+    } else {
+        None
+    };
     let context = Arc::new(Context {
         version: version().to_owned(),
         pid: std::process::id(),
         roles: policy.roles.clone(),
         events: session.as_ref().map(|_| Arc::clone(&ring)),
         session_of: pipe::session_of,
+        act: actor.clone(),
     });
     let active = Arc::new(AtomicUsize::new(0));
     let accepting = stop.clone();
@@ -206,7 +223,16 @@ fn serve(stop: Stop) -> Result<()> {
         })?;
     stop.running();
     let mut reported = 0;
-    while !stop.wait_for(Duration::from_secs(30)) {
+    let mut ticks = 0u32;
+    while !stop.wait_for(Duration::from_secs(5)) {
+        // Frozen programs whose asker is gone are released every few seconds.
+        if let Some(actor) = &actor {
+            actor.sweep();
+        }
+        ticks += 1;
+        if !ticks.is_multiple_of(6) {
+            continue;
+        }
         if let Some(session) = session.as_mut() {
             if ring.running() && !session.alive() {
                 ring.set_running(false);
@@ -227,6 +253,9 @@ fn serve(stop: Stop) -> Result<()> {
         }
     }
     info!("helper stopping");
+    if let Some(actor) = &actor {
+        actor.release_all();
+    }
     drop(network);
     drop(session);
     // Wake the accept loop, which sees the stop flag and ends.
@@ -243,12 +272,15 @@ fn handle(conn: File, context: &Context) {
         }
     };
     // The session of the caller decides which events it may read.
-    let session = pipe::client_pid(&conn).and_then(pipe::session_of);
+    let client = pipe::client_pid(&conn);
+    let session = client.and_then(pipe::session_of);
     let mut duplex = Duplex {
         reader: BufReader::new(conn),
         writer,
     };
-    let result = pipe::with_deadline(DEADLINE, || protocol::serve(&mut duplex, context, session));
+    let result = pipe::with_deadline(DEADLINE, || {
+        protocol::serve(&mut duplex, context, session, client)
+    });
     if let Err(err) = result {
         warn!("{err}");
     }

@@ -69,7 +69,7 @@ unsafe fn take_local_string(text: PWSTR) -> String {
 }
 
 /// The user SID of the process behind `process`, as `S-1-5-…`.
-fn user_sid_of(process: HANDLE) -> Result<String> {
+pub(crate) fn user_sid_of(process: HANDLE) -> Result<String> {
     // SAFETY: the token handle is closed below; the buffer is sized by the
     // first call and outlives every use of the SID pointer inside it.
     unsafe {
