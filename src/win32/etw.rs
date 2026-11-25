@@ -383,7 +383,8 @@ unsafe extern "system" fn on_event(record: *mut EVENT_RECORD) {
             session: number("SessionID").map(|s| s as u32),
             created: property_u64(record_ptr, "CreateTime", 8).unwrap_or(0),
             time: u64::try_from(record.EventHeader.TimeStamp).unwrap_or(0),
-            image: property_string(record_ptr, "ImageName").unwrap_or_default(),
+            image: property_string(record_ptr, "ImageName", kind == Kind::Start)
+                .unwrap_or_default(),
         }));
     }));
 }
@@ -415,8 +416,10 @@ fn property_u64(record: *const EVENT_RECORD, name: &str, size: usize) -> Option<
     })
 }
 
-/// A UTF-16 string property, up to its NUL.
-fn property_string(record: *const EVENT_RECORD, name: &str) -> Option<String> {
+/// A string property, up to its NUL: UTF-16 where `utf16`, else single
+/// bytes (the stop event of the process provider carries its image file
+/// name as 8-bit text, the start event as UTF-16).
+fn property_string(record: *const EVENT_RECORD, name: &str, utf16: bool) -> Option<String> {
     let name = wide(name);
     let wanted = [descriptor(&name)];
     let mut size = 0u32;
@@ -431,6 +434,9 @@ fn property_string(record: *const EVENT_RECORD, name: &str) -> Option<String> {
     if status != 0 {
         return None;
     }
+    if !utf16 {
+        return Some(decode_narrow(&buffer));
+    }
     let units: Vec<u16> = buffer
         .as_chunks::<2>()
         .0
@@ -439,6 +445,13 @@ fn property_string(record: *const EVENT_RECORD, name: &str) -> Option<String> {
         .take_while(|unit| *unit != 0)
         .collect();
     Some(String::from_utf16_lossy(&units))
+}
+
+/// 8-bit text up to its NUL (the system's file names are ASCII for the
+/// programs that matter; anything else is replaced, never garbled).
+fn decode_narrow(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
 /// The drive letters and the device names behind them, as `("C:", "\Device\HarddiskVolume3")`.
@@ -475,6 +488,15 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    /// The stop event's 8-bit image name was read as UTF-16 once, which
+    /// turned `Notepad.exe` into CJK characters.
+    #[test]
+    fn narrow_image_names_are_not_read_as_utf16() {
+        assert_eq!(decode_narrow(b"Notepad.exe\0\0\0"), "Notepad.exe");
+        assert_eq!(decode_narrow(b"git.exe"), "git.exe");
+        assert_eq!(decode_narrow(b"\0"), "");
+    }
 
     /// Starts a session of its own and watches a child process start and
     /// end. Skipped where the session cannot be started (no administrator

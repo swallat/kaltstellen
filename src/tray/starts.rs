@@ -97,6 +97,17 @@ impl StartWatch {
         !self.pending.is_empty()
     }
 
+    /// Seconds since the profile was applied (0 if it was not; the largest
+    /// value when the clock went back).
+    pub fn age(&self, now: u64) -> u64 {
+        if self.since == 0 {
+            0
+        } else {
+            // A clock that went back counts as old: the window restarts.
+            now.checked_sub(self.since).unwrap_or(u64::MAX)
+        }
+    }
+
     /// The profile watched now; empty or `neutral` watches nothing.
     pub fn profile(&self) -> &str {
         &self.profile
@@ -453,5 +464,14 @@ mod tests {
         w.activated("neutral", 120);
         assert_eq!(w.due(1000), None);
         assert_eq!(w.profile(), "");
+    }
+
+    #[test]
+    fn the_age_of_the_activation() {
+        let mut w = StartWatch::default();
+        assert_eq!(w.age(100), 0, "never applied");
+        w.activated("focus", 90);
+        assert_eq!(w.age(100), 10);
+        assert_eq!(w.age(80), u64::MAX, "a clock that went back");
     }
 }

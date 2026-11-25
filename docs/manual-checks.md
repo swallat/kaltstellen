@@ -413,4 +413,6 @@ With the helper installed and running (see above), signed in as the owner:
 6. `kaltstellen helper status` also says `network counters: running`. Start a large
    download in a browser, then run `kaltstellen helper traffic --seconds 10`:
    the browser's process id shows a `down` of a similar size as the
-   download; a second account's programs are not listed.
+   download; a second account's programs are not listed. Traffic between
+   two programs on this computer (the loopback address) is not counted by
+   the network provider.
