@@ -997,13 +997,15 @@ const suggestionVerb = { stop: 'Stop', suspend: 'Freeze', start: 'Keep running (
 // Services (M4e) ---------------------------------------------------------------
 function renderServices(profile) {
   const list = profile.services || [];
-  // Rebuilding the list would take the focus from a select being used.
+  // The list always follows the file (a removed row must go, a refused
+  // change must be taken back); a select that had the focus gets it again.
   const focused = document.activeElement;
-  if (focused && $('services').contains(focused)) return;
+  const keep = focused && $('services').contains(focused) && focused.dataset.index != null ? focused.dataset.index : null;
   $('services').replaceChildren(...list.map((service, index) => el('li', {},
     el('span', { class: 'name', text: service.name }),
     el('span', { class: 'commands' },
       el('select', {
+        'data-index': String(index),
         'aria-label': `Action for ${service.name}`,
         onchange: (event) => changeService(index, event.target),
       },
@@ -1015,6 +1017,10 @@ function renderServices(profile) {
         onclick: () => call('remove_service', { profile: profile.name, index }),
         text: 'Remove',
       })))));
+  if (keep !== null) {
+    const select = $('services').querySelector(`select[data-index="${keep}"]`);
+    if (select) select.focus();
+  }
 }
 
 async function changeService(index, select) {

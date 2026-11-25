@@ -1410,4 +1410,17 @@ name = "music"
         let other = profiles.iter().find(|p| p.name == "other").unwrap();
         assert!(other.services.is_empty(), "{}", d.text());
     }
+
+    #[test]
+    fn m4e_an_inline_list_of_services_is_kept_when_edited() {
+        let text = "[[profile]]\nname = \"a\"\nservice = [{ name = \"Spooler\" }]\n";
+        let mut d = Document::from_text(Path::new("C:\\cfg\\config.toml"), text).unwrap();
+        d.add_service("a", "Fax", config::ServiceAction::Start)
+            .unwrap();
+        let list = &d.config().profiles[0].services;
+        assert_eq!(list.len(), 2, "{}", d.text());
+        assert_eq!(list[0].name, "Spooler");
+        d.remove_service("a", 0).unwrap();
+        assert_eq!(d.config().profiles[0].services[0].name, "Fax");
+    }
 }
