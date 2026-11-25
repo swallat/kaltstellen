@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use log::{info, warn};
 
-use crate::config::{App, AppAction, Config, NEUTRAL, Settings};
+use crate::config::{App, AppAction, Config, NEUTRAL, ServiceEntry, Settings};
 use crate::error::{Code, Error, Result, Step};
 use crate::process::{self, Access, Guest, ProcessInfo, Snapshot, StopOutcome, Target};
 use crate::protection::{self, Protection};
@@ -230,7 +230,7 @@ pub fn switch_guarded(
     interrupted: &dyn Fn() -> bool,
     guests: &dyn Fn() -> Vec<Guest>,
 ) -> Result<Report> {
-    let (name, apps) = resolve_target(config, target)?;
+    let (name, apps, services) = resolve_target(config, target)?;
     let to_neutral = name == NEUTRAL;
     info!("switch from \"{}\" to \"{name}\"", state.active_profile);
 
@@ -256,6 +256,7 @@ pub fn switch_guarded(
     run.suspend(apps)?;
     run.save();
     run.start(apps, to_neutral)?;
+    run.services(services, to_neutral);
 
     if run.halted {
         run.save();
@@ -268,9 +269,12 @@ pub fn switch_guarded(
 }
 
 /// The name and entries of the profile a switch goes to.
-fn resolve_target<'c>(config: &'c Config, target: &str) -> Result<(String, &'c [App])> {
+fn resolve_target<'c>(
+    config: &'c Config,
+    target: &str,
+) -> Result<(String, &'c [App], &'c [ServiceEntry])> {
     if target.trim().eq_ignore_ascii_case(NEUTRAL) {
-        return Ok((NEUTRAL.to_owned(), &[]));
+        return Ok((NEUTRAL.to_owned(), &[], &[]));
     }
     let profile = config.profile(target).ok_or_else(|| {
         Error::new(
@@ -278,7 +282,7 @@ fn resolve_target<'c>(config: &'c Config, target: &str) -> Result<(String, &'c [
             format!("no profile named \"{}\"", target.trim()),
         )
     })?;
-    Ok((profile.name.clone(), &profile.apps))
+    Ok((profile.name.clone(), &profile.apps, &profile.services))
 }
 
 /// H4: what [`switch_guarded`] would do, in the same steps, without doing
@@ -292,7 +296,7 @@ pub fn preview(
     options: Options,
     guests: &dyn Fn() -> Vec<Guest>,
 ) -> Result<Plan> {
-    let (name, apps) = resolve_target(config, target)?;
+    let (name, apps, services) = resolve_target(config, target)?;
     let to_neutral = name == NEUTRAL;
     let mut state = state.clone();
     let mut persist = |_: &State| Ok(());
@@ -317,6 +321,7 @@ pub fn preview(
     run.stop(apps)?;
     run.suspend(apps)?;
     run.start(apps, to_neutral)?;
+    run.services(services, to_neutral);
     Ok(Plan {
         profile: name,
         items: run.plan,
@@ -875,6 +880,131 @@ impl Run<'_> {
         }
     }
 
+    /// M4e: stops and starts Windows services through the helper. Services
+    /// this tool stopped are started again on a switch to neutral (the
+    /// record goes only when that worked); a `stop` entry is stopped if it
+    /// runs and recorded, a `start` entry is started if it does not run.
+    fn services(&mut self, target: &[ServiceEntry], to_neutral: bool) {
+        use crate::config::ServiceAction;
+        if self.halt() {
+            return;
+        }
+        let restarts: Vec<String> = if to_neutral {
+            self.state.stopped_services.clone()
+        } else {
+            Vec::new()
+        };
+        for name in restarts {
+            if self.halt() {
+                return;
+            }
+            if self.service_step(&name, true, false) {
+                self.state
+                    .stopped_services
+                    .retain(|s| !s.eq_ignore_ascii_case(&name));
+            }
+        }
+        for entry in target {
+            if self.halt() {
+                return;
+            }
+            match entry.action {
+                ServiceAction::Stop => {
+                    let known = self
+                        .state
+                        .stopped_services
+                        .iter()
+                        .any(|s| s.eq_ignore_ascii_case(&entry.name));
+                    if !known && self.service_step(&entry.name, false, true) && !self.dry {
+                        self.state.stopped_services.push(entry.name.clone());
+                    }
+                }
+                ServiceAction::Start => {
+                    self.service_step(&entry.name, true, false);
+                }
+            }
+        }
+    }
+
+    /// One service step. Returns whether the service was asked (stopped or
+    /// started now, or on its way); `false` when it was in the wanted state
+    /// already, does not exist, or the step failed (reported).
+    fn service_step(&mut self, name: &str, start: bool, record: bool) -> bool {
+        let step = if start { Step::Start } else { Step::Stop };
+        let now = match crate::win32::service::query(name) {
+            Ok(Some(info)) => info.state,
+            Ok(None) => {
+                self.report.failed(
+                    Error::new(Code::ServiceFailed, "there is no such service")
+                        .program(name)
+                        .step(step),
+                );
+                return false;
+            }
+            Err(err) => {
+                self.report.failed(err.step(step));
+                return false;
+            }
+        };
+        use crate::win32::service::State as Svc;
+        let wanted = if start { Svc::Running } else { Svc::Stopped };
+        if now == wanted || (!start && now == Svc::Stopping) || (start && now == Svc::Starting) {
+            if self.dry {
+                self.planned(
+                    step,
+                    name,
+                    Outcome::NoChange,
+                    if start {
+                        "service already running"
+                    } else {
+                        "service not running"
+                    },
+                    &[],
+                );
+            }
+            return false;
+        }
+        if self.dry {
+            let text = if start {
+                "will start the service (needs the helper)"
+            } else {
+                "will stop the service (needs the helper)"
+            };
+            self.planned(step, name, Outcome::Will, text, &[]);
+            return record;
+        }
+        let command = if start {
+            crate::helper::protocol::Command::StartService
+        } else {
+            crate::helper::protocol::Command::StopService
+        };
+        match crate::helper::client::ask_service(command, name) {
+            Ok(Some(_)) => {
+                self.report.done(step, name, None);
+                true
+            }
+            Ok(None) => {
+                self.report.failed(
+                    Error::new(
+                        Code::ServiceFailed,
+                        "needs the background helper (not installed or not running)",
+                    )
+                    .program(name)
+                    .step(step),
+                );
+                false
+            }
+            Err(err) => {
+                self.report.failed(
+                    Error::new(Code::ServiceFailed, err.reason)
+                        .program(name)
+                        .step(step),
+                );
+                false
+            }
+        }
+    }
+
     fn start(&mut self, target: &[App], to_neutral: bool) -> Result<()> {
         if self.halt() {
             return Ok(());
@@ -1123,6 +1253,7 @@ mod tests {
                 triggers: Vec::new(),
                 priority: 0,
                 watch: false,
+                services: Vec::new(),
             }],
         }
     }

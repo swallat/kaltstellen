@@ -459,3 +459,17 @@ Decision of the owner (2026-11-25): a service gets its own entry kind
   through its own record, as for a stopped program (part 2).
 - `kaltstellen helper stop-service|start-service --name N` for checking
   by hand.
+
+## M4e as built, part 2: the entry and the step **[assumed]**
+
+`[[profile.service]]` (`name`, `action` = `stop` or `start`, see C10 in the
+spec). The engine step runs after the program steps: services recorded as
+stopped by an earlier switch are started again on a switch to neutral; a
+`stop` entry asks the helper to stop a running service and records it in
+`state.json`; a `start` entry starts one that is not running. The state of
+a service is read through the service control manager as any user, the
+change goes through the helper. The preview says `will stop the service
+(needs the helper)`. Without the helper, or when it refuses (role off, not on
+the allow list, a dependent service runs), the step is reported as `KS114`
+and nothing is recorded. The window does not edit service entries yet; it
+keeps them when it saves (it edits the file in place).

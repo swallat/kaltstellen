@@ -24,6 +24,10 @@ pub struct State {
     pub suspended: Vec<Suspended>,
     #[serde(default)]
     pub stopped: Vec<Stopped>,
+    /// M4e: Windows services kaltstellen stopped; started again on a switch
+    /// to neutral.
+    #[serde(default)]
+    pub stopped_services: Vec<String>,
 }
 
 fn neutral() -> String {
@@ -37,6 +41,7 @@ impl Default for State {
             boot: 0,
             suspended: Vec::new(),
             stopped: Vec::new(),
+            stopped_services: Vec::new(),
         }
     }
 }
@@ -187,6 +192,7 @@ mod tests {
                 args: Vec::new(),
                 cwd: None,
             }],
+            stopped_services: vec!["Spooler".into()],
         }
     }
 

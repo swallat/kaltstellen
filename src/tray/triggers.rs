@@ -779,6 +779,7 @@ mod tests {
                 .collect(),
             priority: 2,
             watch: false,
+            services: Vec::new(),
         }
     }
 

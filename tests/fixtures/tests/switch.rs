@@ -72,6 +72,7 @@ impl World {
             triggers: Vec::new(),
             priority: 0,
             watch: false,
+            services: Vec::new(),
         });
     }
 
