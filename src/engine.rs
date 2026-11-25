@@ -625,7 +625,26 @@ impl Run<'_> {
                 }
                 continue;
             }
-            let image = app.path.clone().or_else(|| image_of(&processes, &app.exe));
+            // Where it was started from and with which arguments, read now,
+            // while it runs: that is what the restart on neutral uses unless
+            // the entry names its own arguments.
+            let launch = process::launch_of(&processes, &app.exe, app.path.as_deref());
+            if *restart_on_neutral && launch.as_ref().is_some_and(|l| !l.args_known) {
+                warn!(
+                    "{}: its command line cannot be read; it will be restarted without arguments",
+                    app.exe
+                );
+            }
+            let image = app
+                .path
+                .clone()
+                .or_else(|| launch.as_ref().map(|l| l.image.clone()))
+                .or_else(|| image_of(&processes, &app.exe));
+            let args = if args.is_empty() {
+                launch.map(|l| l.args).unwrap_or_default()
+            } else {
+                args.clone()
+            };
             let timeout = Duration::from_secs(u64::from(self.settings.stop_timeout_s));
             // M4d: what is elevated is ended by the helper (no graceful close
             // for it: `stop` is `terminate` there).
@@ -664,7 +683,7 @@ impl Run<'_> {
                         exe: app.exe.clone(),
                         image,
                         restart_on_neutral: *restart_on_neutral,
-                        args: args.clone(),
+                        args,
                         cwd: cwd.as_ref().map(|c| c.to_string_lossy().into_owned()),
                     });
                 }

@@ -242,6 +242,12 @@ function handle(message) {
         : `${m.added} program${m.added === 1 ? '' : 's'} added to "${m.profile}"; saved.`;
       return { ok: true };
     }
+    case 'launch_of': {
+      // Programs of the mock that "run" with arguments.
+      const known = { 'chrome.exe': ['C:\\Program Files\\Chrome\\chrome.exe', ['--profile-directory=Default']] };
+      const hit = known[String(m.exe).toLowerCase()];
+      return { ok: true, data: hit ? { found: true, path: hit[0], args: hit[1], args_known: true } : { found: false } };
+    }
     case 'running': return { ok: true, data: clone(running) };
     case 'icons': {
       if (!Array.isArray(m.programs) || m.programs.length > 256) return fail('at most 256 icons per request');
