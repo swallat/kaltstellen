@@ -164,9 +164,25 @@ pub fn edit_policy(change: impl FnOnce(&mut Policy) -> Result<Edit>) -> Result<S
     let mut policy = Policy::read(&path)?;
     let edit = change(&mut policy)?;
     if edit.changed {
-        fs::write(&path, policy.to_toml()).map_err(|e| io_error("cannot write", &path, e))?;
-        service::restart(SERVICE_NAME)?;
+        // Through a file of its own, so that a crash never leaves a half
+        // written policy that the service refuses at its next start.
+        let temporary = path.with_extension("toml.tmp");
+        fs::write(&temporary, policy.to_toml())
+            .and_then(|()| fs::rename(&temporary, &path))
+            .map_err(|e| {
+                let _ = fs::remove_file(&temporary);
+                io_error("cannot write", &path, e)
+            })?;
         info!("helper policy changed: {}", edit.message);
+        service::restart(SERVICE_NAME).map_err(|e| {
+            Error::new(
+                Code::HelperService,
+                format!(
+                    "the policy is saved, but the service did not restart ({}); start it with `net start kaltstellen-helper` from an elevated prompt",
+                    e.reason
+                ),
+            )
+        })?;
     }
     Ok(edit.message)
 }

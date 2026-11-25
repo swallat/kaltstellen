@@ -442,7 +442,7 @@ pub fn stop(name: &str) -> Result<()> {
 }
 
 /// Stops the service if it runs and starts it again, so that it reads its
-/// files anew; nothing if it is not installed.
+/// files anew; a stopped one stays stopped, nothing if it is not installed.
 pub fn restart(name: &str) -> Result<()> {
     let manager = manager(SC_MANAGER_CONNECT)?;
     match open(
@@ -451,8 +451,14 @@ pub fn restart(name: &str) -> Result<()> {
         SERVICE_STOP | SERVICE_START | SERVICE_QUERY_STATUS,
     )? {
         Some(service) => {
+            // A service the administrator stopped on purpose stays stopped.
+            let running = status_of(&service)?.state != State::Stopped;
             stop_service(&service)?;
-            start_service(&service)
+            if running {
+                start_service(&service)
+            } else {
+                Ok(())
+            }
         }
         None => Ok(()),
     }

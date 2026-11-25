@@ -51,6 +51,26 @@ fn same_path(a: &str, b: &str) -> bool {
     key(a) == key(b)
 }
 
+/// Whether some part looks like an 8.3 short name (`EXPLOR~1.EXE`), which
+/// would also get past the check for protected programs.
+fn has_short_name(path: &str) -> bool {
+    path.split('\\').any(|part| {
+        part.as_bytes()
+            .windows(2)
+            .any(|pair| pair[0] == b'~' && pair[1].is_ascii_digit())
+    })
+}
+
+/// Whether `text` is fit for a command line and the log: no control
+/// characters or quotes, not ending in a backslash (it would swallow the
+/// closing quote), at most 520 bytes.
+pub fn plain_text(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 520
+        && !text.ends_with('\\')
+        && !text.chars().any(|c| c.is_control() || c == '"')
+}
+
 /// The text of an allow-list entry: a full path of an `.exe` on a drive,
 /// without wildcards, relative parts, quotes or control characters, and not
 /// a program kaltstellen never touches (the hard-protected list). Checked
@@ -78,6 +98,12 @@ pub fn normalize_program(path: &str) -> Result<String> {
         .any(|c| c.is_control() || "*?\"<>|".contains(c))
     {
         return bad("it has wildcards, quotes or control characters");
+    }
+    if path[2..].contains(':') {
+        return bad("it names a stream, not a file");
+    }
+    if has_short_name(&path) {
+        return bad("it uses a short (8.3) name; give the long name");
     }
     let mut parts = path[3..].split('\\').peekable();
     let mut file = "";
@@ -233,7 +259,11 @@ mod tests {
 
     #[test]
     fn m4d_allow_list_entries_are_full_exe_paths_only() {
-        for good in [r"C:\Tools\tool.exe", "d:/games/Sim/sim.EXE"] {
+        for good in [
+            r"C:\Tools\tool.exe",
+            "d:/games/Sim/sim.EXE",
+            "  C:\\Tools\\tool.exe ",
+        ] {
             assert!(normalize_program(good).is_ok(), "{good}");
         }
         assert_eq!(
@@ -248,18 +278,15 @@ mod tests {
             r"C:\Tools\..\Windows\tool.exe",
             r"C:\Tools\.\tool.exe",
             r"C:\Tools\tool.dll",
-            r"C:\Tools\tool.exe ",
+            r"C:\Tools\a:b.exe",
+            r"C:\Tools\x.exe:y.exe",
+            r"C:\Windows\EXPLOR~1.EXE",
+            r"C:\PROGRA~1\tool.exe",
             "C:\\Tools\\\"tool\".exe",
             r"C:\Windows\explorer.exe",
             r"C:\Tools\\tool.exe",
         ] {
-            // The one with trailing space is trimmed and fine; the rest not.
-            let result = normalize_program(bad);
-            if bad == r"C:\Tools\tool.exe " {
-                assert!(result.is_ok());
-            } else {
-                assert!(result.is_err(), "{bad:?} was accepted");
-            }
+            assert!(normalize_program(bad).is_err(), "{bad:?} was accepted");
         }
     }
 
@@ -290,5 +317,14 @@ mod tests {
                 .unwrap();
         }
         assert!(policy.allow_program(r"C:\Tools\one-more.exe").is_err());
+    }
+
+    #[test]
+    fn m4d_remove_text_must_be_plain() {
+        assert!(plain_text(r"C:\Tools\tool.exe"));
+        for bad in ["", r"C:\Tools\", "C:\\a\"b.exe", "C:\\a\nb.exe"] {
+            assert!(!plain_text(bad), "{bad:?}");
+        }
+        assert!(!plain_text(&"a".repeat(521)));
     }
 }

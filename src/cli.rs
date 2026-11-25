@@ -1205,7 +1205,7 @@ fn helper(action: HelperAction) -> u8 {
             }
             AllowAction::Remove { path, relaunched } => {
                 let path = path.trim().to_owned();
-                if path.is_empty() || path.contains('"') {
+                if !crate::helper::policy::plain_text(&path) {
                     return refused(Error::new(
                         Code::HelperPolicy,
                         "name the program's full path",
