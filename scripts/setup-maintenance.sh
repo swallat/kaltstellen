@@ -16,7 +16,9 @@ case "${1:-}" in
     *) echo "usage: $0 [--apply]" >&2; exit 2 ;;
 esac
 
-command -v gh > /dev/null || { echo "The GitHub CLI (gh) is not installed." >&2; exit 1; }
+for tool in gh jq; do
+    command -v "$tool" > /dev/null || { echo "$tool is not installed." >&2; exit 1; }
+done
 repo=${GH_REPO:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}
 echo "Repository: $repo"
 todo=0
@@ -27,10 +29,14 @@ manual() { echo "  MANUAL   $*"; todo=$((todo + 1)); }
 
 echo "Repository settings"
 settings=$(gh api "repos/$repo")
-if [ "$(jq -r .allow_auto_merge <<< "$settings")" = "false" ]; then
-    ok "GitHub auto-merge is off (Renovate merges after all checks are green)"
-else
+if [ "$(jq -r '.permissions.admin // false' <<< "$settings")" != "true" ]; then
+    echo "This script needs a GitHub account with admin rights on $repo." >&2
+    exit 1
+fi
+if [ "$(jq -r .allow_auto_merge <<< "$settings")" = "true" ]; then
     manual "Allow auto-merge is on; turn it off under Settings > General > Pull Requests"
+else
+    ok "GitHub auto-merge is off (Renovate merges after all checks are green)"
 fi
 if [ "$(jq -r .delete_branch_on_merge <<< "$settings")" = "true" ]; then
     ok "merged branches are deleted"
@@ -57,25 +63,23 @@ else
 fi
 
 echo "Labels"
-declare -A labels=(
-    [dependencies]="0366d6|Dependency updates"
-    [security]="d73a4a|Security fix"
-    [needs-review]="fbca04|Not merged automatically, needs a person"
-    [vulnerability]="b60205|Open vulnerability found by the weekly scan"
-    [release-hint]="5319e7|Security fixes wait for a release"
-)
 existing=$(gh api --paginate "repos/$repo/labels?per_page=100" --jq '.[].name')
-for name in "${!labels[@]}"; do
+while IFS='|' read -r name color description; do
     if grep -qxF "$name" <<< "$existing"; then
         ok "label $name"
     elif $apply; then
-        gh label create "$name" --repo "$repo" --color "${labels[$name]%%|*}" \
-            --description "${labels[$name]#*|}" > /dev/null
+        gh label create "$name" --repo "$repo" --color "$color" --description "$description" > /dev/null
         fixed "label $name created"
     else
         manual "run with --apply to create the label $name"
     fi
-done
+done <<'LABELS'
+dependencies|0366d6|Dependency updates
+security|d73a4a|Security fix
+needs-review|fbca04|Not merged automatically, needs a person
+vulnerability|b60205|Open vulnerability found by the weekly scan
+release-hint|5319e7|Security fixes wait for a release
+LABELS
 
 echo "Ruleset on the default branch"
 gh api "repos/$repo/rules/branches/$(jq -r .default_branch <<< "$settings")" \
@@ -89,10 +93,9 @@ if [ "$(gh api "repos/$repo/issues?state=all&creator=renovate%5Bbot%5D&per_page=
 else
     manual "install the Renovate app: https://github.com/apps/renovate (Only select repositories)"
 fi
-echo "  MANUAL   check that the Claude GitHub App has write access to this"
+echo "  NOTE     check by hand that the Claude GitHub App has write access to this"
 echo "           repository and may run workflows (Actions: write):"
 echo "           https://github.com/apps/claude/installations/select_target"
-todo=$((todo + 1))
 
 echo
 if [ "$todo" -eq 0 ]; then echo "Everything is in place."; else echo "$todo item(s) need attention."; fi

@@ -22,7 +22,10 @@ Configuration: [`.github/renovate.json5`](../.github/renovate.json5).
 - Updates are raised on weekday nights (Europe/Berlin), at most 5 PRs open
   at once. A release must be 3 days old first. Security fixes are raised at
   once and skip that wait.
-- The `windows` crates and the GitHub Actions are grouped.
+- The `windows` crates and the GitHub Actions are grouped. Lock file
+  maintenance runs Monday before 5am and has no waiting time.
+- Security PRs carry the label `security` and do not count towards the limit
+  of 5.
 - Renovate merges a PR itself when **every** check on it is green, the ARM64
   job included. GitHub's own auto-merge stays off: it would only wait for the
   required check `check`.

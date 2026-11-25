@@ -20,6 +20,9 @@
     enabled: true,
     schedule: ["before 5am on monday"],
     automerge: true,
+    // A lock file refresh has no release date, so the age wait above would
+    // hold it back for good.
+    minimumReleaseAge: null,
   },
   // Security fixes are raised immediately, regardless of the schedule. They
   // follow the package rules below: a security fix to a package that is
@@ -78,7 +81,7 @@
     },
     {
       description: "The Rust toolchain is raised deliberately, in a change of its own",
-      matchFileNames: ["rust-toolchain.toml"],
+      matchManagers: ["rust-toolchain"],
       groupName: "rust toolchain",
       automerge: false,
       addLabels: ["needs-review"],
