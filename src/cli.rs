@@ -1694,7 +1694,7 @@ fn suggestions(only: Option<&str>) -> u8 {
         if only.is_some_and(|name| !profile.name.eq_ignore_ascii_case(name)) {
             continue;
         }
-        let list = usage.suggestions(&profile.name, &profile.apps);
+        let list = usage.suggestions_now(&profile.name, &profile.apps);
         if list.is_empty() {
             continue;
         }

@@ -5,7 +5,7 @@
 //! data directory, and a result seen in at least 3 of the last 5 activations
 //! becomes a suggestion (R12: a coarse guess, only ever a proposal).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -109,6 +109,49 @@ pub enum Proposal {
     Stop,
     Suspend,
     Start,
+    /// `Leave as it is`: an entry that ignores the program.
+    Ignore,
+}
+
+/// What is known about the programs right now, for the two suggestions that
+/// need more than the counters: `stayed` and heavy, and `came back` with or
+/// without a window. Names are lower case. An empty probe knows nothing, so
+/// those two suggestions do not change what the counters say.
+#[derive(Debug, Clone, Default)]
+pub struct Probe {
+    /// Programs running now.
+    pub running: HashSet<String>,
+    /// Programs running now with a visible window.
+    pub windowed: HashSet<String>,
+    /// Programs that are heavy now and why (memory only: CPU and I/O need a
+    /// measuring window, which a suggestion does not wait for).
+    pub heavy: HashMap<String, String>,
+}
+
+impl Probe {
+    /// Reads the running programs once, without opening any of them.
+    pub fn take() -> Self {
+        let Ok(snapshot) = Snapshot::take() else {
+            return Self::default();
+        };
+        let visible = crate::process::pids_with_visible_windows();
+        let mut bytes: HashMap<String, u64> = HashMap::new();
+        let mut probe = Self::default();
+        for p in snapshot.processes() {
+            let name = p.name.to_lowercase();
+            if visible.contains(&p.pid) {
+                probe.windowed.insert(name.clone());
+            }
+            *bytes.entry(name.clone()).or_default() += p.private_bytes;
+            probe.running.insert(name);
+        }
+        for (name, bytes) in bytes {
+            if let Some(why) = crate::load::heavy(bytes, None, None) {
+                probe.heavy.insert(name, why);
+            }
+        }
+        probe
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +171,7 @@ impl Suggestion {
             Proposal::Stop => "stop",
             Proposal::Suspend => "suspend",
             Proposal::Start => "start",
+            Proposal::Ignore => "ignore",
         }
     }
 }
@@ -247,8 +291,44 @@ impl Usage {
         usage.paths.retain(|k, _| known.contains(k));
     }
 
-    /// Suggestions for `profile` with its current entries.
+    /// Whether a suggestion for `profile` could use the running programs
+    /// (a `stayed` or `came back` result that repeated).
+    pub fn needs_probe(&self, profile: &str) -> bool {
+        let Some(usage) = self.profiles.get(&profile.to_lowercase()) else {
+            return false;
+        };
+        let recent = &usage.activations[usage.activations.len().saturating_sub(WINDOW)..];
+        let mut counts: BTreeMap<(&str, Finding), usize> = BTreeMap::new();
+        for activation in recent {
+            for (exe, result) in &activation.results {
+                if matches!(result, Finding::Stayed | Finding::CameBack) {
+                    *counts.entry((exe.as_str(), *result)).or_default() += 1;
+                }
+            }
+        }
+        counts.values().any(|n| *n >= REPEATS)
+    }
+
+    /// [`suggestions_with`](Self::suggestions_with) with what the running
+    /// programs say, read only when a suggestion could use it.
+    pub fn suggestions_now(&self, profile: &str, apps: &[App]) -> Vec<Suggestion> {
+        let probe = if self.needs_probe(profile) {
+            Probe::take()
+        } else {
+            Probe::default()
+        };
+        self.suggestions_with(profile, apps, &probe)
+    }
+
+    /// Suggestions for `profile` with its current entries, from the
+    /// counters alone.
     pub fn suggestions(&self, profile: &str, apps: &[App]) -> Vec<Suggestion> {
+        self.suggestions_with(profile, apps, &Probe::default())
+    }
+
+    /// Suggestions for `profile` with its current entries and what is known
+    /// about the programs now.
+    pub fn suggestions_with(&self, profile: &str, apps: &[App], probe: &Probe) -> Vec<Suggestion> {
         let Some(usage) = self.profiles.get(&profile.to_lowercase()) else {
             return Vec::new();
         };
@@ -270,6 +350,8 @@ impl Usage {
             }
             let existing = entry(apps, exe);
             let path = usage.paths.get(exe).cloned();
+            let lower = exe.to_lowercase();
+            let heavy = probe.heavy.get(&lower);
             let (proposal, what) = match (result, existing.map(|a| &a.action)) {
                 (Finding::Gone, None | Some(AppAction::Ignore)) => (
                     Proposal::Stop,
@@ -282,9 +364,23 @@ impl Usage {
                     Proposal::Start,
                     "was running again when you switched back and was not started by kaltstellen",
                 ),
+                // Running without a window: a stop that does not stick is
+                // better left alone than frozen behind the owner's back.
+                (Finding::CameBack, Some(AppAction::Stop { .. }))
+                    if probe.running.contains(&lower) && !probe.windowed.contains(&lower) =>
+                {
+                    (
+                        Proposal::Ignore,
+                        "was running again when you switched back after it was stopped, and it has no window",
+                    )
+                }
                 (Finding::CameBack, Some(AppAction::Stop { .. })) => (
                     Proposal::Suspend,
                     "was running again when you switched back after it was stopped",
+                ),
+                (Finding::Stayed, None | Some(AppAction::Ignore)) if heavy.is_some() => (
+                    Proposal::Suspend,
+                    "stayed running when you switched back and is heavy now",
                 ),
                 _ => continue,
             };
@@ -294,7 +390,12 @@ impl Usage {
                 proposal,
                 seen,
                 of,
-                reason: format!("In {seen} of the last {of} activations {exe} {what}."),
+                reason: match (result, heavy) {
+                    (Finding::Stayed, Some(why)) => {
+                        format!("In {seen} of the last {of} activations {exe} {what} ({why}).")
+                    }
+                    _ => format!("In {seen} of the last {of} activations {exe} {what}."),
+                },
             });
         }
         found
@@ -630,6 +731,72 @@ mod tests {
         assert_eq!(usage.profiles["focus"].activations.len(), KEEP);
         usage.never("Focus", "CHAT.exe");
         assert!(usage.suggestions("focus", &[]).is_empty());
+    }
+
+    fn probe(running: &[&str], windowed: &[&str], heavy: &[(&str, &str)]) -> Probe {
+        Probe {
+            running: running.iter().map(|n| (*n).to_owned()).collect(),
+            windowed: windowed.iter().map(|n| (*n).to_owned()).collect(),
+            heavy: heavy
+                .iter()
+                .map(|(n, w)| ((*n).to_owned(), (*w).to_owned()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn h5_stayed_and_heavy_proposes_a_freeze() {
+        let mut usage = Usage::default();
+        record_n(&mut usage, 3, Finding::Stayed);
+        assert!(usage.needs_probe("focus"));
+        // Without anything known, or not heavy: nothing.
+        assert!(usage.suggestions("focus", &[]).is_empty());
+        let light = probe(&["chat.exe"], &["chat.exe"], &[]);
+        assert!(usage.suggestions_with("focus", &[], &light).is_empty());
+        let heavy = probe(&["chat.exe"], &[], &[("chat.exe", "1.3 GB memory")]);
+        let got = usage.suggestions_with("focus", &[], &heavy);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].proposal, Proposal::Suspend);
+        assert!(
+            got[0].reason.contains("stayed running"),
+            "{}",
+            got[0].reason
+        );
+        assert!(got[0].reason.contains("1.3 GB memory"), "{}", got[0].reason);
+        // An entry that decides the program ends it; an ignore entry does not.
+        let decided = vec![app("chat.exe", stop())];
+        assert!(usage.suggestions_with("focus", &decided, &heavy).is_empty());
+        let ignored = vec![app("chat.exe", AppAction::Ignore)];
+        assert_eq!(usage.suggestions_with("focus", &ignored, &heavy).len(), 1);
+    }
+
+    #[test]
+    fn h5_came_back_without_a_window_is_left_as_it_is() {
+        let mut usage = Usage::default();
+        record_n(&mut usage, 3, Finding::CameBack);
+        assert!(usage.needs_probe("focus"));
+        let apps = vec![app("chat.exe", stop())];
+        // A window: freeze. No window: leave it. Not running now: unknown,
+        // so the counters' answer (freeze) stands.
+        let with = probe(&["chat.exe"], &["chat.exe"], &[]);
+        assert_eq!(
+            usage.suggestions_with("focus", &apps, &with)[0].proposal,
+            Proposal::Suspend
+        );
+        let without = probe(&["chat.exe"], &[], &[]);
+        let got = usage.suggestions_with("focus", &apps, &without);
+        assert_eq!(got[0].proposal, Proposal::Ignore);
+        assert_eq!(got[0].action_name(), "ignore");
+        assert!(got[0].reason.contains("no window"), "{}", got[0].reason);
+        let gone = probe(&[], &[], &[]);
+        assert_eq!(
+            usage.suggestions_with("focus", &apps, &gone)[0].proposal,
+            Proposal::Suspend
+        );
+        // Other results never ask for the probe.
+        let mut other = Usage::default();
+        record_n(&mut other, 3, Finding::Gone);
+        assert!(!other.needs_probe("focus"));
     }
 
     #[test]

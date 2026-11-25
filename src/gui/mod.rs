@@ -457,7 +457,7 @@ impl Host for RealHost {
         }
         config
             .profile(profile)
-            .map(|p| usage.suggestions(&p.name, &p.apps))
+            .map(|p| usage.suggestions_now(&p.name, &p.apps))
             .unwrap_or_default()
     }
 
