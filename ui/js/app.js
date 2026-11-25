@@ -507,22 +507,307 @@ function renderDetail() {
   $('preview-apply').disabled = state.applying;
   $('apply').textContent = state.applying ? 'Applying…' : 'Apply profile';
 
-  const rows = profile.entries.map((e, index) => el('tr', { class: e.errors.length ? 'failed' : null },
-    el('td', {}, el('div', { class: 'program' }, programIcon(e.exe, e.path),
-      el('span', { class: 'names' }, el('span', { class: 'exe', text: e.exe }), programAbout(e.exe, e.path), e.path ? el('span', { class: 'path', text: e.path }) : null,
-        ...e.errors.map(failureMarker)))),
-    el('td', {}, el('span', { class: `action ${e.action}`, text: actionLabel[e.action] })),
-    el('td', { class: 'opts', text: optionsText(e) }),
-    el('td', {},
-      el('button', { type: 'button', class: 'button small', 'aria-label': `Edit ${e.exe}`, onclick: () => editEntry(index), text: 'Edit' }),
-      el('button', { type: 'button', class: 'button small danger', 'aria-label': `Remove ${e.exe}`, onclick: () => removeEntry(index), text: 'Remove' }))));
+  // Marked rows and the row in use belong to this profile.
+  if (entryProfile !== profile.name.toLowerCase()) {
+    entryProfile = profile.name.toLowerCase();
+    entrySel.clear();
+    entryLast = null;
+    clearUndo();
+  }
+  const keys = new Set(profile.entries.map(entryKey));
+  for (const key of [...entrySel]) if (!keys.has(key)) entrySel.delete(key);
+  // A refresh must not take the focus from the control being used.
+  const active = document.activeElement;
+  const inTable = active && $('entries').contains(active) ? active : null;
+  const focusAt = inTable && inTable.closest('tr[data-key]') ? {
+    key: inTable.closest('tr[data-key]').dataset.key,
+    selector: inTable.dataset.a ? `[data-a="${inTable.dataset.a}"]`
+      : inTable.dataset.o ? `[data-o="${inTable.dataset.o}"]`
+      : inTable.dataset.x ? `[data-x="${inTable.dataset.x}"]` : null,
+  } : null;
+  entryRemember(profile.entries);
+  const rows = profile.entries.map((e, index) => entryRow(e, index));
   $('entries').tBodies[0].replaceChildren(...rows);
+  if (focusAt) entryFocus(focusAt.key, focusAt.selector);
+  renderEntryBulk(profile);
   loadIcons($('entries'));
   loadAbout($('entries'));
   $('entries').hidden = rows.length === 0;
   $('entries-empty').hidden = rows.length !== 0;
   renderUnassigned();
 }
+
+// Editing the programs of a profile (fast rows) ------------------------------
+
+/** Rows of the table are keyed by program and path, which stay the same when
+ * other rows are removed (indexes do not). */
+const entryKey = (e) => `${e.exe.toLowerCase()}|${(e.path || '').toLowerCase()}`;
+const entryActions = [['ignore', 'Ignore'], ['suspend', 'Freeze'], ['stop', 'Stop'], ['start', 'Start']];
+const entrySel = new Set();
+let entryProfile = null;
+let entryLast = null;
+let undoTimer = null;
+let undoRemoved = null;
+
+/** What a switch of the action would otherwise forget: `Trim` of a frozen
+ * entry and `Restart on neutral` of a stopped one, by key. */
+const entryMemory = new Map();
+function entryRemember(entries) {
+  for (const e of entries) {
+    const memory = entryMemory.get(entryKey(e)) || {};
+    if (e.action === 'suspend') memory.trim = e.trim ?? state.default_trim;
+    if (e.action === 'stop') memory.restart = e.restart_on_neutral;
+    entryMemory.set(entryKey(e), memory);
+  }
+}
+
+const entryTouches = (action) => action === 'stop' || action === 'suspend';
+const entryNeedsConfirm = (e, action) => e.protection === 'warn' && entryTouches(action) && !e.confirmed;
+
+/** The whole entry as `update_entry` takes it, with `change` applied. */
+function entryPayload(e, change = {}) {
+  const next = {
+    exe: e.exe,
+    path: e.path || null,
+    action: e.action,
+    args: e.args,
+    cwd: e.cwd || null,
+    on_timeout: e.on_timeout,
+    restart_on_neutral: e.restart_on_neutral,
+    trim: e.trim,
+    confirmed: e.confirmed,
+    ...change,
+  };
+  const memory = entryMemory.get(entryKey(e)) || {};
+  if (next.action === 'stop' && e.action !== 'stop' && change.restart_on_neutral === undefined) next.restart_on_neutral = !!memory.restart;
+  if (next.action === 'suspend' && e.action !== 'suspend' && change.trim === undefined) next.trim = memory.trim ?? null;
+  next.restart_on_neutral = next.action === 'stop' && next.restart_on_neutral;
+  next.trim = next.action === 'suspend' ? (next.trim ?? state.default_trim) : null;
+  return next;
+}
+
+function entryChips(e) {
+  const chip = (option, label, on, title) => el('button', {
+    type: 'button', class: 'chip', 'data-o': option, 'aria-pressed': String(on), title,
+    'aria-label': `${label}, ${e.exe}`, text: label,
+    onclick: () => (e.confirmed && option === 'confirmed' ? null : entryToggle(entryKey(e), option)),
+  });
+  const chips = [];
+  if (e.action === 'suspend') chips.push(chip('trim', 'Trim', e.trim ?? state.default_trim, 'Move its memory out of RAM while frozen'));
+  if (e.action === 'stop') {
+    chips.push(chip('keep', 'Keep if it hangs', e.on_timeout === 'keep', 'Leave it running and report when it does not close in time'));
+    chips.push(chip('restart', 'Restart on neutral', e.restart_on_neutral, 'Start it again when Neutral is applied'));
+  }
+  if (e.action === 'start' && e.args.length) chips.push(el('span', { class: 'chip static', title: 'Change in Details', text: `Arguments: ${e.args.join(' ')}` }));
+  if (e.action === 'start' && e.cwd) chips.push(el('span', { class: 'chip static', title: 'Change in Details', text: `In ${e.cwd}` }));
+  if (e.protection === 'warn' && entryTouches(e.action)) {
+    const confirm = chip('confirmed', e.confirmed ? 'Confirmed' : 'Confirm', e.confirmed, 'On the warn list: kaltstellen touches it only after you confirm');
+    if (e.confirmed) confirm.setAttribute('aria-disabled', 'true');
+    chips.push(confirm);
+  }
+  return chips.length ? chips : [el('span', { class: 'hint', text: '–' })];
+}
+
+function entryRow(e, index) {
+  const key = entryKey(e);
+  const mark = el('input', { type: 'checkbox', 'aria-label': `Select ${e.exe}` });
+  mark.checked = entrySel.has(key);
+  mark.addEventListener('click', (event) => entryMark(key, mark.checked, event.shiftKey));
+  const segment = el('span', { class: 'seg', role: 'group', 'aria-label': `Action for ${e.exe}` },
+    ...entryActions.map(([value, label], i) => el('button', {
+      type: 'button', 'data-a': value, 'aria-pressed': String(value === e.action),
+      title: value === 'start' && !e.path ? 'Needs a path: set it in Details' : `${label} (key ${i + 1})`,
+      'aria-disabled': value === 'start' && !e.path && e.action !== 'start' ? 'true' : null,
+      'aria-label': `${label}, ${e.exe}`, text: label,
+      onclick: () => entrySet([key], { action: value }),
+    })));
+  return el('tr', { 'data-key': key, tabindex: '0', class: [e.errors.length ? 'failed' : '', entrySel.has(key) ? 'selected' : ''].join(' ').trim() || null },
+    el('td', { class: 'mark' }, mark),
+    el('td', {}, el('div', { class: 'program' }, programIcon(e.exe, e.path),
+      el('span', { class: 'names' }, el('span', { class: 'exe', text: e.exe }), programAbout(e.exe, e.path), e.path ? el('span', { class: 'path', text: e.path }) : null,
+        e.protection === 'warn' ? el('span', { class: 'protection warn', text: 'warn list' }) : null,
+        ...e.errors.map(failureMarker)))),
+    el('td', {}, segment),
+    el('td', {}, el('span', { class: 'chips' }, ...entryChips(e))),
+    el('td', {},
+      el('button', { type: 'button', class: 'button small', 'data-x': 'details', 'aria-label': `Edit ${e.exe}`, onclick: () => editEntry(index), text: 'Details…' }),
+      el('button', { type: 'button', class: 'button small danger', 'data-x': 'remove', 'aria-label': `Remove ${e.exe}`, onclick: () => entryRemove([key]), text: 'Remove' })));
+}
+
+function entryFocus(key, selector) {
+  const row = [...$('entries').tBodies[0].rows].find((r) => r.dataset.key === key);
+  if (!row) return;
+  (selector && row.querySelector(selector) || row).focus({ preventScroll: true });
+}
+
+function entryMark(key, on, range) {
+  const order = current().entries.map(entryKey);
+  if (range && entryLast !== null && order.includes(entryLast)) {
+    const [a, b] = [order.indexOf(entryLast), order.indexOf(key)].sort((x, y) => x - y);
+    for (const k of order.slice(a, b + 1)) entrySel.add(k);
+  } else if (on) entrySel.add(key);
+  else entrySel.delete(key);
+  entryLast = key;
+  render();
+  entryFocus(key, 'input');
+}
+
+function renderEntryBulk(profile) {
+  const n = entrySel.size;
+  $('entries-bulk').hidden = n === 0;
+  $('entries-count').textContent = `${n} selected`;
+  const all = $('entries-all');
+  all.checked = n > 0 && n === profile.entries.length;
+  all.indeterminate = n > 0 && n < profile.entries.length;
+}
+
+const entriesOf = (keys) => keys.map((k) => current().entries.find((e) => entryKey(e) === k)).filter(Boolean);
+
+/** Sets the action or an option of the entries with `keys`, one saved change
+ * each. Entries on the warn list that are not confirmed yet are asked first. */
+async function entrySet(keys, change) {
+  const profile = current();
+  if (!profile) return;
+  const name = profile.name;
+  // Trim only matters for frozen entries; a program without a path cannot start.
+  const todo = entriesOf(keys)
+    .filter((e) => !(change.trim !== undefined && e.action !== 'suspend'))
+    .filter((e) => !(change.action === 'start' && !e.path && e.action !== 'start'));
+  const needs = change.action ? todo.filter((e) => entryNeedsConfirm(e, change.action)) : [];
+  const allowed = new Set();
+  if (needs.length) {
+    const verb = change.action === 'suspend' ? 'freeze' : 'close';
+    const text = needs.length === 1
+      ? `${needs[0].exe} is on the warn list (remote access, drivers, security or developer tools). Let kaltstellen ${verb} it?`
+      : `${needs.map((e) => e.exe).join(', ')} are on the warn list (remote access, drivers, security or developer tools). Let kaltstellen ${verb} them?`;
+    if (await confirmDialog('Warn list', text, 'Confirm')) for (const e of needs) allowed.add(entryKey(e));
+  }
+  for (const e0 of todo) {
+    const key = entryKey(e0);
+    if (needs.includes(e0) && !allowed.has(key)) continue;
+    const here = current();
+    if (!here || here.name !== name) return;
+    const index = here.entries.findIndex((e) => entryKey(e) === key);
+    if (index < 0) continue;
+    const patch = allowed.has(key) ? { ...change, confirmed: true } : change;
+    const reply = await call('update_entry', { profile: name, index, entry: entryPayload(here.entries[index], patch) });
+    if (!reply.ok) return;
+  }
+}
+
+/** The switch of one option of an entry (chips). */
+function entryToggle(key, option) {
+  const e = entriesOf([key])[0];
+  if (!e) return;
+  const change = {
+    trim: { trim: !(e.trim ?? state.default_trim) },
+    keep: { on_timeout: e.on_timeout === 'keep' ? 'kill' : 'keep' },
+    restart: { restart_on_neutral: !e.restart_on_neutral },
+    confirmed: { confirmed: true },
+  }[option];
+  return entrySet([key], change);
+}
+
+function clearUndo() {
+  clearTimeout(undoTimer);
+  undoRemoved = null;
+  $('entries-undo').hidden = true;
+}
+
+/** Removes the entries with `keys`; the programs themselves are not changed.
+ * They can be brought back for a few seconds instead of being asked first. */
+async function entryRemove(keys) {
+  const profile = current();
+  if (!profile) return;
+  const name = profile.name;
+  const gone = entriesOf(keys);
+  const removed = [];
+  for (const e of [...gone].sort((a, b) => entryIndex(b) - entryIndex(a))) {
+    const here = current();
+    if (!here || here.name !== name) break;
+    const index = here.entries.findIndex((x) => entryKey(x) === entryKey(e));
+    if (index < 0) continue;
+    const reply = await call('remove_entry', { profile: name, index });
+    if (!reply.ok) break;
+    removed.push(e);
+    entrySel.delete(entryKey(e));
+  }
+  if (removed.length) {
+    clearTimeout(undoTimer);
+    undoRemoved = { profile: name, entries: removed.sort((a, b) => gone.indexOf(a) - gone.indexOf(b)) };
+    $('entries-undo-text').textContent = removed.length === 1 ? `${removed[0].exe} removed from "${name}".` : `${removed.length} programs removed from "${name}".`;
+    $('entries-undo').hidden = false;
+    undoTimer = setTimeout(clearUndo, 10000);
+    renderEntryBulk(current());
+    // The list got shorter: keep the keyboard where it was.
+    const rows = [...$('entries').tBodies[0].rows];
+    if (rows.length) rows[Math.min(rows.length - 1, Math.max(0, entryRemovedAt(profile, removed[0])))].focus({ preventScroll: true });
+  }
+  await loadUnassigned();
+}
+
+const entryIndex = (e) => current().entries.findIndex((x) => entryKey(x) === entryKey(e));
+const entryRemovedAt = (before, e) => before.entries.findIndex((x) => entryKey(x) === entryKey(e));
+
+async function entryUndo() {
+  const undo = undoRemoved;
+  clearUndo();
+  if (!undo || !current() || current().name !== undo.profile) return;
+  for (const e of undo.entries) {
+    const added = await call('add_entry', { profile: undo.profile, exe: e.exe, path: e.path || null, confirmed: e.protection === 'warn' });
+    if (!added.ok) return;
+    const here = current();
+    const reply = await call('update_entry', { profile: undo.profile, index: here.entries.length - 1, entry: entryPayload(e) });
+    if (!reply.ok) return;
+  }
+  await loadUnassigned();
+}
+
+$('entries-undo-button').addEventListener('click', entryUndo);
+$('entries-all').addEventListener('change', (event) => {
+  entrySel.clear();
+  if (event.target.checked) for (const e of current().entries) entrySel.add(entryKey(e));
+  render();
+});
+$('entries-clear').addEventListener('click', () => {
+  entrySel.clear();
+  render();
+  const first = $('entries').tBodies[0].rows[0];
+  if (first) first.focus({ preventScroll: true });
+});
+$('entries-bulk-actions').addEventListener('click', (event) => {
+  const action = event.target.dataset && event.target.dataset.a;
+  if (action) entrySet([...entrySel], { action });
+});
+$('entries-trim-on').addEventListener('click', () => entrySet([...entrySel], { trim: true }));
+$('entries-trim-off').addEventListener('click', () => entrySet([...entrySel], { trim: false }));
+$('entries-remove').addEventListener('click', () => entryRemove([...entrySel]));
+
+/** Keyboard: Up and Down move between rows, 1 to 4 set the action of the
+ * marked rows when this row is marked (else of this row), Space marks, Delete
+ * removes. */
+$('entries').addEventListener('keydown', (event) => {
+  const rowNode = event.target.closest && event.target.closest('tr[data-key]');
+  if (!rowNode || event.ctrlKey || event.altKey || event.metaKey) return;
+  const nodes = [...$('entries').tBodies[0].rows];
+  const at = nodes.indexOf(rowNode);
+  // The marked rows when this one is among them, else only this row.
+  const keys = entrySel.has(rowNode.dataset.key) ? [...entrySel] : [rowNode.dataset.key];
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    nodes[Math.max(0, Math.min(nodes.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)))].focus();
+  } else if (event.key === ' ' && event.target === rowNode) {
+    event.preventDefault();
+    entryMark(rowNode.dataset.key, !entrySel.has(rowNode.dataset.key), event.shiftKey);
+    entryFocus(rowNode.dataset.key, null);
+  } else if (/^[1-4]$/.test(event.key) && event.target.tagName !== 'INPUT') {
+    event.preventDefault();
+    entrySet(keys, { action: entryActions[Number(event.key) - 1][0] });
+  } else if (event.key === 'Delete' && event.target.tagName !== 'INPUT') {
+    event.preventDefault();
+    entryRemove(keys);
+  }
+});
 
 // Settings (M6) ---------------------------------------------------------------
 
@@ -1558,14 +1843,6 @@ $('entry-form').addEventListener('submit', async (event) => {
   if (reply.ok) $('entry-dialog').close();
   else $('entry-error').textContent = reply.error;
 });
-
-async function removeEntry(index) {
-  const e = current().entries[index];
-  if (await confirmDialog('Remove program', `Remove ${e.exe} from "${current().name}"? The program itself is not changed.`, 'Remove')) {
-    await call('remove_entry', { profile: current().name, index });
-    await loadUnassigned();
-  }
-}
 
 // Adding programs ---------------------------------------------------------
 
