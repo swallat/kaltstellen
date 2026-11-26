@@ -8,7 +8,7 @@ for a person.
 flowchart LR
     R[Renovate, weekday nights] -->|update PR| CI[All checks]
     CI -->|green, not excluded| M[Renovate merges]
-    CI -->|red or excluded| W[Weekly Claude task, Monday]
+    CI -->|red or excluded| W[Daily Claude task, weekdays]
     S[Vulnerability scan, Sunday night] -->|issue| W
     W -->|non-major, reviewed, green| M2[Merged]
     W -->|major| P[Prepared, listed in the report]
@@ -48,19 +48,26 @@ Configuration: [`renovate.json`](../renovate.json).
 required check. `security.yml` (cargo-deny) still runs on every change and
 daily.
 
-## Weekly Claude task
+## Daily Claude task
 
-Every Monday morning a scheduled Claude task in the cloud
-(`Softwarepflege kaltstellen`):
+Every weekday at about 06:00 (Europe/Berlin) a scheduled Claude task in the
+cloud (`Softwarepflege kaltstellen`) runs in two stages, so that a day
+without work costs almost nothing:
 
-1. Looks at open PRs by `renovate[bot]`, at open issues labelled
-   `vulnerability` or `security-release`, and at security fixes that are
-   merged but not released. If there is nothing, it ends at once.
-2. Repairs red checks on those PRs.
-3. Merges non-major updates after an independent review and green CI.
-4. Prepares major updates, but does not merge them, and lists them in its
-   report.
-5. Decides on a security release, see below.
+1. **Triage with a small, inexpensive model.** It looks at open PRs by
+   `renovate[bot]`, at red checks (on `main` and on those PRs), at open
+   issues labelled `vulnerability` or `security-release`, and at security
+   fixes that are merged but not released. If there is nothing, it ends at
+   once and makes no further calls.
+2. **Work with a stronger model.** Otherwise the triage model starts a
+   stronger model (Sonnet) as a subagent. That subagent repairs red checks
+   and prepares the updates, but does not merge.
+3. **Independent review before every merge.** A separate reviewer subagent
+   (Opus) reads the dependency's changelog and the diff. The task merges a
+   non-major update only after a review without objection and with every
+   check green on the current head, the ARM64 job included.
+4. **Majors are prepared, never merged.** They are listed in the report.
+5. **Security release decision**, see below.
 
 It touches no other PRs, never force-pushes and changes no settings. CI can
 be started by hand with the `workflow_dispatch` trigger of `ci.yml`.
@@ -68,7 +75,7 @@ be started by hand with the `workflow_dispatch` trigger of `ci.yml`.
 ## Security releases
 
 When pull requests labelled `security` were merged after the latest release,
-the weekly task decides whether to publish them:
+the daily task decides whether to publish them:
 
 - It releases only when the fixed dependency is part of the shipped
   executable or setup (not a build, test or CI tool), and when everything on
@@ -94,6 +101,6 @@ depend on and, with `--apply`, fixes what it can through the GitHub API.
 
 ## Deviations from the standard
 
-- The security release is started by a tag that the weekly task creates,
+- The security release is started by a tag that the daily task creates,
   not by a `workflow_dispatch` run: in this repository the tag sets the
   version, and `release.yml` stays as it is. That tag is not signed.
