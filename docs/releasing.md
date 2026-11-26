@@ -61,6 +61,13 @@ uploaded, so the updater never sees a release without its files.
 - A release that went wrong: delete the GitHub release and the tag, fix, tag
   again. Clients only ever see published releases.
 
+## Security releases
+
+The weekly maintenance task may create the next version tag by itself when
+security fixes are merged and not released yet. The rules are in
+[maintenance.md](maintenance.md#security-releases). Such a tag is not
+signed. Every other release is tagged by the maintainer as described above.
+
 ## Not there yet
 
 - Signing (Authenticode or an own key for `checksums.txt`): open decision.

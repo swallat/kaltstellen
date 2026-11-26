@@ -77,8 +77,9 @@ done <<'LABELS'
 dependencies|0366d6|Dependency updates
 security|d73a4a|Security fix
 needs-review|fbca04|Not merged automatically, needs a person
+major|b60205|Major update
 vulnerability|b60205|Open vulnerability found by the weekly scan
-release-hint|5319e7|Security fixes wait for a release
+security-release|5319e7|Security release waits for a decision
 LABELS
 
 echo "Ruleset on the default branch"

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Maintenance policy: docs/maintenance.md. Later package rules win over earlier ones.",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    "helpers:pinGitHubActionDigests",
+    "customManagers:githubActionsVersions"
+  ],
+  "timezone": "Europe/Berlin",
+  "schedule": ["* 0-5 * * 1-5"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "minimumReleaseAge": "3 days",
+  "labels": ["dependencies"],
+  "platformAutomerge": false,
+  "automergeType": "pr",
+  "automergeStrategy": "squash",
+  "rebaseWhen": "behind-base-branch",
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "schedule": ["at any time"],
+    "minimumReleaseAge": null,
+    "addLabels": ["security"]
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["* 0-5 * * 1"],
+    "automerge": true,
+    "minimumReleaseAge": null
+  },
+  "packageRules": [
+    {
+      "description": "Merge non-major updates once every check on the PR is green (also the ARM64 job, which is not a required check).",
+      "matchUpdateTypes": ["patch", "minor", "pin", "pinDigest", "digest"],
+      "automerge": true
+    },
+    {
+      "description": "Group GitHub Actions updates.",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    },
+    {
+      "description": "Group the Windows API crates, they are released together.",
+      "matchPackageNames": ["windows", "windows-*"],
+      "groupName": "windows crates"
+    },
+    {
+      "description": "0.x versions: a minor step may break the API, treat it like a major.",
+      "matchCurrentVersion": "/^(==|~=|>=|\\^|~|v)?0\\./",
+      "matchUpdateTypes": ["minor"],
+      "automerge": false,
+      "addLabels": ["needs-review"]
+    },
+    {
+      "description": "Core libraries: unsafe Windows FFI, the window host, and the config and pipe formats.",
+      "matchPackageNames": [
+        "windows",
+        "windows-*",
+        "webview2-com",
+        "webview2-com-*",
+        "serde",
+        "serde_json",
+        "toml",
+        "toml_edit"
+      ],
+      "automerge": false,
+      "addLabels": ["needs-review"]
+    },
+    {
+      "description": "The Rust toolchain is raised deliberately, in a change of its own.",
+      "matchManagers": ["rust-toolchain"],
+      "groupName": "rust toolchain",
+      "automerge": false,
+      "addLabels": ["needs-review"]
+    },
+    {
+      "description": "Actions of the release chain (artifacts, provenance) stay under review.",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": [
+        "actions/attest-build-provenance",
+        "actions/upload-artifact",
+        "actions/download-artifact"
+      ],
+      "groupName": "release chain actions",
+      "automerge": false,
+      "addLabels": ["needs-review"]
+    },
+    {
+      "description": "Major updates are only prepared, never merged on their own.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "addLabels": ["needs-review", "major"]
+    }
+  ]
+}
