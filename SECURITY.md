@@ -11,7 +11,7 @@ are especially welcome.
 
 ## Automated monitoring
 
-- Renovate (`.github/renovate.json5`) opens pull requests for dependency and
+- Renovate (`renovate.json`) opens pull requests for dependency and
   GitHub Actions updates; security fixes are raised immediately.
 - `cargo-deny` runs on every dependency change and daily against the RustSec
   advisory database (`.github/workflows/security.yml`, policy in `deny.toml`).
